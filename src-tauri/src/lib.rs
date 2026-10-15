@@ -181,7 +181,8 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
 
     // Single-instance has decided we are the primary: now it is safe to reap leftovers and join the job.
     let killed = supervisor::cleanup_stale(&dir);
