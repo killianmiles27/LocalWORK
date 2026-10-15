@@ -1,5 +1,5 @@
 """Workbench MCP server (stdio, JSON-RPC 2.0, newline-delimited). Python stdlib only.
-Tools: officecli (wrapper around the bundled OfficeCLI), web_search, web_fetch, workspace_info."""
+Tools: officecli (wrapper around the bundled OfficeCLI), web_search, web_fetch, memory_*, workspace_info."""
 import json, os, subprocess, sys
 
 OFFICECLI = os.environ.get("OFFICECLI_EXE", "officecli.exe")
@@ -27,6 +27,21 @@ TOOLS = [
                         "required": ["url"]},
     },
     {
+        "name": "memory_save",
+        "description": "Remember one short, durable fact about the user or their preferences (for example 'prefers British spelling'). Only save things worth keeping across chats, never secrets or passwords.",
+        "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+    },
+    {
+        "name": "memory_search",
+        "description": "Search saved memories about the user by keywords.",
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    },
+    {
+        "name": "memory_forget",
+        "description": "Delete a saved memory by its number.",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]},
+    },
+    {
         "name": "workspace_info",
         "description": "List files in the workspace folder (names, sizes).",
         "inputSchema": {"type": "object", "properties": {}},
@@ -48,6 +63,9 @@ def call_tool(name, args):
             if len(rows) > 300:
                 break
         return "\n".join(rows[:300]) or "(empty workspace)"
+    if name in ("memory_save", "memory_search", "memory_forget"):
+        import memory
+        return getattr(memory, name)(**{k: v for k, v in args.items()})
     if name == "web_search":
         import web
         return web.web_search(args["query"], args.get("max_results", 6))

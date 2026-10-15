@@ -20,11 +20,14 @@ function Row({ k, v }: { k: string; v: string }) {
 export default function Settings({ status, onClose }: { status: St; onClose: () => void }) {
   const [info, setInfo] = useState<Info | null>(null);
   const [dir, setDir] = useState("");
+  const [mem, setMem] = useState<{ id: number; text: string }[]>([]);
+  const loadMem = () => invoke<{ id: number; text: string }[]>("memories_list").then(setMem).catch(() => {});
 
   useEffect(() => {
     let alive = true;
     const pull = () => invoke<Info>("model_info").then((i) => { if (alive) setInfo(i); }).catch(() => {});
     pull();
+    loadMem();
     invoke<string>("data_dir").then(setDir).catch(() => {});
     const t = setInterval(pull, 2000);
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -74,6 +77,18 @@ export default function Settings({ status, onClose }: { status: St; onClose: () 
             <Row k="CPU load" v={info?.cpu ? `${num(info.cpu.load, 0)}%` : "–"} />
             <Row k="System memory" v={ram ? `${num(ram.used_gib)} / ${num(ram.total_gib)} GiB` : "–"} />
             {info?.cpu?.server_ram_gib != null && <Row k="Model server memory" v={`${num(info.cpu.server_ram_gib)} GiB`} />}
+          </section>
+          <section>
+            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Memory</h3>
+            {mem.length === 0 && <div className="text-sm text-muted py-1">Nothing saved yet. Tell the assistant "remember that ..." and it will show up here.</div>}
+            <ul className="max-h-40 overflow-auto">
+              {mem.map((m) => (
+                <li key={m.id} className="flex items-start gap-2 py-1 text-sm">
+                  <span className="flex-1">{m.text}</span>
+                  <button className="text-muted hover:text-red-600 text-xs underline" onClick={() => invoke("memory_delete", { id: m.id }).then(loadMem)}>forget</button>
+                </li>
+              ))}
+            </ul>
           </section>
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">App</h3>

@@ -286,6 +286,9 @@ function Row({ m }: { m: Msg }) {
     return <div className="rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{text(typeof b === "string" ? b : b?.message ?? b)}</div>;
   if (m.role === "tool") {
     const declined = b.status === "cancelled";
+    const nm = String(b.request?.name ?? b.name ?? "");
+    const saved = /memory_save/.test(nm) && /Saved memory #(\d+): (.*)/.exec(String(b.output ?? ""));
+    if (saved) return <MemoryChip id={Number(saved[1])} text={saved[2]} />;
     return (
       <details className="group ml-10 text-sm">
         <summary className="inline-flex items-center gap-2 cursor-pointer list-none rounded-lg border border-line bg-card px-3 py-1.5 text-muted hover:text-ink">
@@ -311,6 +314,17 @@ function ApprovalCard({ a, answer }: { a: Approval; answer: (a: Approval, allow:
         {a.can_remember && <button onClick={() => answer(a, true, true)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-accent">Allow for this chat</button>}
         <button onClick={() => answer(a, false, false)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-red-500">Deny</button>
       </div>
+    </div>
+  );
+}
+
+function MemoryChip({ id, text }: { id: number; text: string }) {
+  const [gone, setGone] = useState(false);
+  return (
+    <div className="ml-10 inline-flex items-center gap-2 rounded-lg border border-line bg-card px-3 py-1.5 text-sm text-muted">
+      <Check size={14} className="text-accent" />
+      <span>{gone ? "Forgotten" : <>Remembered: <span className="text-ink">{text}</span></>}</span>
+      {!gone && <button className="underline hover:text-ink" onClick={() => invoke("memory_delete", { id }).then(() => setGone(true))}>Undo</button>}
     </div>
   );
 }

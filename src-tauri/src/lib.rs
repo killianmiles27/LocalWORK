@@ -126,6 +126,17 @@ fn set_setting(s: State<App>, key: String, value: String) {
 }
 
 #[tauri::command]
+fn memories_list(s: State<App>) -> Vec<Value> {
+    let c = s.db.lock().unwrap();
+    store::recent_memories(&c, 500).into_iter().map(|(id, text)| json!({"id": id, "text": text})).collect()
+}
+
+#[tauri::command]
+fn memory_delete(s: State<App>, id: i64) {
+    store::delete_memory(&s.db.lock().unwrap(), id);
+}
+
+#[tauri::command]
 fn data_dir() -> String {
     paths::data_dir().to_string_lossy().to_string()
 }
@@ -193,7 +204,9 @@ pub fn run() {
             agent_answer,
             get_setting,
             set_setting,
-            data_dir
+            data_dir,
+            memories_list,
+            memory_delete
         ])
         .build(tauri::generate_context!())
         .expect("error while building app")

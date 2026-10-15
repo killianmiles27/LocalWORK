@@ -13,6 +13,10 @@ pub fn open(dir: &Path) -> rusqlite::Result<Connection> {
             id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, role TEXT NOT NULL,
             body TEXT NOT NULL, ts INTEGER NOT NULL);
          CREATE INDEX IF NOT EXISTS messages_conv ON messages(conv, id);
+         CREATE TABLE IF NOT EXISTS memories(id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created INTEGER NOT NULL);
+         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='memories', content_rowid='id');
+         CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid,text) VALUES(new.id,new.text); END;
+         CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts,rowid,text) VALUES('delete',old.id,old.text); END;
          CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);",
     )?;
     Ok(c)
@@ -90,4 +94,13 @@ pub fn kv_get(c: &Connection, k: &str) -> Option<String> {
 
 pub fn kv_set(c: &Connection, k: &str, v: &str) {
     let _ = c.execute("INSERT INTO kv(k,v) VALUES(?1,?2) ON CONFLICT(k) DO UPDATE SET v=excluded.v", params![k, v]);
+}
+
+pub fn recent_memories(c: &Connection, n: i64) -> Vec<(i64, String)> {
+    let Ok(mut st) = c.prepare("SELECT id,text FROM memories ORDER BY id DESC LIMIT ?1") else { return vec![] };
+    st.query_map([n], |r| Ok((r.get(0)?, r.get(1)?))).map(|it| it.filter_map(|x| x.ok()).collect()).unwrap_or_default()
+}
+
+pub fn delete_memory(c: &Connection, id: i64) {
+    let _ = c.execute("DELETE FROM memories WHERE id=?1", [id]);
 }

@@ -239,10 +239,24 @@ fn cpu_stats(s: &Shared) -> (String, f32, Option<f64>) {
     let pid = s.lock().unwrap().child.as_ref().map(|c| c.id());
     let mut sys = SYS.get_or_init(|| Mutex::new(System::new())).lock().unwrap();
     sys.refresh_cpu_usage();
-    if let Some(p) = pid {
-        sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(p)]), true);
+    if pid.is_some() {
+        sys.refresh_processes(ProcessesToUpdate::All, true);
     }
     let name = sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default();
-    let gib = pid.and_then(|p| sys.process(Pid::from_u32(p))).map(|p| p.memory() as f64 / 1073741824.0);
+    // The model runs in child processes of the launcher: add up the whole tree.
+    let gib = pid.map(|root| {
+        let mut tree = vec![Pid::from_u32(root)];
+        let mut i = 0;
+        while i < tree.len() {
+            let cur = tree[i];
+            for (p, pr) in sys.processes() {
+                if pr.parent() == Some(cur) && !tree.contains(p) {
+                    tree.push(*p);
+                }
+            }
+            i += 1;
+        }
+        tree.iter().filter_map(|p| sys.process(*p)).map(|p| p.memory()).sum::<u64>() as f64 / 1073741824.0
+    });
     (name, sys.global_cpu_usage(), gib)
 }

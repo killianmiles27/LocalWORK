@@ -125,7 +125,7 @@ pub fn get_or_start(
     let mut cmd = Command::new(&exe);
     cmd.args(["--json-stream", "--provider", "openai", "--base-url", &format!("http://127.0.0.1:{port}/v1")])
         .args(["--api-key", &key, "--model", &model, "--max-turns", "30", "--no-color"])
-        .args(["--system-prompt", SYSTEM_PROMPT])
+        .args(["--system-prompt", &system_prompt(&db)])
         .arg("--project-dir")
         .arg(&workspace);
     if has_session {
@@ -162,6 +162,20 @@ pub fn get_or_start(
     Ok(agent)
 }
 
+fn system_prompt(db: &Db) -> String {
+    let notes = { let c = db.lock().unwrap(); store::recent_memories(&c, 8) };
+    if notes.is_empty() {
+        return SYSTEM_PROMPT.to_string();
+    }
+    let list: Vec<String> = notes.iter().map(|(_, t)| format!("- {t}")).collect();
+    format!("{SYSTEM_PROMPT}
+
+# What you remember about the user
+{}
+(Use memory_search for older notes. Save new durable facts with memory_save.)", list.join("
+"))
+}
+
 fn workbench_mcp(app_vendor: &std::path::Path) -> Option<Value> {
     let root = PathBuf::from(
         std::fs::read_to_string(paths::data_dir().join("settings.json"))
@@ -179,7 +193,7 @@ fn workbench_mcp(app_vendor: &std::path::Path) -> Option<Value> {
         "type": "add_mcp_server", "name": "workbench", "transport": "stdio",
         "command": python.to_string_lossy(),
         "args": ["-u", script.to_string_lossy()],
-        "env": {"OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(), "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy()}
+        "env": {"OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(), "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy(), "WORKBENCH_DB": paths::data_dir().join("workbench.db").to_string_lossy()}
     }))
 }
 
