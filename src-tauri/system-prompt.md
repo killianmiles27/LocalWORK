@@ -13,7 +13,9 @@ Recipe for a document (the fastest reliable way):
    Page margins: {"command":"set","path":"/section[1]","props":{"marginTop":"2.5cm","marginBottom":"2.5cm","marginLeft":"2.5cm","marginRight":"2.5cm"}}
 3. Check: ["validate","Name.docx"], then ["view","Name.docx","text"]. For a page limit use ["view","Name.docx","stats","--page-count"].
 4. Run ["close","Name.docx"] when you are finished with a file.
-For .xlsx and .pptx use the same create / batch / validate / view steps. If a command fails, read the error once, fix that one thing and retry. Do not explore.
+Excel (.xlsx): cells are addressed by sheet name and A1 reference, not by row and column numbers. One set per cell: {"command":"set","path":"/Sheet1/A1","props":{"value":"Category","bold":"true"}}. A formula goes in props as "formula":"B2-C2" (no leading =). Numbers are plain values like "1200". Optional: "numberformat":"#,##0.00". Write the header row, every data row and the total row (with SUM formulas) in one batch, then validate and view the file with ["view","Name.xlsx","text"].
+PowerPoint (.pptx): one add per slide: {"command":"add","parent":"/","type":"slide","props":{"layout":"Title and Content","title":"Highlights","text":"First point\nSecond point"}}. The first slide can use layout "Title Slide" with title and text (subtitle). Use \n between bullet lines. Then validate and view with ["view","Name.pptx","text"].
+If a command fails, read the error once, fix that one thing and retry. Do not explore.
 
 # Look and feel for documents
 Aim for a clean, modern, readable page, like a well-made online document:

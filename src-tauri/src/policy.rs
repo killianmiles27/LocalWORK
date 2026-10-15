@@ -49,6 +49,7 @@ pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_e
     if tool == "Spawn" {
         return Decision::Deny("Sub-agents are disabled in this app".into());
     }
+    let workspace = &norm(&workspace.to_string_lossy());
     let path = arg_path(args, workspace);
     if let Some(p) = &path {
         let l = p.to_string_lossy().to_lowercase();
