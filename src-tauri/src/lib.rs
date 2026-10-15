@@ -102,6 +102,55 @@ fn agent_send(app: AppHandle, s: State<App>, id: String, text: String, auto_edit
     Ok(())
 }
 
+fn attach_dir(s: &State<App>, id: &str) -> Result<std::path::PathBuf, String> {
+    let ws = store::conv_info(&s.db.lock().unwrap(), id).map(|x| x.1).ok_or("Unknown chat")?;
+    let d = std::path::Path::new(&ws).join("attachments");
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    Ok(d)
+}
+
+fn unique_in(d: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let clean: String = name.chars().map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c }).collect();
+    let (stem, ext) = match clean.rsplit_once('.') {
+        Some((a, b)) if !a.is_empty() => (a.to_string(), format!(".{b}")),
+        _ => (clean.clone(), String::new()),
+    };
+    let mut p = d.join(&clean);
+    let mut n = 2;
+    while p.exists() {
+        p = d.join(format!("{stem}-{n}{ext}"));
+        n += 1;
+    }
+    p
+}
+
+/// Copies dropped files into <workspace>ttachments and returns their workspace-relative paths.
+#[tauri::command]
+fn attach_paths(s: State<App>, id: String, paths: Vec<String>) -> Result<Vec<String>, String> {
+    let d = attach_dir(&s, &id)?;
+    let mut out = vec![];
+    for src in paths {
+        let sp = std::path::Path::new(&src);
+        if !sp.is_file() {
+            continue;
+        }
+        let name = sp.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
+        let dst = unique_in(&d, &name);
+        std::fs::copy(sp, &dst).map_err(|e| format!("{name}: {e}"))?;
+        out.push(format!("attachments/{}", dst.file_name().unwrap().to_string_lossy()));
+    }
+    Ok(out)
+}
+
+/// Saves pasted file or image bytes into <workspace>ttachments.
+#[tauri::command]
+fn attach_bytes(s: State<App>, id: String, name: String, data: Vec<u8>) -> Result<String, String> {
+    let d = attach_dir(&s, &id)?;
+    let dst = unique_in(&d, &name);
+    std::fs::write(&dst, data).map_err(|e| e.to_string())?;
+    Ok(format!("attachments/{}", dst.file_name().unwrap().to_string_lossy()))
+}
+
 #[tauri::command]
 fn agent_stop(s: State<App>, id: String) {
     if let Some(a) = s.agents.lock().unwrap().get(&id) {
@@ -220,6 +269,8 @@ pub fn run() {
             set_auto_edit,
             agent_send,
             agent_stop,
+            attach_paths,
+            attach_bytes,
             agent_answer,
             get_setting,
             set_setting,

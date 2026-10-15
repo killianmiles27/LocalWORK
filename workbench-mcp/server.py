@@ -59,6 +59,11 @@ TOOLS = [
                         "required": ["command"]},
     },
     {
+        "name": "read_attachment",
+        "description": "Read a file the user attached (listed in the message as attachments/<name>) as text: PDF, Word, Excel, PowerPoint, CSV, text, HTML. Long files come back in ranges: pass start to continue.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"}, "max_chars": {"type": "integer"}}, "required": ["path"]},
+    },
+    {
         "name": "workspace_info",
         "description": "List files in the workspace folder (names, sizes).",
         "inputSchema": {"type": "object", "properties": {}},
@@ -80,6 +85,9 @@ def call_tool(name, args):
             if len(rows) > 300:
                 break
         return "\n".join(rows[:300]) or "(empty workspace)"
+    if name == "read_attachment":
+        import attachments
+        return attachments.read_attachment(args["path"], args.get("start", 0), args.get("max_chars", 12000))
     if name == "load_skill":
         d = os.environ.get("WORKBENCH_SKILLS", "")
         n = os.path.basename(str(args.get("name", "")).strip())

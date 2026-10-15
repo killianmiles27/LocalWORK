@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Mic, Plus, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Mic, Paperclip, Plus, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import { useVoice } from "./voice";
 
@@ -40,6 +41,8 @@ export default function App() {
   const [input, setInput] = useState("");
   const [autoEdit, setAutoEdit] = useState(false);
   const [err, setErr] = useState("");
+  const [files, setFiles] = useState<string[]>([]);
+  const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const stick = useRef(true);
@@ -122,6 +125,41 @@ export default function App() {
     t.style.height = Math.min(t.scrollHeight, 220) + "px";
   }, [input, cur]);
 
+  async function attachPaths(paths: string[]) {
+    const id = curRef.current;
+    if (!id || !paths.length) return;
+    try { const rel = await invoke<string[]>("attach_paths", { id, paths }); setFiles((f) => [...f, ...rel]); }
+    catch (e) { setErr(String(e)); }
+  }
+  async function pickFiles() {
+    const r = await open({ multiple: true, title: "Attach files" });
+    if (Array.isArray(r)) attachPaths(r); else if (typeof r === "string") attachPaths([r]);
+  }
+  async function onPaste(e: React.ClipboardEvent) {
+    const list = Array.from(e.clipboardData.files);
+    if (!list.length || !cur) return;
+    e.preventDefault();
+    for (const f of list) {
+      const name = f.name && f.name !== "image.png" ? f.name : `pasted-${Date.now()}.${(f.type.split("/")[1] || "png")}`;
+      try {
+        const data = Array.from(new Uint8Array(await f.arrayBuffer()));
+        const rel = await invoke<string>("attach_bytes", { id: cur, name, data });
+        setFiles((x) => [...x, rel]);
+      } catch (er) { setErr(String(er)); }
+    }
+  }
+  useEffect(() => { setFiles([]); }, [cur]);
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    getCurrentWebview().onDragDropEvent((ev) => {
+      const p = ev.payload as any;
+      if (p.type === "over" || p.type === "enter") setDragging(true);
+      else if (p.type === "leave") setDragging(false);
+      else if (p.type === "drop") { setDragging(false); attachPaths(p.paths ?? []); }
+    }).then((u) => { off = u; });
+    return () => off?.();
+  }, []);
+
   async function newConv() {
     const dir = await open({ directory: true, title: "Choose a workspace folder" });
     if (typeof dir !== "string") return;
@@ -129,8 +167,14 @@ export default function App() {
     catch (e) { setErr(String(e)); }
   }
   async function send(override?: string) {
-    const body = (override ?? input).trim();
-    if (!cur || !body || live.busy) return;
+    const typed = (override ?? input).trim();
+    if (!cur || (!typed && !files.length) || live.busy) return;
+    const body = files.length
+      ? `${typed || "Please look at the attached file" + (files.length > 1 ? "s" : "") + "."}
+
+Attached (read with read_attachment): ${files.join(", ")}`
+      : typed;
+    setFiles([]);
     setInput(""); setErr(""); stick.current = true;
     setLive({ text: "", thinking: "", busy: true });
     try { await invoke("agent_send", { id: cur, text: body, autoEdit }); await reload(cur); refreshConvs(); }
@@ -148,6 +192,7 @@ export default function App() {
 
   return (
     <div className="flex h-full">
+      {dragging && cur && <div className="fixed inset-0 z-50 grid place-items-center bg-accent/10 border-2 border-dashed border-accent pointer-events-none text-accent font-medium">Drop files to attach them</div>}
       <aside className="w-[260px] shrink-0 bg-panel border-r border-line flex flex-col">
         <div className="p-3">
           <button onClick={newConv}
@@ -245,7 +290,17 @@ export default function App() {
               <div className="mx-auto max-w-3xl">
                 {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
                 <div className="rounded-2xl border border-line bg-card shadow-sm focus-within:border-accent transition-colors">
-                  <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)} rows={1}
+                  {files.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+                      {files.map((f) => (
+                        <span key={f} className="flex items-center gap-1 rounded-lg bg-panel px-2 py-1 text-xs">
+                          <Paperclip size={11} /> {baseName(f)}
+                          <button title="Remove" onClick={() => setFiles((x) => x.filter((y) => y !== f))} className="text-muted hover:text-red-600"><X size={11} /></button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)} onPaste={onPaste} rows={1}
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
                     placeholder={modelReady ? "Ask for something…" : "Model is still loading — you can type meanwhile"}
                     className="w-full resize-none bg-transparent px-4 pt-3 pb-1 outline-none placeholder:text-muted" />
@@ -255,6 +310,9 @@ export default function App() {
                       {autoEdit ? <Check size={13} /> : <ShieldAlert size={13} />} {autoEdit ? "Edits allowed in folder" : "Ask before editing"}
                     </button>
                     <div className="flex items-center gap-2">
+                    <button onClick={pickFiles} title="Attach files" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel">
+                      <Paperclip size={16} />
+                    </button>
                     {input.trim().length > 20 && !live.busy && (
                       <button onClick={tidy} disabled={tidying || !modelReady} title="Ask the model to turn this into a clear request"
                         className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted hover:bg-panel disabled:opacity-40">
@@ -272,7 +330,7 @@ export default function App() {
                       <button onClick={() => invoke("agent_stop", { id: cur })} title="Stop"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-ink text-bg"><Square size={12} fill="currentColor" /></button>
                     ) : (
-                      <button onClick={() => send()} disabled={!input.trim() || !modelReady} title={modelReady ? "Send" : "Waiting for the model"}
+                      <button onClick={() => send()} disabled={(!input.trim() && !files.length) || !modelReady} title={modelReady ? "Send" : "Waiting for the model"}
                         className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-white disabled:opacity-30 hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
                     )}
                     </div>
