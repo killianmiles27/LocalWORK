@@ -1,6 +1,43 @@
 @import "tailwindcss";
-html,body,#root{height:100%;margin:0}
-body{background:#fafaf9;color:#1c1917;font-family:"Segoe UI",system-ui,sans-serif;font-size:14px}
-.md p{margin:.4em 0}.md ul{list-style:disc;margin:.4em 0 .4em 1.4em}.md ol{list-style:decimal;margin:.4em 0 .4em 1.4em}
-.md table{border-collapse:collapse;margin:.5em 0}.md th,.md td{border:1px solid #d6d3d1;padding:2px 8px}
-.md code{background:#f0eeec;padding:0 3px;border-radius:3px}.md pre{background:#f0eeec;padding:8px;border-radius:6px;overflow:auto}
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-bg: #faf9f5;
+  --color-panel: #f0eee6;
+  --color-panel-2: #e8e5da;
+  --color-card: #ffffff;
+  --color-line: #e3e0d4;
+  --color-ink: #1f1e1b;
+  --color-muted: #75726a;
+  --color-accent: #c96442;
+  --color-accent-dark: #b5573a;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-serif: "Georgia", "Cambria", serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #262624;
+    --color-panel: #1f1e1d;
+    --color-panel-2: #30302e;
+    --color-card: #30302e;
+    --color-line: #3d3d3a;
+    --color-ink: #f0eee6;
+    --color-muted: #a09d94;
+  }
+}
+
+html, body, #root { height: 100%; margin: 0; }
+body { background: var(--color-bg); color: var(--color-ink); font-family: var(--font-sans); font-size: 15px; }
+* { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+
+.prose { --tw-prose-body: var(--color-ink); --tw-prose-headings: var(--color-ink); --tw-prose-bold: var(--color-ink);
+  --tw-prose-links: var(--color-accent); --tw-prose-code: var(--color-ink); --tw-prose-th-borders: var(--color-line);
+  --tw-prose-td-borders: var(--color-line); --tw-prose-bullets: var(--color-muted); --tw-prose-counters: var(--color-muted);
+  --tw-prose-hr: var(--color-line); max-width: none; line-height: 1.65; }
+.prose :where(code):not(:where(pre *))::before, .prose :where(code):not(:where(pre *))::after { content: none; }
+.prose :where(code):not(:where(pre *)) { background: var(--color-panel-2); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
+.prose :where(pre) { background: var(--color-panel); color: var(--color-ink); border: 1px solid var(--color-line); border-radius: 10px; }
+.prose :where(p, ul, ol) { margin-top: .6em; margin-bottom: .6em; }

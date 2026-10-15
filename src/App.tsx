@@ -4,19 +4,29 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Plus, ShieldAlert, Square, Trash2, Wrench, X } from "lucide-react";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
 type Msg = { id: number; role: string; body: any; ts: number };
 type Status = { state: string; detail: string; port: number; model: string };
 type Approval = { conv: string; call_id: string; tool: string; class: string; reason: string; description?: string; args: any; can_remember: boolean };
 
-const pill: Record<string, [string, string]> = {
-  ready: ["bg-green-100 text-green-800", "Model ready"],
-  starting: ["bg-amber-100 text-amber-800", "Model starting…"],
-  loading: ["bg-amber-100 text-amber-800", "Model loading…"],
-  stopped: ["bg-stone-200 text-stone-700", "Model stopped"],
-  error: ["bg-red-100 text-red-800", "Model error"],
+const dot: Record<string, [string, string]> = {
+  ready: ["bg-green-500", "Model ready"],
+  starting: ["bg-amber-400 animate-pulse", "Model starting…"],
+  loading: ["bg-amber-400 animate-pulse", "Model loading…"],
+  stopped: ["bg-stone-400", "Model stopped"],
+  error: ["bg-red-500", "Model error"],
 };
+
+const text = (v: unknown): string => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v, null, 1));
+const baseName = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+
+const suggestions = [
+  "List the files in this folder and summarize what they are",
+  "Write a one-page Word memo about our project status",
+  "Make a spreadsheet that tracks weekly expenses",
+];
 
 export default function App() {
   const [convs, setConvs] = useState<Conv[]>([]);
@@ -30,14 +40,16 @@ export default function App() {
   const [err, setErr] = useState("");
   const curRef = useRef<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   curRef.current = cur;
 
-  const refreshConvs = () => invoke<Conv[]>("list_conversations").then(setConvs);
-  const reload = (id: string) => invoke<Msg[]>("load_messages", { id }).then((m) => curRef.current === id && setMsgs(m));
+  const refreshConvs = () => invoke<Conv[]>("list_conversations").then(setConvs).catch((e) => setErr(String(e)));
+  const reload = (id: string) =>
+    invoke<Msg[]>("load_messages", { id }).then((m) => { if (curRef.current === id) setMsgs(m); }).catch((e) => setErr(String(e)));
 
   useEffect(() => {
     refreshConvs();
-    invoke<Status>("model_status").then(setStatus);
+    invoke<Status>("model_status").then(setStatus).catch(() => {});
     const subs = [
       listen<Status>("model-status", (e) => setStatus(e.payload)),
       listen<Approval>("approval-request", (e) => setApprovals((a) => [...a, e.payload])),
@@ -45,8 +57,8 @@ export default function App() {
         const { conv, ev } = e.payload;
         if (conv !== curRef.current) return;
         switch (ev.type) {
-          case "text_delta": setLive((l) => ({ ...l, busy: true, text: l.text + ev.text })); break;
-          case "thinking": setLive((l) => ({ ...l, busy: true, thinking: l.thinking + ev.text })); break;
+          case "text_delta": setLive((l) => ({ ...l, busy: true, text: l.text + text(ev.text) })); break;
+          case "thinking": setLive((l) => ({ ...l, busy: true, thinking: l.thinking + text(ev.text) })); break;
           case "tool_request": case "tool_running": case "tool_result": case "tool_cancelled":
             setLive((l) => ({ ...l, busy: true, text: "", thinking: "" })); reload(conv); break;
           case "stream_end": case "error": case "agent_exit":
@@ -54,15 +66,24 @@ export default function App() {
         }
       }),
     ];
-    return () => { subs.forEach((s) => s.then((f) => f())); };
+    return () => { subs.forEach((s) => { s.then((f) => f()); }); };
   }, []);
 
   useEffect(() => {
     setLive({ text: "", thinking: "", busy: false });
     setMsgs([]);
+    setErr("");
     if (cur) reload(cur);
   }, [cur]);
-  useEffect(() => endRef.current?.scrollIntoView({ block: "end" }), [msgs, live]);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [msgs, live]);
+
+  useEffect(() => {
+    const t = taRef.current;
+    if (!t) return;
+    t.style.height = "auto";
+    t.style.height = Math.min(t.scrollHeight, 220) + "px";
+  }, [input, cur]);
 
   async function newConv() {
     const dir = await open({ directory: true, title: "Choose a workspace folder" });
@@ -70,11 +91,12 @@ export default function App() {
     try { const id = await invoke<string>("create_conversation", { workspace: dir }); await refreshConvs(); setCur(id); }
     catch (e) { setErr(String(e)); }
   }
-  async function send() {
-    if (!cur || !input.trim() || live.busy) return;
-    const text = input; setInput(""); setErr("");
+  async function send(override?: string) {
+    const body = (override ?? input).trim();
+    if (!cur || !body || live.busy) return;
+    setInput(""); setErr("");
     setLive({ text: "", thinking: "", busy: true });
-    try { await invoke("agent_send", { id: cur, text, autoEdit }); await reload(cur); refreshConvs(); }
+    try { await invoke("agent_send", { id: cur, text: body, autoEdit }); await reload(cur); refreshConvs(); }
     catch (e) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
   }
   function answer(a: Approval, allow: boolean, remember: boolean) {
@@ -82,76 +104,118 @@ export default function App() {
     setApprovals((x) => x.filter((y) => y.call_id !== a.call_id));
   }
 
-  const [cls, label] = pill[status.state] ?? pill.error;
+  const [dotCls, label] = dot[status.state] ?? dot.error;
   const mine = approvals.filter((a) => a.conv === cur);
   const curConv = convs.find((c) => c.id === cur);
+  const modelReady = status.state === "ready";
 
   return (
     <div className="flex h-full">
-      <aside className="w-64 border-r border-stone-200 bg-stone-100 flex flex-col">
-        <button onClick={newConv} className="m-3 rounded-md bg-stone-900 text-white py-2 hover:bg-stone-700">New conversation</button>
-        <div className="flex-1 overflow-auto">
+      <aside className="w-[260px] shrink-0 bg-panel border-r border-line flex flex-col">
+        <div className="p-3">
+          <button onClick={newConv}
+            className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-panel-2 transition-colors">
+            <span className="grid place-items-center w-6 h-6 rounded-full bg-accent text-white"><Plus size={14} /></span>
+            New chat
+          </button>
+        </div>
+        <div className="px-4 pb-1 text-xs font-medium text-muted">Recents</div>
+        <div className="flex-1 overflow-auto px-2 pb-2">
+          {convs.length === 0 && <div className="px-3 py-2 text-sm text-muted">No chats yet</div>}
           {convs.map((c) => (
-            <div key={c.id} onClick={() => setCur(c.id)}
-              className={"group px-3 py-2 cursor-pointer border-l-2 " + (c.id === cur ? "bg-white border-blue-600" : "border-transparent hover:bg-stone-200")}>
-              <div className="truncate font-medium">{c.title}</div>
-              <div className="truncate text-xs text-stone-500 flex justify-between">
-                <span className="truncate">{c.workspace}</span>
-                <button className="hidden group-hover:block text-red-600"
-                  onClick={async (e) => { e.stopPropagation(); if (confirm("Delete this conversation?")) { await invoke("delete_conversation", { id: c.id }); if (cur === c.id) setCur(null); refreshConvs(); } }}>delete</button>
+            <div key={c.id} onClick={() => setCur(c.id)} title={c.workspace}
+              className={"group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer text-sm " + (c.id === cur ? "bg-panel-2" : "hover:bg-panel-2/60")}>
+              <MessageSquare size={14} className="shrink-0 text-muted" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate">{c.title}</div>
+                <div className="truncate text-xs text-muted">{baseName(c.workspace)}</div>
               </div>
+              <button title="Delete" className="hidden group-hover:block text-muted hover:text-red-600"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  if (!window.confirm("Delete this chat?")) return;
+                  await invoke("delete_conversation", { id: c.id });
+                  if (cur === c.id) setCur(null);
+                  refreshConvs();
+                }}><Trash2 size={14} /></button>
             </div>
           ))}
         </div>
+        <div className="border-t border-line px-4 py-3 flex items-center gap-2 text-xs text-muted" title={status.detail}>
+          <span className={"w-2 h-2 rounded-full " + dotCls} />
+          <span className="flex-1">{label}</span>
+          {modelReady && <button className="hover:text-ink underline" onClick={() => invoke("model_stop")}>stop</button>}
+          {(status.state === "stopped" || status.state === "error") &&
+            <button className="text-accent underline" onClick={() => invoke("model_start").catch((e) => setErr(String(e)))}>start</button>}
+        </div>
       </aside>
+
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="flex items-center justify-between px-4 py-2 border-b border-stone-200 bg-white">
-          <div className="truncate text-stone-600">{curConv ? curConv.workspace : "Local work assistant"}</div>
-          <div className="flex items-center gap-2">
-            <span title={status.detail} className={"rounded-full px-3 py-1 text-xs " + cls}>{label}</span>
-            {status.state === "ready" ? (
-              <button className="text-xs text-stone-500 underline" onClick={() => invoke("model_stop")}>stop</button>
-            ) : status.state === "stopped" || status.state === "error" ? (
-              <button className="text-xs text-blue-700 underline" onClick={() => invoke("model_start").catch((e) => setErr(String(e)))}>start</button>
-            ) : null}
-          </div>
-        </header>
         {!cur ? (
-          <div className="flex-1 grid place-items-center text-stone-500">Create a conversation and pick a workspace folder to begin.</div>
+          <div className="flex-1 grid place-items-center px-6">
+            <div className="text-center max-w-md">
+              <div className="mx-auto mb-5 grid place-items-center w-12 h-12 rounded-2xl bg-accent text-white text-xl font-serif">L</div>
+              <h1 className="font-serif text-3xl mb-2">What are we working on?</h1>
+              <p className="text-muted mb-6">Pick a folder and I'll work on the files in it, on your own computer.</p>
+              <button onClick={newConv} className="inline-flex items-center gap-2 rounded-xl bg-accent hover:bg-accent-dark text-white px-5 py-2.5 font-medium transition-colors">
+                <FolderOpen size={16} /> Choose a folder
+              </button>
+              {convs.length > 0 && <p className="text-sm text-muted mt-5">or continue a chat from the list on the left</p>}
+            </div>
+          </div>
         ) : (
           <>
-            <div className="flex-1 overflow-auto px-6 py-4 space-y-3">
-              {msgs.map((m) => <Row key={m.id} m={m} />)}
-              {live.thinking && <div className="text-xs text-stone-400 italic whitespace-pre-wrap max-h-24 overflow-auto">{live.thinking}</div>}
-              {live.text && <Bubble who="assistant"><div className="md"><Markdown remarkPlugins={[remarkGfm]}>{live.text}</Markdown></div></Bubble>}
-              {live.busy && !live.text && <div className="text-stone-400 text-sm">Working…</div>}
-              {mine.map((a) => (
-                <div key={a.call_id} className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3">
-                  <div className="font-medium">{a.reason} <span className="text-xs uppercase text-amber-700">{a.class}</span></div>
-                  <div className="text-xs text-stone-600 mt-1">{a.tool}</div>
-                  <pre className="text-xs bg-white border rounded p-2 mt-2 max-h-40 overflow-auto whitespace-pre-wrap">{JSON.stringify(a.args, null, 2)}</pre>
-                  <div className="flex gap-2 mt-2">
-                    <button onClick={() => answer(a, true, false)} className="rounded bg-green-700 text-white px-3 py-1">Allow once</button>
-                    {a.can_remember && <button onClick={() => answer(a, true, true)} className="rounded bg-green-100 text-green-900 px-3 py-1">Allow for this conversation</button>}
-                    <button onClick={() => answer(a, false, false)} className="rounded bg-red-100 text-red-800 px-3 py-1">Deny</button>
+            <header className="flex items-center gap-2 px-6 h-12 border-b border-line text-sm shrink-0">
+              <FolderOpen size={15} className="text-muted" />
+              <span className="truncate font-medium">{curConv ? baseName(curConv.workspace) : ""}</span>
+              <span className="truncate text-muted text-xs">{curConv?.workspace}</span>
+            </header>
+            <div className="flex-1 overflow-auto">
+              <div className="mx-auto max-w-3xl px-6 py-6 space-y-5">
+                {msgs.length === 0 && !live.busy && (
+                  <div className="pt-16 text-center">
+                    <h2 className="font-serif text-2xl mb-5">How can I help with this folder?</h2>
+                    <div className="grid gap-2 max-w-md mx-auto">
+                      {suggestions.map((s) => (
+                        <button key={s} onClick={() => send(s)} disabled={!modelReady}
+                          className="text-left rounded-xl border border-line bg-card px-4 py-3 text-sm hover:border-accent disabled:opacity-50 transition-colors">{s}</button>
+                      ))}
+                    </div>
+                    {!modelReady && <p className="text-xs text-muted mt-3">Waiting for the model to finish loading…</p>}
                   </div>
-                </div>
-              ))}
-              <div ref={endRef} />
+                )}
+                {msgs.map((m) => <Row key={m.id} m={m} />)}
+                {live.thinking && <div className="text-xs text-muted italic whitespace-pre-wrap max-h-24 overflow-auto">{live.thinking}</div>}
+                {live.text && <Assistant>{live.text}</Assistant>}
+                {live.busy && !live.text && mine.length === 0 && (
+                  <div className="flex items-center gap-2 text-muted text-sm"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" /> Working…</div>
+                )}
+                {mine.map((a) => <ApprovalCard key={a.call_id} a={a} answer={answer} />)}
+                <div ref={endRef} />
+              </div>
             </div>
-            {err && <div className="px-6 py-1 text-red-700 text-sm">{err}</div>}
-            <div className="border-t border-stone-200 bg-white p-3">
-              <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={3}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Ask for something… (Enter to send, Shift+Enter for a new line)"
-                className="w-full resize-none rounded-md border border-stone-300 p-2 outline-none focus:border-blue-500" />
-              <div className="flex items-center justify-between mt-2">
-                <label className="text-xs text-stone-600 flex items-center gap-1">
-                  <input type="checkbox" checked={autoEdit} onChange={(e) => setAutoEdit(e.target.checked)} /> Allow edits inside the workspace without asking
-                </label>
-                <div className="flex gap-2">
-                  {live.busy && <button onClick={() => invoke("agent_stop", { id: cur })} className="rounded border border-stone-300 px-3 py-1">Stop</button>}
-                  <button onClick={send} disabled={live.busy || !input.trim()} className="rounded bg-blue-700 text-white px-4 py-1 disabled:opacity-40">Send</button>
+
+            <div className="shrink-0 px-6 pb-4">
+              <div className="mx-auto max-w-3xl">
+                {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
+                <div className="rounded-2xl border border-line bg-card shadow-sm focus-within:border-accent transition-colors">
+                  <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)} rows={1}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
+                    placeholder={modelReady ? "Ask for something…" : "Model is still loading — you can type meanwhile"}
+                    className="w-full resize-none bg-transparent px-4 pt-3 pb-1 outline-none placeholder:text-muted" />
+                  <div className="flex items-center justify-between px-3 pb-2">
+                    <button onClick={() => setAutoEdit(!autoEdit)} title="Let me edit files inside this folder without asking each time"
+                      className={"flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors " + (autoEdit ? "bg-accent/15 text-accent" : "text-muted hover:bg-panel")}>
+                      {autoEdit ? <Check size={13} /> : <ShieldAlert size={13} />} {autoEdit ? "Edits allowed in folder" : "Ask before editing"}
+                    </button>
+                    {live.busy ? (
+                      <button onClick={() => invoke("agent_stop", { id: cur })} title="Stop"
+                        className="grid place-items-center w-8 h-8 rounded-lg bg-ink text-bg"><Square size={12} fill="currentColor" /></button>
+                    ) : (
+                      <button onClick={() => send()} disabled={!input.trim() || !modelReady} title={modelReady ? "Send" : "Waiting for the model"}
+                        className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-white disabled:opacity-30 hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -162,26 +226,53 @@ export default function App() {
   );
 }
 
-function Bubble({ who, children }: { who: "user" | "assistant"; children: React.ReactNode }) {
+function Assistant({ children }: { children: string }) {
   return (
-    <div className={who === "user" ? "flex justify-end" : "flex"}>
-      <div className={"max-w-[80%] rounded-lg px-3 py-2 " + (who === "user" ? "bg-blue-700 text-white whitespace-pre-wrap" : "bg-white border border-stone-200")}>{children}</div>
+    <div className="flex gap-3">
+      <div className="shrink-0 grid place-items-center w-7 h-7 rounded-full bg-accent text-white text-xs font-serif mt-0.5">L</div>
+      <div className="prose min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
     </div>
   );
 }
 
 function Row({ m }: { m: Msg }) {
   const b = m.body ?? {};
-  if (m.role === "user") return <Bubble who="user">{b.text}</Bubble>;
-  if (m.role === "assistant")
-    return <Bubble who="assistant"><div className="md"><Markdown remarkPlugins={[remarkGfm]}>{b.text ?? ""}</Markdown></div></Bubble>;
-  if (m.role === "error") return <div className="text-red-700 text-sm">Error: {typeof b === "string" ? b : b?.message ?? JSON.stringify(b)}</div>;
-  if (m.role === "tool")
+  if (m.role === "user")
     return (
-      <details className="text-xs text-stone-600 bg-stone-100 rounded px-2 py-1">
-        <summary className="cursor-pointer">{b.status === "cancelled" ? "Declined: " : "Tool: "}{b.request?.name ?? b.name}</summary>
-        <pre className="whitespace-pre-wrap mt-1 max-h-48 overflow-auto">{JSON.stringify(b.request?.args ?? {}, null, 1)}{"\n---\n"}{b.output}</pre>
+      <div className="flex justify-end">
+        <div className="max-w-[80%] rounded-2xl bg-panel-2 px-4 py-2.5 whitespace-pre-wrap break-words">{text(b.text)}</div>
+      </div>
+    );
+  if (m.role === "assistant") return <Assistant>{text(b.text)}</Assistant>;
+  if (m.role === "error")
+    return <div className="rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{text(typeof b === "string" ? b : b?.message ?? b)}</div>;
+  if (m.role === "tool") {
+    const declined = b.status === "cancelled";
+    return (
+      <details className="group ml-10 text-sm">
+        <summary className="inline-flex items-center gap-2 cursor-pointer list-none rounded-lg border border-line bg-card px-3 py-1.5 text-muted hover:text-ink">
+          <ChevronRight size={14} className="transition-transform group-open:rotate-90" />
+          {declined ? <X size={14} className="text-red-600" /> : <Wrench size={14} />}
+          <span>{declined ? "Declined: " : ""}{text(b.request?.name ?? b.name)}</span>
+        </summary>
+        <pre className="mt-2 text-xs whitespace-pre-wrap max-h-60 overflow-auto rounded-lg bg-panel border border-line p-3">{text(b.request?.args ?? {})}{"\n---\n"}{text(b.output)}</pre>
       </details>
     );
+  }
   return null;
+}
+
+function ApprovalCard({ a, answer }: { a: Approval; answer: (a: Approval, allow: boolean, remember: boolean) => void }) {
+  return (
+    <div className="ml-10 rounded-xl border border-amber-400/70 bg-amber-50 dark:bg-amber-950/40 p-4">
+      <div className="flex items-center gap-2 font-medium"><ShieldAlert size={16} className="text-amber-600" /> {a.reason}</div>
+      <div className="text-xs text-muted mt-1">{a.tool} · {a.class}</div>
+      <pre className="text-xs bg-card border border-line rounded-lg p-2 mt-2 max-h-40 overflow-auto whitespace-pre-wrap">{text(a.args)}</pre>
+      <div className="flex flex-wrap gap-2 mt-3 text-sm">
+        <button onClick={() => answer(a, true, false)} className="rounded-lg bg-accent hover:bg-accent-dark text-white px-3 py-1.5">Allow once</button>
+        {a.can_remember && <button onClick={() => answer(a, true, true)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-accent">Allow for this chat</button>}
+        <button onClick={() => answer(a, false, false)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-red-500">Deny</button>
+      </div>
+    </div>
+  );
 }
