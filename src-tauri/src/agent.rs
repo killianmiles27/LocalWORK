@@ -162,13 +162,38 @@ pub fn get_or_start(
     Ok(agent)
 }
 
+fn skill_list() -> String {
+    let mut rows = vec![];
+    if let Ok(rd) = std::fs::read_dir(paths::resource_dir("skills")) {
+        for e in rd.flatten() {
+            let Ok(t) = std::fs::read_to_string(e.path().join("SKILL.md")) else { continue };
+            let field = |k: &str| t.lines().find_map(|l| l.strip_prefix(&format!("{k}:")).map(|v| v.trim().to_string()));
+            if let (Some(n), Some(d)) = (field("name"), field("description")) {
+                if n != "officecli-basics" {
+                    rows.push(format!("- {n}: {d}"));
+                }
+            }
+        }
+    }
+    rows.sort();
+    if rows.is_empty() { String::new() } else {
+        format!("
+
+# Skills
+For these kinds of task, call the load_skill tool with the skill name first and follow it:
+{}", rows.join("
+"))
+    }
+}
+
 fn system_prompt(db: &Db) -> String {
     let notes = { let c = db.lock().unwrap(); store::recent_memories(&c, 8) };
+    let base = format!("{SYSTEM_PROMPT}{}", skill_list());
     if notes.is_empty() {
-        return SYSTEM_PROMPT.to_string();
+        return base;
     }
     let list: Vec<String> = notes.iter().map(|(_, t)| format!("- {t}")).collect();
-    format!("{SYSTEM_PROMPT}
+    format!("{base}
 
 # What you remember about the user
 {}
@@ -193,7 +218,7 @@ fn workbench_mcp(app_vendor: &std::path::Path) -> Option<Value> {
         "type": "add_mcp_server", "name": "workbench", "transport": "stdio",
         "command": python.to_string_lossy(),
         "args": ["-u", script.to_string_lossy()],
-        "env": {"OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(), "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy(), "WORKBENCH_DB": paths::data_dir().join("workbench.db").to_string_lossy()}
+        "env": {"OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(), "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy(), "WORKBENCH_DB": paths::data_dir().join("workbench.db").to_string_lossy(), "WORKBENCH_SKILLS": paths::resource_dir("skills").to_string_lossy()}
     }))
 }
 

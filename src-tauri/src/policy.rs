@@ -126,7 +126,7 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         .or_else(|| args.get("command").and_then(|v| v.as_str()))
         .unwrap_or("")
         .to_lowercase();
-    if t.contains("workspace_info") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
+    if t.contains("workspace_info") || t.contains("load_skill") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
         return Decision::Allow;
     }
     if outside {

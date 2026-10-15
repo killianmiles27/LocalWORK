@@ -42,6 +42,11 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]},
     },
     {
+        "name": "load_skill",
+        "description": "Load the full step-by-step instructions of a skill by name (see the skill list in your instructions). Call it before starting that kind of task.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+    },
+    {
         "name": "workspace_info",
         "description": "List files in the workspace folder (names, sizes).",
         "inputSchema": {"type": "object", "properties": {}},
@@ -63,6 +68,14 @@ def call_tool(name, args):
             if len(rows) > 300:
                 break
         return "\n".join(rows[:300]) or "(empty workspace)"
+    if name == "load_skill":
+        d = os.environ.get("WORKBENCH_SKILLS", "")
+        n = os.path.basename(str(args.get("name", "")).strip())
+        f = os.path.join(d, n, "SKILL.md")
+        if not n or not os.path.isfile(f):
+            have = [x for x in os.listdir(d) if os.path.isfile(os.path.join(d, x, "SKILL.md"))] if os.path.isdir(d) else []
+            return "No such skill. Available: " + ", ".join(sorted(have))
+        return open(f, encoding="utf8").read()
     if name in ("memory_save", "memory_search", "memory_forget"):
         import memory
         return getattr(memory, name)(**{k: v for k, v in args.items()})
