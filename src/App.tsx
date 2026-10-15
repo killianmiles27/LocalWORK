@@ -4,8 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Plus, Settings as Gear, ShieldAlert, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Mic, Plus, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
+import { useVoice } from "./voice";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
 type Msg = { id: number; role: string; body: any; ts: number };
@@ -47,6 +48,14 @@ export default function App() {
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   curRef.current = cur;
+  const [tidying, setTidying] = useState(false);
+  const voice = useVoice((t) => { setErr(""); setInput((i) => (i.trim() ? i.replace(/\s+$/, "") + " " : "") + t); taRef.current?.focus(); }, setErr);
+  async function tidy() {
+    setTidying(true); setErr("");
+    try { setInput(await invoke<string>("voice_tidy", { text: input })); }
+    catch (e) { setErr(String(e)); }
+    finally { setTidying(false); }
+  }
 
   const refreshConvs = () => invoke<Conv[]>("list_conversations").then(setConvs).catch((e) => setErr(String(e)));
   const reload = (id: string) =>
@@ -245,6 +254,20 @@ export default function App() {
                       className={"flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors " + (autoEdit ? "bg-accent/15 text-accent" : "text-muted hover:bg-panel")}>
                       {autoEdit ? <Check size={13} /> : <ShieldAlert size={13} />} {autoEdit ? "Edits allowed in folder" : "Ask before editing"}
                     </button>
+                    <div className="flex items-center gap-2">
+                    {input.trim().length > 20 && !live.busy && (
+                      <button onClick={tidy} disabled={tidying || !modelReady} title="Ask the model to turn this into a clear request"
+                        className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted hover:bg-panel disabled:opacity-40">
+                        <Sparkles size={13} /> {tidying ? "Tidying…" : "Tidy up"}
+                      </button>
+                    )}
+                    <button onPointerDown={(e) => { e.preventDefault(); voice.press(); }} onPointerUp={voice.release} onPointerLeave={voice.release}
+                      disabled={!voice.available || voice.busy}
+                      title={!voice.available ? voice.detail || "Voice input is not set up" : voice.busy ? "Transcribing…" : "Hold to talk (Ctrl+Space)"}
+                      className={"grid place-items-center w-8 h-8 rounded-lg transition-colors disabled:opacity-30 " +
+                        (voice.recording ? "bg-red-500 text-white animate-pulse" : voice.busy ? "bg-panel text-muted animate-pulse" : "text-muted hover:bg-panel")}>
+                      <Mic size={16} />
+                    </button>
                     {live.busy ? (
                       <button onClick={() => invoke("agent_stop", { id: cur })} title="Stop"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-ink text-bg"><Square size={12} fill="currentColor" /></button>
@@ -252,6 +275,7 @@ export default function App() {
                       <button onClick={() => send()} disabled={!input.trim() || !modelReady} title={modelReady ? "Send" : "Waiting for the model"}
                         className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-white disabled:opacity-30 hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
                     )}
+                    </div>
                   </div>
                 </div>
               </div>

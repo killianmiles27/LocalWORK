@@ -1,4 +1,6 @@
 {
   "aionrs": {"version": "0.2.11", "source": "https://github.com/iOfficeAI/aionrs tag v0.2.11, built from source (cargo build --release -p aion-cli)", "sha256": "c1fe2b97104740a4c97f5e84303618a7f0f1f7006915a0cc650e2c8d897b11b4"},
-  "officecli": {"version": "1.0.157", "source": "https://github.com/iOfficeAI/OfficeCLI/releases/tag/v1.0.157", "sha256": "bd64eba587e56cc71709cdd1f38ae9ac77cd65a9c8ea744b0996897c0557e343", "verified": "SHA256SUMS"}
+  "officecli": {"version": "1.0.157", "source": "https://github.com/iOfficeAI/OfficeCLI/releases/tag/v1.0.157", "sha256": "bd64eba587e56cc71709cdd1f38ae9ac77cd65a9c8ea744b0996897c0557e343", "verified": "SHA256SUMS"},
+  "whisper": {"version": "b5454", "source": "https://github.com/ggml-org/whisper.cpp/releases/tag/b5454 whisper-bin-x64.zip (CPU build), unzipped into vendor\whisper", "sha256": "6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb"},
+  "whisperModel": {"file": "ggml-small-q5_1.bin", "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin", "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"}
 }

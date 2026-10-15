@@ -5,6 +5,7 @@ mod policy;
 mod store;
 mod strata;
 mod supervisor;
+mod voice;
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -12,10 +13,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Manager, RunEvent, State};
 
-struct App {
-    db: agent::Db,
-    strata: strata::Shared,
-    agents: agent::Agents,
+pub struct App {
+    pub db: agent::Db,
+    pub strata: strata::Shared,
+    pub agents: agent::Agents,
 }
 
 fn new_id() -> String {
@@ -206,7 +207,10 @@ pub fn run() {
             set_setting,
             data_dir,
             memories_list,
-            memory_delete
+            memory_delete,
+            voice::voice_status,
+            voice::voice_transcribe,
+            voice::voice_tidy
         ])
         .build(tauri::generate_context!())
         .expect("error while building app")

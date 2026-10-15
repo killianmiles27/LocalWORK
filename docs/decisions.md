@@ -5,3 +5,4 @@
 - Approval policy is in the Rust host; aionrs always receives `tool_approve` scope `once`.
 - Workbench MCP runs on Strata's Python. Its server is stdlib-only; web libraries (ddgs, httpx, beautifulsoup4, markdownify, pypdf) live in `workbench-mcp/libs` (installed with scripts/install-mcp-libs.ps1) so the model environment is never modified. markitdown was dropped: it pulls onnxruntime/magika (large) for no gain over markdownify.
 - Stage 0 experiments and benchmarking skipped by request.
+- Voice input: browser records 16 kHz mono WAV, host runs whisper.cpp `whisper-cli` (CPU, small q5_1 multilingual model, auto language) per clip inside the Job Object; GPU stays free for Strata. "Tidy up" posts to Strata's /v1/chat/completions with thinking off.
