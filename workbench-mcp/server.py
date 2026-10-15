@@ -47,6 +47,18 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
     },
     {
+        "name": "browser",
+        "description": "Drive a real headless browser (Chromium) for pages that web_fetch cannot read: interactive or script-rendered sites, "
+                       "forms, downloads. Pass a command and its arguments, e.g. {\"command\":\"goto\",\"args\":[\"https://example.com\"]}. "
+                       "Commands: goto <url>, snapshot (page as text with element refs like e12), click <ref>, fill <ref> <text>, type <text>, "
+                       "press <key>, select <ref> <value>, check/uncheck <ref>, hover <ref>, screenshot, eval <js function>, go-back, reload, "
+                       "tab-list, tab-new [url], tab-select <n>, tab-close, wait, close. Every action returns a fresh snapshot. "
+                       "Local and private-network addresses are blocked. Login sessions persist per project.",
+        "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}},
+                                       "label": {"type": "string", "description": "For click/fill/type/press: the visible text or name of the element you are acting on (e.g. 'Sign in button', 'Password field'). Always provide it."}},
+                        "required": ["command"]},
+    },
+    {
         "name": "workspace_info",
         "description": "List files in the workspace folder (names, sizes).",
         "inputSchema": {"type": "object", "properties": {}},
@@ -85,6 +97,9 @@ def call_tool(name, args):
     if name == "web_fetch":
         import web
         return web.web_fetch(args["url"], args.get("max_chars", 12000))
+    if name == "browser":
+        import browser
+        return browser.run(args)
     if name == "officecli":
         a = args.get("args")
         if isinstance(a, str):
@@ -108,6 +123,11 @@ def reply(id_, result=None, error=None):
         m["result"] = result
     sys.stdout.write(json.dumps(m) + "\n")
     sys.stdout.flush()
+
+
+def _close_browser():
+    if "browser" in sys.modules:
+        sys.modules["browser"].shutdown()
 
 
 for line in sys.stdin:
@@ -137,3 +157,6 @@ for line in sys.stdin:
         reply(id_, {})
     else:
         reply(id_, error={"code": -32601, "message": "method not found"})
+
+
+_close_browser()

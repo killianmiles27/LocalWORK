@@ -201,7 +201,7 @@ fn system_prompt(db: &Db) -> String {
 "))
 }
 
-fn workbench_mcp(app_vendor: &std::path::Path) -> Option<Value> {
+fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Option<Value> {
     let root = PathBuf::from(
         std::fs::read_to_string(paths::data_dir().join("settings.json"))
             .ok()
@@ -218,7 +218,17 @@ fn workbench_mcp(app_vendor: &std::path::Path) -> Option<Value> {
         "type": "add_mcp_server", "name": "workbench", "transport": "stdio",
         "command": python.to_string_lossy(),
         "args": ["-u", script.to_string_lossy()],
-        "env": {"OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(), "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy(), "WORKBENCH_DB": paths::data_dir().join("workbench.db").to_string_lossy(), "WORKBENCH_SKILLS": paths::resource_dir("skills").to_string_lossy()}
+        "env": {
+            "OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(),
+            "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy(),
+            "WORKBENCH_DB": paths::data_dir().join("workbench.db").to_string_lossy(),
+            "WORKBENCH_SKILLS": paths::resource_dir("skills").to_string_lossy(),
+            "BROWSER_NODE": app_vendor.join("node").join("node.exe").to_string_lossy(),
+            "BROWSER_CLI": app_vendor.join("playwright").join("node_modules").join("@playwright").join("cli").join("playwright-cli.js").to_string_lossy(),
+            "BROWSER_BROWSERS": app_vendor.join("browsers").to_string_lossy(),
+            "BROWSER_PROFILES": paths::data_dir().join("browser").to_string_lossy(),
+            "BROWSER_SESSION": conv.chars().take(12).collect::<String>()
+        }
     }))
 }
 
@@ -250,7 +260,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     let c = db.lock().unwrap();
                     store::set_has_session(&c, &conv);
                 }
-                let mcp = workbench_mcp(&vendor);
+                let mcp = workbench_mcp(&vendor, &conv);
                 let mut g = agent.inner.lock().unwrap();
                 if let Some(m) = mcp {
                     write_line(&mut g, &m);
