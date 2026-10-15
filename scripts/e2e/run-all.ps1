@@ -32,6 +32,7 @@ param(
   [switch]$KeepInstalled
 )
 $ErrorActionPreference = 'Stop'
+if ($Only) { $Only = @($Only | ForEach-Object { $_ -split ',' }) }   # -File passes "a,b" as one string
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $work = Join-Path $env:TEMP ("lw-e2e-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force $work | Out-Null
@@ -71,12 +72,15 @@ function All-Procs { Get-CimInstance Win32_Process | Select-Object ProcessId, Pa
 function Get-Tree([int]$rootPid) {
   $all = All-Procs
   $set = @{}
+  $born = @{}
+  foreach ($p in $all) { $born[[int]$p.ProcessId] = $p.CreationDate }
   if ($rootPid) { $set[$rootPid] = $true }
   $grew = $true
   while ($grew) {
     $grew = $false
     foreach ($p in $all) {
-      if ($set.ContainsKey([int]$p.ParentProcessId) -and -not $set.ContainsKey([int]$p.ProcessId)) { $set[[int]$p.ProcessId] = $true; $grew = $true }
+      # A child must be younger than its parent: Windows reuses pids, so a stale ParentProcessId can point at an unrelated process.
+      if ($set.ContainsKey([int]$p.ParentProcessId) -and -not $set.ContainsKey([int]$p.ProcessId) -and $p.CreationDate -ge $born[[int]$p.ParentProcessId]) { $set[[int]$p.ProcessId] = $true; $grew = $true }
     }
   }
   $inst = Split-Path -Parent $script:ExePath
@@ -319,7 +323,7 @@ Repeat-Test 'T-L3' 'Kill Strata: stopped state, Restart works, conversation inta
   Check-Consoles (Get-Tree $app.Id)
   [void]$app.CloseMainWindow()
   $g = Wait-Gone $tree 10
-  if (-not $g.Ok) { return 'processes left after close' }
+  if (-not $g.Ok) { return "processes left after close: $(($g.Left | % { $_.Name + ':' + $_.ProcessId }) -join ',')" }
 }
 
 # ---------------------------------------------------------------- T-L4
@@ -338,7 +342,7 @@ Repeat-Test 'T-L4' 'Launch twice quickly: one window, one Strata' {
   $tree = Get-Tree $a1.Id
   [void]$a1.CloseMainWindow()
   $g = Wait-Gone $tree 10
-  if (-not $g.Ok) { return 'processes left after close' }
+  if (-not $g.Ok) { return "processes left after close: $(($g.Left | % { $_.Name + ':' + $_.ProcessId }) -join ',')" }
 }
 
 # ---------------------------------------------------------------- T-L6
@@ -361,7 +365,7 @@ if (Wanted 'T-L6') {
       if (-not (Wait-Model 'ready' 45)) { return 'retry after fixing path did not become ready' }
       $tree = Get-Tree $app.Id
       [void]$app.CloseMainWindow()
-      if (-not (Wait-Gone $tree 10).Ok) { return 'processes left after close' }
+      $g = Wait-Gone $tree 10; if (-not $g.Ok) { return "processes left after close: $(($g.Left | % { $_.Name + ':' + $_.ProcessId }) -join ',')" }
     }
   }
 }
@@ -482,5 +486,6 @@ Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 if ($failed.Count) { Write-Host "$($failed.Count) FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "All executed tests passed ($(@($results | Where-Object Status -eq 'SKIP').Count) skipped)" -ForegroundColor Green
 exit 0
+
 
 

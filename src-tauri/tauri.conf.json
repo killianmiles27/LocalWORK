@@ -26,6 +26,11 @@
       "../vendor/aionrs.exe": "vendor/aionrs.exe",
       "../vendor/officecli.exe": "vendor/officecli.exe",
       "../vendor/manifest.json": "vendor/manifest.json",
+      "../vendor/node/": "vendor/node/",
+      "../vendor/playwright/": "vendor/playwright/",
+      "../vendor/browsers/": "vendor/browsers/",
+      "../vendor/whisper/": "vendor/whisper/",
+      "../workbench-mcp/libs/": "workbench-mcp/libs/",
       "../workbench-mcp/*.py": "workbench-mcp/",
       "../skills/": "skills/"
     },
