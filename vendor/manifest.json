@@ -1,0 +1,4 @@
+{
+  "aionrs": {"version": "0.2.11", "source": "https://github.com/iOfficeAI/aionrs tag v0.2.11, built from source (cargo build --release -p aion-cli)", "sha256": "c1fe2b97104740a4c97f5e84303618a7f0f1f7006915a0cc650e2c8d897b11b4"},
+  "officecli": {"version": "1.0.157", "source": "https://github.com/iOfficeAI/OfficeCLI/releases/tag/v1.0.157", "sha256": "bd64eba587e56cc71709cdd1f38ae9ac77cd65a9c8ea744b0996897c0557e343", "verified": "SHA256SUMS"}
+}

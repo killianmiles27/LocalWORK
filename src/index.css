@@ -1,0 +1,6 @@
+@import "tailwindcss";
+html,body,#root{height:100%;margin:0}
+body{background:#fafaf9;color:#1c1917;font-family:"Segoe UI",system-ui,sans-serif;font-size:14px}
+.md p{margin:.4em 0}.md ul{list-style:disc;margin:.4em 0 .4em 1.4em}.md ol{list-style:decimal;margin:.4em 0 .4em 1.4em}
+.md table{border-collapse:collapse;margin:.5em 0}.md th,.md td{border:1px solid #d6d3d1;padding:2px 8px}
+.md code{background:#f0eeec;padding:0 3px;border-radius:3px}.md pre{background:#f0eeec;padding:8px;border-radius:6px;overflow:auto}

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+vendor/*
+!vendor/manifest.json
+!vendor/README.md
+*.log
