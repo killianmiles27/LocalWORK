@@ -6,3 +6,5 @@ vendor/*
 !vendor/manifest.json
 !vendor/README.md
 *.log
+workbench-mcp/libs/
+workbench-mcp/.cache/

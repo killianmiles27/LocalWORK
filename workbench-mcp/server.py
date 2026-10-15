@@ -1,5 +1,5 @@
 """Workbench MCP server (stdio, JSON-RPC 2.0, newline-delimited). Python stdlib only.
-Tools: officecli (wrapper around the bundled OfficeCLI), workspace_info."""
+Tools: officecli (wrapper around the bundled OfficeCLI), web_search, web_fetch, workspace_info."""
 import json, os, subprocess, sys
 
 OFFICECLI = os.environ.get("OFFICECLI_EXE", "officecli.exe")
@@ -13,6 +13,18 @@ TOOLS = [
                        "[\"validate\",\"report.xlsx\"]. Build documents fast with [\"batch\",\"file.docx\",\"--input\",\"build.json\"]. Paths are relative to the workspace. This is a tool, not a shell command.",
         "inputSchema": {"type": "object", "properties": {"args": {"type": "array", "items": {"type": "string"}}},
                         "required": ["args"]},
+    },
+    {
+        "name": "web_search",
+        "description": "Search the web (DuckDuckGo). Returns numbered results with title, URL and snippet. Cite sources by URL.",
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}},
+                        "required": ["query"]},
+    },
+    {
+        "name": "web_fetch",
+        "description": "Fetch a web page or PDF by URL and return it as readable markdown (cached for a few hours).",
+        "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}, "max_chars": {"type": "integer"}},
+                        "required": ["url"]},
     },
     {
         "name": "workspace_info",
@@ -36,6 +48,12 @@ def call_tool(name, args):
             if len(rows) > 300:
                 break
         return "\n".join(rows[:300]) or "(empty workspace)"
+    if name == "web_search":
+        import web
+        return web.web_search(args["query"], args.get("max_results", 6))
+    if name == "web_fetch":
+        import web
+        return web.web_fetch(args["url"], args.get("max_chars", 12000))
     if name == "officecli":
         a = args.get("args")
         if isinstance(a, str):

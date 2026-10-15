@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 
-type Info = { model: string; quant: string; file: string; context: string | null; kv: string | null; status: any; live: any };
+type Info = { cpu?: { name: string; load: number; server_ram_gib: number | null }; model: string; quant: string; file: string; context: string | null; kv: string | null; status: any; live: any };
 type St = { state: string; detail: string; port: number; model: string };
 
 const num = (v: unknown, d = 1) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "–");
@@ -70,7 +70,10 @@ export default function Settings({ status, onClose }: { status: St; onClose: () 
             <Row k="GPU" v={gpu?.name ?? "–"} />
             <Row k="GPU memory" v={gpu ? `${num((gpu.used_mib ?? 0) / 1024)} / ${num((gpu.total_mib ?? 0) / 1024)} GiB` : "–"} />
             <Row k="GPU load" v={gpu ? `${gpu.util_pct ?? "–"}%${gpu.temp_c != null ? ` · ${gpu.temp_c}°C` : ""}${gpu.power_w != null ? ` · ${num(gpu.power_w, 0)} W` : ""}` : "–"} />
+            <Row k="CPU" v={info?.cpu?.name || "–"} />
+            <Row k="CPU load" v={info?.cpu ? `${num(info.cpu.load, 0)}%` : "–"} />
             <Row k="System memory" v={ram ? `${num(ram.used_gib)} / ${num(ram.total_gib)} GiB` : "–"} />
+            {info?.cpu?.server_ram_gib != null && <Row k="Model server memory" v={`${num(info.cpu.server_ram_gib)} GiB`} />}
           </section>
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">App</h3>

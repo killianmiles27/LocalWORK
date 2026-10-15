@@ -179,7 +179,7 @@ fn workbench_mcp(app_vendor: &std::path::Path) -> Option<Value> {
         "type": "add_mcp_server", "name": "workbench", "transport": "stdio",
         "command": python.to_string_lossy(),
         "args": ["-u", script.to_string_lossy()],
-        "env": {"OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy()}
+        "env": {"OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(), "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy()}
     }))
 }
 

@@ -8,3 +8,5 @@ Third-party libraries used by the UI:
 - @tailwindcss/typography (MIT) - Markdown styling
 - react-markdown, remark-gfm (MIT)
 - Tailwind CSS (MIT), React (MIT), Tauri (MIT/Apache-2.0)
+- sysinfo (MIT) - CPU and memory readings in Settings
+- ddgs (MIT), httpx (BSD-3), beautifulsoup4 (MIT), markdownify (MIT), pypdf (BSD-3) - web search and page reading tools, installed into workbench-mcp/libs

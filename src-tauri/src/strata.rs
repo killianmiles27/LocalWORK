@@ -216,6 +216,7 @@ pub fn info(s: &Shared) -> serde_json::Value {
         .ok()
         .and_then(|re| re.find(&format!("{} {}", stem.replace('-', " "), model.replace('-', " "))).map(|m| m.as_str().to_uppercase()))
         .unwrap_or_default();
+    let (cpu_name, cpu_load, proc_gib) = cpu_stats(s);
     let get = |p: &str| -> Value {
         if port == 0 { return Value::Null; }
         http::get(port, p, Some(&key), Duration::from_secs(2))
@@ -226,6 +227,22 @@ pub fn info(s: &Shared) -> serde_json::Value {
     json!({
         "model": model, "quant": quant, "file": stem,
         "context": flag("--max-context"), "kv": flag("--kv"),
+        "cpu": {"name": cpu_name, "load": cpu_load, "server_ram_gib": proc_gib},
         "status": get("/v1/status"), "live": get("/status"),
     })
+}
+
+fn cpu_stats(s: &Shared) -> (String, f32, Option<f64>) {
+    use std::sync::OnceLock;
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    static SYS: OnceLock<Mutex<System>> = OnceLock::new();
+    let pid = s.lock().unwrap().child.as_ref().map(|c| c.id());
+    let mut sys = SYS.get_or_init(|| Mutex::new(System::new())).lock().unwrap();
+    sys.refresh_cpu_usage();
+    if let Some(p) = pid {
+        sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(p)]), true);
+    }
+    let name = sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default();
+    let gib = pid.and_then(|p| sys.process(Pid::from_u32(p))).map(|p| p.memory() as f64 / 1073741824.0);
+    (name, sys.global_cpu_usage(), gib)
 }
