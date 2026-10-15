@@ -9,3 +9,24 @@ $dst = "$root\vendor\officecli.exe"
 Invoke-WebRequest $url -OutFile $dst
 if ((Get-FileHash $dst -Algorithm SHA256).Hash.ToLower() -ne $o.sha256) { Remove-Item $dst; throw 'officecli checksum mismatch' }
 Write-Host 'officecli ok'
+
+# Browser tool: portable Node, @playwright/cli and the headless Chromium shell (the smallest build).
+$nd = "$root\vendor\node"; New-Item -ItemType Directory -Force $nd | Out-Null
+if (-not (Test-Path "$nd\node.exe")) {
+  $v = $m.node.version; $zip = "$env:TEMP\node-$v.zip"
+  Invoke-WebRequest "https://nodejs.org/dist/v$v/node-v$v-win-x64.zip" -OutFile $zip -UseBasicParsing
+  Expand-Archive $zip "$env:TEMP\node-$v" -Force
+  Copy-Item "$env:TEMP\node-$v\node-v$v-win-x64\node.exe", "$env:TEMP\node-$v\node-v$v-win-x64\LICENSE" $nd
+}
+if ((Get-FileHash "$nd\node.exe" -Algorithm SHA256).Hash.ToLower() -ne $m.node.sha256) { throw 'node checksum mismatch' }
+$pw = "$root\vendor\playwright"; New-Item -ItemType Directory -Force $pw | Out-Null
+Set-Content "$pw\package.json" ('{"name":"pw-vendor","private":true,"dependencies":{"@playwright/cli":"' + $m.'playwright-cli'.version + '"}}')
+$env:PLAYWRIGHT_BROWSERS_PATH = "$root\vendor\browsers"
+$env:PATH = "$nd;$env:PATH"
+$npm = (Get-ChildItem "$env:TEMP\node-$($m.node.version)\node-v$($m.node.version)-win-x64" -Filter npm.cmd -ErrorAction SilentlyContinue | Select-Object -First 1)
+Push-Location $pw
+try {
+  & "$env:TEMP\node-$($m.node.version)\node-v$($m.node.version)-win-x64\npm.cmd" install --no-audit --no-fund
+  & "$nd\node.exe" "$pw\node_modules\playwright-core\cli.js" install chromium-headless-shell
+} finally { Pop-Location }
+Write-Host 'browser ok'

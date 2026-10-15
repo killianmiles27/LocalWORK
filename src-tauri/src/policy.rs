@@ -126,6 +126,9 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         .or_else(|| args.get("command").and_then(|v| v.as_str()))
         .unwrap_or("")
         .to_lowercase();
+    if t.contains("browser") {
+        return browser_decision(args);
+    }
     if t.contains("workspace_info") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
         return Decision::Allow;
     }
@@ -136,5 +139,28 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         Decision::Allow
     } else {
         Decision::Ask { class: Class::Write, reason: "Create or change an Office document".into(), can_remember: true }
+    }
+}
+
+/// Browser tool: looking is free; typing into sensitive fields, uploads and consequential clicks ask.
+fn browser_decision(args: &Value) -> Decision {
+    let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("").trim().to_lowercase();
+    let rest = match args.get("args") {
+        Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" "),
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    }
+    .to_lowercase();
+    let label = args.get("label").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+    let full = format!("{cmd} {rest} {label}");
+    let ask = |class, reason: &str| Decision::Ask { class, reason: reason.into(), can_remember: false };
+    let sensitive = Regex::new(r"(?i)(password|passwd|card|cvv|cvc|iban|ssn|security code|account number|routing)").unwrap();
+    let consequential = Regex::new(r"(?i)(submit|buy|purchase|pay|order|checkout|delete|remove|send|confirm|post|publish|sign ?in|log ?in|transfer)").unwrap();
+    match cmd.split_whitespace().next().unwrap_or("") {
+        "upload" => ask(Class::Write, "Upload a file from your computer to a website"),
+        "fill" | "type" if sensitive.is_match(&full) => ask(Class::Exec, "Enter a password or payment detail on a website"),
+        "click" | "dblclick" | "press" if consequential.is_match(&full) => ask(Class::Exec, "Click a button that submits or changes something online"),
+        "eval" => ask(Class::Exec, "Run a script inside a web page"),
+        _ => Decision::Allow,
     }
 }

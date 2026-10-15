@@ -141,12 +141,29 @@ fn data_dir() -> String {
     paths::data_dir().to_string_lossy().to_string()
 }
 
+/// Ask the Playwright CLI to close every browser it started (its daemons are detached from the agent's process tree).
+fn close_browsers() {
+    let v = paths::vendor_dir();
+    let cli = v.join("playwright").join("node_modules").join("@playwright").join("cli").join("playwright-cli.js");
+    let node = v.join("node").join("node.exe");
+    if !cli.exists() || !node.exists() {
+        return;
+    }
+    for sub in ["close-all", "kill-all"] {
+        let mut c = std::process::Command::new(&node);
+        c.arg(&cli).arg(sub).env("PLAYWRIGHT_BROWSERS_PATH", v.join("browsers"));
+        supervisor::hidden(&mut c);
+        let _ = c.output();
+    }
+}
+
 fn shutdown(state: &App) {
     let t0 = Instant::now();
     let ags: Vec<_> = state.agents.lock().unwrap().drain().map(|(_, a)| a).collect();
     for a in &ags {
         a.shutdown();
     }
+    close_browsers();
     strata::stop(None, &state.strata);
     let _ = std::fs::write(paths::data_dir().join("pids.json"), "[]");
     eprintln!("shutdown complete in {:?}", t0.elapsed());

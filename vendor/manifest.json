@@ -1,4 +1,26 @@
 {
-  "aionrs": {"version": "0.2.11", "source": "https://github.com/iOfficeAI/aionrs tag v0.2.11, built from source (cargo build --release -p aion-cli)", "sha256": "c1fe2b97104740a4c97f5e84303618a7f0f1f7006915a0cc650e2c8d897b11b4"},
-  "officecli": {"version": "1.0.157", "source": "https://github.com/iOfficeAI/OfficeCLI/releases/tag/v1.0.157", "sha256": "bd64eba587e56cc71709cdd1f38ae9ac77cd65a9c8ea744b0996897c0557e343", "verified": "SHA256SUMS"}
+  "aionrs": {
+    "version": "0.2.11",
+    "source": "https://github.com/iOfficeAI/aionrs tag v0.2.11, built from source (cargo build --release -p aion-cli)",
+    "sha256": "c1fe2b97104740a4c97f5e84303618a7f0f1f7006915a0cc650e2c8d897b11b4"
+  },
+  "officecli": {
+    "version": "1.0.157",
+    "source": "https://github.com/iOfficeAI/OfficeCLI/releases/tag/v1.0.157",
+    "sha256": "bd64eba587e56cc71709cdd1f38ae9ac77cd65a9c8ea744b0996897c0557e343",
+    "verified": "SHA256SUMS"
+  },
+  "node": {
+    "version": "24.22.0",
+    "source": "https://nodejs.org/dist/v24.22.0/node-v24.22.0-win-x64.zip (node.exe only)",
+    "sha256": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c"
+  },
+  "playwright-cli": {
+    "version": "0.1.22",
+    "source": "npm @playwright/cli 0.1.22 (installed into vendor\\playwright with the vendored node)"
+  },
+  "chromium": {
+    "version": "chromium_headless_shell-1247",
+    "source": "playwright-core install chromium-headless-shell into vendor\browsers (about 280 MB)"
+  }
 }
