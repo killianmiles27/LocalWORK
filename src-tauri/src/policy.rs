@@ -75,12 +75,12 @@ pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_e
                 Decision::Ask { class: Class::Write, reason: "Change a file in the workspace".into(), can_remember: true }
             }
         }
-        "exec" => exec_decision(args),
+        "exec" => exec_decision(args, workspace, auto_edit),
         _ => mcp_decision(tool, args, auto_edit, remembered_hit, outside),
     }
 }
 
-fn exec_decision(args: &Value) -> Decision {
+fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool) -> Decision {
     let cmd = args.get("command").or_else(|| args.get("cmd")).and_then(|v| v.as_str()).unwrap_or("");
     let destructive = Regex::new(
         r"(?i)(\brm\s+-[a-z]*[rf]|\bdel\b.*(/s|/q)|\brmdir\b|remove-item|\bformat\b\s+[a-z]:|\bshutdown\b|reg\s+delete|git\s+(push\s+.*--force|reset\s+--hard|clean\s+-[a-z]*f)|\bdiskpart\b|\bcipher\s+/w|\|\s*(sh|bash|iex)\b|invoke-expression|\bmkfs\b|\btaskkill\b)",
@@ -90,11 +90,24 @@ fn exec_decision(args: &Value) -> Decision {
         return Decision::Ask { class: Class::Destructive, reason: "This command can delete or overwrite data".into(), can_remember: false };
     }
     let readonly = Regex::new(
-        r"(?i)^\s*(dir|ls|type|cat|echo|where|whoami|hostname|git\s+(status|log|diff|branch)|python\s+--version|node\s+--version)\b[^|&;<>]*$",
+        r"(?i)^\s*(dir|ls|type|cat|echo|where|whoami|hostname|pwd|get-childitem|get-content|get-item|get-location|select-string|test-path|git\s+(status|log|diff|branch)|python\s+--version|node\s+--version)\b[^|&;<>]*$",
     )
     .unwrap();
     if readonly.is_match(cmd) {
         return Decision::Allow;
+    }
+    if auto_edit && !cmd.trim().is_empty() {
+        // "Edits allowed in folder": ordinary commands that stay inside the workspace, with no network,
+        // installs or process launching, run without asking.
+        let risky = Regex::new(
+            r"(?i)(\b(curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm|start-process|start|pip|npm|npx|winget|choco|scoop|sc|net|netsh|schtasks|powershell|pwsh|cmd)\b|https?://|\\\\)",
+        )
+        .unwrap();
+        let drive = Regex::new(r#"(?i)\b[a-z]:[\\/][^\s"']*"#).unwrap();
+        let escapes = drive.find_iter(cmd).any(|m| !inside(&norm(m.as_str()), workspace)) || cmd.contains("..\\") || cmd.contains("../");
+        if !risky.is_match(cmd) && !escapes {
+            return Decision::Allow;
+        }
     }
     Decision::Ask { class: Class::Exec, reason: "Run a command on your computer".into(), can_remember: false }
 }

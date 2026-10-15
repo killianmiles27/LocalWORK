@@ -30,6 +30,18 @@ fn model_status(s: State<App>) -> strata::Status {
 }
 
 #[tauri::command]
+fn model_info(s: State<App>) -> Value {
+    strata::info(&s.strata)
+}
+
+#[tauri::command]
+fn set_auto_edit(s: State<App>, id: String, on: bool) {
+    if let Some(a) = s.agents.lock().unwrap().get(&id) {
+        a.set_auto_edit(on);
+    }
+}
+
+#[tauri::command]
 fn model_start(app: AppHandle, s: State<App>) -> Result<(), String> {
     strata::start(&app, &s.strata)
 }
@@ -174,6 +186,8 @@ pub fn run() {
             create_conversation,
             delete_conversation,
             load_messages,
+            model_info,
+            set_auto_edit,
             agent_send,
             agent_stop,
             agent_answer,

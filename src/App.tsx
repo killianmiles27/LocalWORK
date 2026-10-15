@@ -4,7 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Plus, ShieldAlert, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Plus, Settings as Gear, ShieldAlert, Square, Trash2, Wrench, X } from "lucide-react";
+import Settings from "./Settings";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
 type Msg = { id: number; role: string; body: any; ts: number };
@@ -38,6 +39,10 @@ export default function App() {
   const [input, setInput] = useState("");
   const [autoEdit, setAutoEdit] = useState(false);
   const [err, setErr] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [atBottom, setAtBottom] = useState(true);
+  const stick = useRef(true);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const curRef = useRef<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -76,7 +81,30 @@ export default function App() {
     if (cur) reload(cur);
   }, [cur]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [msgs, live]);
+  // Follow new output only while the reader is at the bottom; scrolling up stops it.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [msgs, live, approvals]);
+  function onScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stick.current = near;
+    setAtBottom(near);
+  }
+  function jumpToLatest() {
+    const el = scrollRef.current;
+    if (!el) return;
+    stick.current = true;
+    setAtBottom(true);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }
+  function toggleEdits() {
+    const next = !autoEdit;
+    setAutoEdit(next);
+    if (cur) invoke("set_auto_edit", { id: cur, on: next }).catch(() => {});
+  }
 
   useEffect(() => {
     const t = taRef.current;
@@ -94,7 +122,7 @@ export default function App() {
   async function send(override?: string) {
     const body = (override ?? input).trim();
     if (!cur || !body || live.busy) return;
-    setInput(""); setErr("");
+    setInput(""); setErr(""); stick.current = true;
     setLive({ text: "", thinking: "", busy: true });
     try { await invoke("agent_send", { id: cur, text: body, autoEdit }); await reload(cur); refreshConvs(); }
     catch (e) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
@@ -147,6 +175,7 @@ export default function App() {
           {modelReady && <button className="hover:text-ink underline" onClick={() => invoke("model_stop")}>stop</button>}
           {(status.state === "stopped" || status.state === "error") &&
             <button className="text-accent underline" onClick={() => invoke("model_start").catch((e) => setErr(String(e)))}>start</button>}
+          <button title="Settings" className="hover:text-ink" onClick={() => setShowSettings(true)}><Gear size={15} /></button>
         </div>
       </aside>
 
@@ -154,8 +183,8 @@ export default function App() {
         {!cur ? (
           <div className="flex-1 grid place-items-center px-6">
             <div className="text-center max-w-md">
-              <div className="mx-auto mb-5 grid place-items-center w-12 h-12 rounded-2xl bg-accent text-white text-xl font-serif">L</div>
-              <h1 className="font-serif text-3xl mb-2">What are we working on?</h1>
+              <div className="mx-auto mb-5 grid place-items-center w-12 h-12 rounded-2xl bg-accent text-white text-xl">L</div>
+              <h1 className="text-3xl mb-2">What are we working on?</h1>
               <p className="text-muted mb-6">Pick a folder and I'll work on the files in it, on your own computer.</p>
               <button onClick={newConv} className="inline-flex items-center gap-2 rounded-xl bg-accent hover:bg-accent-dark text-white px-5 py-2.5 font-medium transition-colors">
                 <FolderOpen size={16} /> Choose a folder
@@ -170,11 +199,12 @@ export default function App() {
               <span className="truncate font-medium">{curConv ? baseName(curConv.workspace) : ""}</span>
               <span className="truncate text-muted text-xs">{curConv?.workspace}</span>
             </header>
-            <div className="flex-1 overflow-auto">
+            <div className="flex-1 relative min-h-0">
+            <div ref={scrollRef} onScroll={onScroll} className="absolute inset-0 overflow-auto">
               <div className="mx-auto max-w-3xl px-6 py-6 space-y-5">
                 {msgs.length === 0 && !live.busy && (
                   <div className="pt-16 text-center">
-                    <h2 className="font-serif text-2xl mb-5">How can I help with this folder?</h2>
+                    <h2 className="text-2xl mb-5">How can I help with this folder?</h2>
                     <div className="grid gap-2 max-w-md mx-auto">
                       {suggestions.map((s) => (
                         <button key={s} onClick={() => send(s)} disabled={!modelReady}
@@ -194,6 +224,13 @@ export default function App() {
                 <div ref={endRef} />
               </div>
             </div>
+            {!atBottom && (
+              <button onClick={jumpToLatest} title="Jump to latest"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 rounded-full border border-line bg-card shadow-md px-3 py-1.5 text-xs hover:border-accent">
+                <ArrowDown size={13} /> Jump to latest
+              </button>
+            )}
+            </div>
 
             <div className="shrink-0 px-6 pb-4">
               <div className="mx-auto max-w-3xl">
@@ -204,7 +241,7 @@ export default function App() {
                     placeholder={modelReady ? "Ask for something…" : "Model is still loading — you can type meanwhile"}
                     className="w-full resize-none bg-transparent px-4 pt-3 pb-1 outline-none placeholder:text-muted" />
                   <div className="flex items-center justify-between px-3 pb-2">
-                    <button onClick={() => setAutoEdit(!autoEdit)} title="Let me edit files inside this folder without asking each time"
+                    <button onClick={toggleEdits} title="Let me edit files inside this folder without asking each time"
                       className={"flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors " + (autoEdit ? "bg-accent/15 text-accent" : "text-muted hover:bg-panel")}>
                       {autoEdit ? <Check size={13} /> : <ShieldAlert size={13} />} {autoEdit ? "Edits allowed in folder" : "Ask before editing"}
                     </button>
@@ -222,6 +259,7 @@ export default function App() {
           </>
         )}
       </main>
+    {showSettings && <Settings status={status} onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
@@ -229,7 +267,7 @@ export default function App() {
 function Assistant({ children }: { children: string }) {
   return (
     <div className="flex gap-3">
-      <div className="shrink-0 grid place-items-center w-7 h-7 rounded-full bg-accent text-white text-xs font-serif mt-0.5">L</div>
+      <div className="shrink-0 grid place-items-center w-7 h-7 rounded-full bg-accent text-white text-xs mt-0.5">L</div>
       <div className="prose min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
     </div>
   );

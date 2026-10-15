@@ -2,28 +2,28 @@
 @plugin "@tailwindcss/typography";
 
 @theme {
-  --color-bg: #faf9f5;
-  --color-panel: #f0eee6;
-  --color-panel-2: #e8e5da;
+  --color-bg: #f7f8fa;
+  --color-panel: #eef0f4;
+  --color-panel-2: #e3e7ed;
   --color-card: #ffffff;
-  --color-line: #e3e0d4;
-  --color-ink: #1f1e1b;
-  --color-muted: #75726a;
-  --color-accent: #c96442;
-  --color-accent-dark: #b5573a;
+  --color-line: #dde1e8;
+  --color-ink: #1b1f27;
+  --color-muted: #6b7280;
+  --color-accent: #2563eb;
+  --color-accent-dark: #1d4ed8;
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-serif: "Georgia", "Cambria", serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #262624;
-    --color-panel: #1f1e1d;
-    --color-panel-2: #30302e;
-    --color-card: #30302e;
-    --color-line: #3d3d3a;
-    --color-ink: #f0eee6;
-    --color-muted: #a09d94;
+    --color-bg: #15181d;
+    --color-panel: #101318;
+    --color-panel-2: #222730;
+    --color-card: #1c2027;
+    --color-line: #2d333d;
+    --color-ink: #e8eaee;
+    --color-muted: #9aa1ad;
   }
 }
 

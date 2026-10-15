@@ -48,7 +48,7 @@ fn set(app: &AppHandle, s: &Shared, state: &str, detail: &str) {
     let _ = app.emit("model-status", st);
 }
 
-fn setting(key: &str, default: &str) -> String {
+pub fn setting(key: &str, default: &str) -> String {
     let p = paths::data_dir().join("settings.json");
     std::fs::read_to_string(p)
         .ok()
@@ -193,4 +193,39 @@ pub fn stop(app: Option<&AppHandle>, s: &Shared) {
     if let Some(a) = app {
         let _ = a.emit("model-status", st);
     }
+}
+
+/// Model + machine details for the Settings panel. The API key stays on this side; only data goes out.
+pub fn info(s: &Shared) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let (port, key, model) = {
+        let g = s.lock().unwrap();
+        (g.status.port, g.key.clone(), g.status.model.clone())
+    };
+    let cfg = setting("modelConfig", paths::DEFAULT_MODEL_CONFIG);
+    let cfgv: Value = std::fs::read_to_string(&cfg).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    let args: Vec<String> = cfgv
+        .get("args")
+        .and_then(|a| a.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let file = flag("--native").or_else(|| flag("--model")).unwrap_or_default();
+    let stem = file.rsplit(['\\', '/']).next().unwrap_or("").to_string();
+    let quant = regex::Regex::new(r"(?i)\b(i?q\d(?:_[a-z0-9]+)*|f16|bf16|fp8|int\d)\b")
+        .ok()
+        .and_then(|re| re.find(&format!("{} {}", stem.replace('-', " "), model.replace('-', " "))).map(|m| m.as_str().to_uppercase()))
+        .unwrap_or_default();
+    let get = |p: &str| -> Value {
+        if port == 0 { return Value::Null; }
+        http::get(port, p, Some(&key), Duration::from_secs(2))
+            .filter(|(c, _)| *c == 200)
+            .and_then(|(_, b)| serde_json::from_str::<Value>(&b).ok())
+            .unwrap_or(Value::Null)
+    };
+    json!({
+        "model": model, "quant": quant, "file": stem,
+        "context": flag("--max-context"), "kv": flag("--kv"),
+        "status": get("/v1/status"), "live": get("/status"),
+    })
 }

@@ -13,11 +13,7 @@ use tauri::{AppHandle, Emitter};
 
 pub type Db = Arc<Mutex<Connection>>;
 
-const SYSTEM_PROMPT: &str = "You are a careful local work assistant running on the user's own computer. \
-Work inside the user's workspace folder. Prefer small, verifiable steps and say plainly when you are unsure. \
-To create or edit Word, Excel or PowerPoint files use the officecli tool; check the result with its view or validate commands before you report it done. \
-When you summarize financial or tabular data, include every period and total that appears in the source. \
-Never claim a file was created or changed unless a tool result confirms it.";
+const SYSTEM_PROMPT: &str = include_str!("../system-prompt.md");
 
 #[derive(Default)]
 struct Inner {

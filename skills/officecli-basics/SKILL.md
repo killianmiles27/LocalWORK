@@ -1,7 +1,6 @@
 ---
 name: officecli-basics
-description: Create and check Word, Excel and PowerPoint files with the officecli tool
+description: Create, check and style Word, Excel and PowerPoint files with the officecli tool
 ---
-1. Use the `officecli` tool with an args list, e.g. ["--help"] or ["help","docx"].
-2. Build files in the workspace, then run `validate` and `view <file> issues` before reporting done.
-3. For one-page requirements, check the page count from a render, not from validation alone.
+The full recipe lives in the assistant's built-in instructions (`src-tauri/system-prompt.md`).
+Short version: create the file, write a JSON list of add/set commands, run `batch --input`, then `validate` and `view`.

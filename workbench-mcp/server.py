@@ -10,7 +10,7 @@ TOOLS = [
         "name": "officecli",
         "description": "Create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files with OfficeCLI. "
                        "Pass the CLI arguments as a list, e.g. [\"create\",\"report.docx\"], [\"view\",\"report.docx\"], "
-                       "[\"validate\",\"report.xlsx\"]. Use [\"help\"] to list commands. Paths are relative to the workspace.",
+                       "[\"validate\",\"report.xlsx\"]. Build documents fast with [\"batch\",\"file.docx\",\"--input\",\"build.json\"]. Paths are relative to the workspace. This is a tool, not a shell command.",
         "inputSchema": {"type": "object", "properties": {"args": {"type": "array", "items": {"type": "string"}}},
                         "required": ["args"]},
     },
