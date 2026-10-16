@@ -24,14 +24,15 @@ request to start implementing additional features. The current user's task sets 
 
 ## Branding (2026-10-16)
 
-Calm, flat, no gradients. Manrope (bundled via `@fontsource-variable/manrope`), compact 13px
-scale set in `src/index.css` `@theme`. Light bg `#f4f1ea` / accent `#3a47c4`; dark bg `#171717` /
-accent `#9fb0ff`. `src/Mountain.tsx` draws the dithered-glyph mountain (`src/assets/mountain.jpg`)
-behind everything: faint at rest, brighter under the cursor, soft ripple on click, still frame
-under reduced motion. The chats sidebar is collapsible (toggle in its header, or the icon in the
-top bar when closed), remembers the choice in localStorage and auto-collapses on narrow windows.
-No icon rail and no Chat/Work switch, on purpose. The context ring opens a details popover with
-a "Compact now" button; clicking it never compacts by itself.
+Calm, flat, no gradients. Manrope, compact 13px scale in `src/index.css` `@theme`. Glacier-teal accent:
+light `#0b7a75` on `#f3f1ea`, dark `#5ed0c0` on `#101518`. `src/Mountain.tsx` paints the dithered-glyph
+mountain (`src/assets/mountain.jpg`, castle anchored left) once per resize/theme change onto one canvas:
+integer-hash noise and per-cell jitter avoid banding, no animation loop, no click/cursor effects.
+Message text sits on `.frost` (3px blur, 14% tint, feathered mask); the sidebar and composer use similar
+light backing. `src/textWave.ts` adds a very slight wave to message text while the pointer moves (rAF only
+while moving, off under reduced motion). The chats sidebar collapses instantly and remembers its state;
+no rail, no Chat/Work switch. Cross-chat memory injection is disabled in `agent.rs` on purpose.
+Rebrand brief for Claude Design: `docs/BRAND_BRIEF.md`.
 
 ## Product intent and user preferences
 
