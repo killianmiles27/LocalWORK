@@ -108,7 +108,7 @@ export default function Mountain() {
         if (hv <= 0) continue;
         const nh = hv * .92 < .01 ? 0 : hv * .92; heat[i] = nh;
         if (nh > 0) { if (x < nx0) nx0 = x; if (x > nx1) nx1 = x; if (y < ny0) ny0 = y; if (y > ny1) ny1 = y; }
-        if (lum[i] <= thr(x, y)) continue;
+        if (lum[i] + hv * .3 <= thr(x, y)) continue;
         // overlay alpha chosen so base + overlay composite to the target brightness
         const target = Math.min(CAP, base + hv * .45);
         gx.globalAlpha = 1 - (1 - target) / (1 - Math.min(CAP, base));
@@ -131,17 +131,17 @@ export default function Mountain() {
     };
     im.src = mountainUrl;
 
-    const onMove = (e: MouseEvent) => { mouse = { x: e.clientX, y: e.clientY }; wake(); };
+    const onMove = (e: MouseEvent | PointerEvent) => { mouse = { x: e.clientX, y: e.clientY }; wake(); };
     const onLeave = () => { mouse = null; wake(); };
     const onClick = (e: MouseEvent) => { ripples.push({ x: e.clientX, y: e.clientY, t: performance.now() }); wake(); };
     const onVis = () => { if (document.hidden) { cancelAnimationFrame(raf); raf = 0; mouse = null; ripples.length = 0; heat.fill(0); bb = { x0: 1, y0: 1, x1: 0, y1: 0 }; gx.clearRect(0, 0, W, H); } };
-    addEventListener("mousemove", onMove, { passive: true }); document.addEventListener("mouseleave", onLeave);
+    addEventListener("pointermove", onMove, { passive: true }); addEventListener("dragover", onMove, { passive: true }); document.addEventListener("mouseleave", onLeave);
     addEventListener("click", onClick, { passive: true }); addEventListener("resize", rebuild);
     document.addEventListener("visibilitychange", onVis); addEventListener("blur", onLeave);
     dark.addEventListener("change", rebuild);
     return () => {
       cancelAnimationFrame(raf); clearTimeout(timer);
-      removeEventListener("mousemove", onMove); document.removeEventListener("mouseleave", onLeave);
+      removeEventListener("pointermove", onMove); removeEventListener("dragover", onMove); document.removeEventListener("mouseleave", onLeave);
       removeEventListener("click", onClick); removeEventListener("resize", rebuild);
       document.removeEventListener("visibilitychange", onVis); removeEventListener("blur", onLeave);
       dark.removeEventListener("change", rebuild);
