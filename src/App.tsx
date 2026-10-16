@@ -2,14 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Mic, Paperclip, Plus, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Mic, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import Wizard from "./Wizard";
 import { useVoice } from "./voice";
 import { richFor } from "./Rich";
+import type { RichActions } from "./Rich";
+import Workspace from "./Workspace";
+import type { VisualItem } from "./Workspace";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
 type Msg = { id: number; role: string; body: any; ts: number };
@@ -27,12 +31,6 @@ const dot: Record<string, [string, string]> = {
 const text = (v: unknown): string => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v, null, 1));
 const baseName = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 
-const suggestions = [
-  "List the files in this folder and summarize what they are",
-  "Write a one-page Word memo about our project status",
-  "Make a spreadsheet that tracks weekly expenses",
-];
-
 export default function App() {
   const [convs, setConvs] = useState<Conv[]>([]);
   const [cur, setCur] = useState<string | null>(null);
@@ -46,7 +44,15 @@ export default function App() {
   const [files, setFiles] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspaceRefresh, setWorkspaceRefresh] = useState(0);
+  const [workspaceRequest, setWorkspaceRequest] = useState<{ path?: string; visual?: string; nonce: number }>();
   const [wizard, setWizard] = useState(false);
+  const [showTps, setShowTps] = useState(true);
+  const [tps, setTps] = useState<number | null>(null);
+  const navigation = useRef(0);
+  const createdHere = useRef<string | null>(null);
+  const creating = useRef<Promise<string> | null>(null);
   const [projDir, setProjDir] = useState<string | undefined>();
   const [atBottom, setAtBottom] = useState(true);
   const stick = useRef(true);
@@ -70,6 +76,7 @@ export default function App() {
 
   useEffect(() => {
     refreshConvs();
+    invoke<string | null>("get_setting", { key: "show_tps" }).then(v => setShowTps(v !== "0")).catch(() => {});
     invoke<string | null>("get_setting", { key: "wizard_done" }).then((v) => { if (!v) setWizard(true); }).catch(() => {});
     invoke<string | null>("get_setting", { key: "projects_folder" }).then((v) => { if (v) setProjDir(v); }).catch(() => {});
     invoke<Status>("model_status").then(setStatus).catch(() => {});
@@ -85,6 +92,7 @@ export default function App() {
           case "tool_request": case "tool_running": case "tool_result": case "tool_cancelled":
             setLive((l) => ({ ...l, busy: true, text: "", thinking: "" })); reload(conv); break;
           case "stream_end": case "error": case "agent_exit":
+            setWorkspaceRefresh(n => n + 1);
             setLive({ text: "", thinking: "", busy: false }); reload(conv); refreshConvs(); break;
         }
       }),
@@ -93,11 +101,43 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (cur && createdHere.current === cur) { createdHere.current = null; return; }
+    setFiles([]);
+    setInput("");
     setLive({ text: "", thinking: "", busy: false });
     setMsgs([]);
     setErr("");
+    setWorkspaceRequest(undefined);
     if (cur) reload(cur);
   }, [cur]);
+
+  useEffect(() => {
+    if (!showTps || status.state !== "ready") { setTps(null); return; }
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    async function pull() {
+      try { const value = await invoke<number | null>("model_telemetry"); if (active) setTps(value); }
+      catch { if (active) setTps(null); }
+      if (active) timer = setTimeout(pull, 1500);
+    }
+    pull();
+    return () => { active = false; clearTimeout(timer); };
+  }, [showTps, status.state]);
+
+  // Keep links in chat out of the app's document. Rust also guards top-level navigation.
+  useEffect(() => {
+    const follow = (event: MouseEvent) => {
+      const link = (event.target as Element)?.closest?.("a[href]");
+      if (!link || event.defaultPrevented || (event.type === "auxclick" && event.button !== 1)) return;
+      const href = link.getAttribute("href") || "";
+      if (href.startsWith("#")) return;
+      event.preventDefault();
+      invoke("open_external", { url: href }).catch(e => setErr(String(e)));
+    };
+    document.addEventListener("click", follow, true);
+    document.addEventListener("auxclick", follow, true);
+    return () => { document.removeEventListener("click", follow, true); document.removeEventListener("auxclick", follow, true); };
+  }, []);
 
   // Follow new output only while the reader is at the bottom; scrolling up stops it.
   useEffect(() => {
@@ -132,10 +172,10 @@ export default function App() {
   }, [input, cur]);
 
   async function attachPaths(paths: string[]) {
-    const id = curRef.current;
-    if (!id || !paths.length) return;
-    try { const rel = await invoke<string[]>("attach_paths", { id, paths }); setFiles((f) => [...f, ...rel]); }
-    catch (e) { setErr(String(e)); }
+    if (!paths.length) return;
+    const epoch = navigation.current;
+    try { const id = await ensureConversation(); const rel = await invoke<string[]>("attach_paths", { id, paths }); if (epoch === navigation.current && id === curRef.current) setFiles((f) => [...f, ...rel]); }
+    catch (e) { if (epoch === navigation.current) setErr(String(e)); }
   }
   async function pickFiles() {
     const r = await open({ multiple: true, title: "Attach files" });
@@ -143,18 +183,21 @@ export default function App() {
   }
   async function onPaste(e: React.ClipboardEvent) {
     const list = Array.from(e.clipboardData.files);
-    if (!list.length || !cur) return;
+    if (!list.length) return;
     e.preventDefault();
+    const epoch = navigation.current;
+    let id: string;
+    try { id = await ensureConversation(); } catch (error) { if (epoch === navigation.current) setErr(String(error)); return; }
     for (const f of list) {
+      if (epoch !== navigation.current || curRef.current !== id) break;
       const name = f.name && f.name !== "image.png" ? f.name : `pasted-${Date.now()}.${(f.type.split("/")[1] || "png")}`;
       try {
         const data = Array.from(new Uint8Array(await f.arrayBuffer()));
-        const rel = await invoke<string>("attach_bytes", { id: cur, name, data });
-        setFiles((x) => [...x, rel]);
-      } catch (er) { setErr(String(er)); }
+        const rel = await invoke<string>("attach_bytes", { id, name, data });
+        if (epoch === navigation.current && curRef.current === id) setFiles((x) => [...x, rel]);
+      } catch (er) { if (epoch === navigation.current) setErr(String(er)); }
     }
   }
-  useEffect(() => { setFiles([]); }, [cur]);
   useEffect(() => {
     let off: (() => void) | undefined;
     getCurrentWebview().onDragDropEvent((ev) => {
@@ -166,25 +209,58 @@ export default function App() {
     return () => off?.();
   }, []);
 
-  async function newConv() {
-    const dir = await open({ directory: true, title: "Choose a workspace folder", defaultPath: projDir });
-    if (typeof dir !== "string") return;
-    try { const id = await invoke<string>("create_conversation", { workspace: dir }); await refreshConvs(); setCur(id); }
-    catch (e) { setErr(String(e)); }
+  async function ensureConversation(workspace?: string): Promise<string> {
+    if (!workspace && curRef.current) return curRef.current;
+    if (creating.current) return creating.current;
+    const epoch = navigation.current;
+    const request = (async () => {
+      const id = await invoke<string>("create_conversation", { workspace: workspace ?? null });
+      if (epoch !== navigation.current) throw Error("Chat changed before creation completed");
+      createdHere.current = id;
+      curRef.current = id;
+      setCur(id);
+      await refreshConvs();
+      return id;
+    })();
+    creating.current = request;
+    try { return await request; } finally { if (creating.current === request) creating.current = null; }
+  }
+  function selectConversation(id: string | null) {
+    navigation.current += 1; creating.current = null;
+    curRef.current = id; setCur(id);
+  }
+  function newConv() {
+    if (live.busy) return;
+    selectConversation(null); setMsgs([]); setFiles([]); setInput(""); setErr(""); setWorkspaceOpen(false);
+    setWorkspaceRequest(undefined);
+    taRef.current?.focus();
+  }
+  async function chooseFolder() {
+    try {
+      const dir = await open({ directory: true, title: "Start a chat in a folder", defaultPath: projDir });
+      if (typeof dir !== "string") return;
+      navigation.current += 1; creating.current = null;
+      setFiles([]); setMsgs([]); setWorkspaceRequest(undefined);
+      await ensureConversation(dir);
+    } catch (e) { setErr(String(e)); }
   }
   async function send(override?: string) {
     const typed = (override ?? input).trim();
-    if (!cur || (!typed && !files.length) || live.busy) return;
+    if ((!typed && !files.length) || live.busy || !modelReady) return;
     const body = files.length
       ? `${typed || "Please look at the attached file" + (files.length > 1 ? "s" : "") + "."}
 
 Attached (read with read_attachment): ${files.join(", ")}`
       : typed;
-    setFiles([]);
-    setInput(""); setErr(""); stick.current = true;
+    const epoch = navigation.current;
+    setErr(""); stick.current = true;
     setLive({ text: "", thinking: "", busy: true });
-    try { await invoke("agent_send", { id: cur, text: body, autoEdit }); await reload(cur); refreshConvs(); }
-    catch (e) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
+    try {
+      const id = await ensureConversation();
+      if (epoch !== navigation.current) return;
+      setFiles([]); setInput("");
+      await invoke("agent_send", { id, text: body, autoEdit }); await reload(id); refreshConvs();
+    } catch (e) { if (epoch === navigation.current) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); } }
   }
   function answer(a: Approval, allow: boolean, remember: boolean) {
     invoke("agent_answer", { id: a.conv, callId: a.call_id, allow, remember });
@@ -195,15 +271,47 @@ Attached (read with read_attachment): ${files.join(", ")}`
   const mine = approvals.filter((a) => a.conv === cur);
   const curConv = convs.find((c) => c.id === cur);
   const modelReady = status.state === "ready";
+  const visuals: VisualItem[] = msgs.filter(m => m.role === "tool" && m.body?.status !== "error" && m.body?.status !== "cancelled")
+    .flatMap(m => {
+      const request = m.body?.request;
+      if (!/(assemble_document|publish_artifact)$/.test(String(request?.name))) return [];
+      const args = request?.args?.arguments ?? request?.args;
+      return typeof args?.html === "string" ? [{ id: String(m.id), title: String(args.title ?? "Interactive visual"), html: args.html, designSystem: /assemble_document$/.test(String(request.name)) }] : [];
+    });
+  function draft(text: string) {
+    setInput(current => current.trim() ? `${current}\n\n${text}` : text);
+    taRef.current?.focus();
+  }
+  function openDocument(path: string) { setWorkspaceOpen(true); setWorkspaceRequest({ path, nonce: Date.now() }); }
+  function openVisual(id: string) { setWorkspaceOpen(true); setWorkspaceRequest({ visual: id, nonce: Date.now() }); }
+
+  // Only newly arrived show_document results open the panel. Reopening a chat must not replay its UI actions.
+  const lastPresented = useRef<{ conv: string | null; message: number }>({ conv: null, message: 0 });
+  useEffect(() => {
+    if (!msgs.length) return;
+    const newest = msgs[msgs.length - 1].id;
+    if (lastPresented.current.conv !== cur) { lastPresented.current = { conv: cur, message: newest }; return; }
+    const presented = msgs.filter(m => m.id > lastPresented.current.message && m.role === "tool" && m.body?.status !== "error" && m.body?.status !== "cancelled" && /show_document$/.test(String(m.body?.request?.name))).at(-1);
+    lastPresented.current.message = newest;
+    const args = presented?.body?.request?.args;
+    const path = (args?.arguments ?? args)?.path;
+    if (typeof path === "string") { openDocument(path); setWorkspaceRefresh(n => n + 1); }
+  }, [msgs, cur]);
 
   return (
-    <div className="flex h-full">
-      {dragging && cur && <div className="fixed inset-0 z-50 grid place-items-center bg-accent/10 border-2 border-dashed border-accent pointer-events-none text-accent font-medium">Drop files to attach them</div>}
-      <aside className="w-[260px] shrink-0 bg-panel border-r border-line flex flex-col">
+    <div className="flex h-full flex-col relative">
+      <div className="absolute right-0 top-0 z-40 flex h-10 items-center select-none">
+        <button title="Minimize" aria-label="Minimize" onClick={() => getCurrentWindow().minimize()} className="window-control"><Minus size={14} /></button>
+        <button title="Maximize or restore" aria-label="Maximize or restore" onClick={() => getCurrentWindow().toggleMaximize()} className="window-control"><Maximize2 size={12} /></button>
+        <button title="Close window" aria-label="Close window" onClick={() => getCurrentWindow().close()} className="window-control window-close"><X size={16} /></button>
+      </div>
+      <div className="flex flex-1 min-h-0">
+      {dragging && <div className="fixed inset-0 z-50 grid place-items-center bg-accent/10 border-2 border-dashed border-accent pointer-events-none text-accent font-medium">Drop files to attach them</div>}
+      <aside className={"w-[250px] shrink-0 bg-panel flex-col " + (workspaceOpen && cur ? "hidden xl:flex" : "flex")}>
         <div className="p-3">
-          <button onClick={newConv}
+          <button onClick={newConv} disabled={live.busy}
             className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-panel-2 transition-colors">
-            <span className="grid place-items-center w-6 h-6 rounded-full bg-accent text-white"><Plus size={14} /></span>
+            <SquarePen size={18} className="text-muted" />
             New chat
           </button>
         </div>
@@ -211,70 +319,44 @@ Attached (read with read_attachment): ${files.join(", ")}`
         <div className="flex-1 overflow-auto px-2 pb-2">
           {convs.length === 0 && <div className="px-3 py-2 text-sm text-muted">No chats yet</div>}
           {convs.map((c) => (
-            <div key={c.id} onClick={() => setCur(c.id)} title={c.workspace}
+            <div key={c.id} onClick={() => selectConversation(c.id)} title={c.workspace}
               className={"group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer text-sm " + (c.id === cur ? "bg-panel-2" : "hover:bg-panel-2/60")}>
               <MessageSquare size={14} className="shrink-0 text-muted" />
               <div className="min-w-0 flex-1">
                 <div className="truncate">{c.title}</div>
-                <div className="truncate text-xs text-muted">{baseName(c.workspace)}</div>
               </div>
               <button title="Delete" className="hidden group-hover:block text-muted hover:text-red-600"
                 onClick={async (e) => {
                   e.stopPropagation();
                   if (!window.confirm("Delete this chat?")) return;
                   await invoke("delete_conversation", { id: c.id });
-                  if (cur === c.id) setCur(null);
+                  if (cur === c.id) selectConversation(null);
                   refreshConvs();
                 }}><Trash2 size={14} /></button>
             </div>
           ))}
         </div>
-        <div className="border-t border-line px-4 py-3 flex items-center gap-2 text-xs text-muted" title={status.detail}>
-          <span className={"w-2 h-2 rounded-full " + dotCls} />
-          <span className="flex-1">{label}</span>
-          {modelReady && <button className="hover:text-ink underline" onClick={() => invoke("model_stop")}>stop</button>}
-          {(status.state === "stopped" || status.state === "error") &&
-            <button className="text-accent underline" onClick={() => invoke("model_start").catch((e) => setErr(String(e)))}>start</button>}
-          <button title="Settings" className="hover:text-ink" onClick={() => setShowSettings(true)}><Gear size={15} /></button>
+        <div className="px-3 py-3 flex items-center gap-3 text-sm" title={status.detail || label}>
+          <span className="grid place-items-center w-9 h-9 rounded-full bg-panel-2 shrink-0 relative">
+            <span className="font-medium">L</span><span className={"absolute bottom-0 right-0 w-2.5 h-2.5 border-2 border-panel rounded-full " + dotCls} />
+          </span>
+          <div className="min-w-0 flex-1"><div className="truncate" title={status.model}>{status.model || "Local model"}</div><div className="text-xs text-muted">{label.replace("Model ", "")}</div></div>
+          {(status.state === "stopped" || status.state === "error") && <button title="Start model" className="text-xs text-accent" onClick={() => invoke("model_start").catch(e => setErr(String(e)))}>Retry</button>}
+          <button title="Settings" className="p-1 text-muted hover:text-ink" onClick={() => setShowSettings(true)}><Gear size={17} /></button>
         </div>
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0">
-        {!cur ? (
-          <div className="flex-1 grid place-items-center px-6">
-            <div className="text-center max-w-md">
-              <div className="mx-auto mb-5 grid place-items-center w-12 h-12 rounded-2xl bg-accent text-white text-xl">L</div>
-              <h1 className="text-3xl mb-2">What are we working on?</h1>
-              <p className="text-muted mb-6">Pick a folder and I'll work on the files in it, on your own computer.</p>
-              <button onClick={newConv} className="inline-flex items-center gap-2 rounded-xl bg-accent hover:bg-accent-dark text-white px-5 py-2.5 font-medium transition-colors">
-                <FolderOpen size={16} /> Choose a folder
-              </button>
-              {convs.length > 0 && <p className="text-sm text-muted mt-5">or continue a chat from the list on the left</p>}
-            </div>
-          </div>
-        ) : (
-          <>
-            <header className="flex items-center gap-2 px-6 h-12 border-b border-line text-sm shrink-0">
-              <FolderOpen size={15} className="text-muted" />
-              <span className="truncate font-medium">{curConv ? baseName(curConv.workspace) : ""}</span>
-              <span className="truncate text-muted text-xs">{curConv?.workspace}</span>
-            </header>
-            <div className="flex-1 relative min-h-0">
-            <div ref={scrollRef} onScroll={onScroll} className="absolute inset-0 overflow-auto">
+        <header data-tauri-drag-region className={"flex items-center gap-2 pl-6 h-12 text-sm shrink-0 " + (workspaceOpen && cur ? "pr-4" : "pr-36")} >
+          <span className="truncate text-muted pointer-events-none">{curConv?.title}</span>
+          {cur && <button onClick={() => setWorkspaceOpen(!workspaceOpen)} aria-label="Files & visuals" title="Files" aria-expanded={workspaceOpen} className="ml-auto shrink-0 inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted hover:bg-panel"><PanelRight size={16} />Files</button>}
+        </header>
+        <div className={"flex flex-col flex-1 min-h-0 " + (!msgs.length && !live.busy ? "justify-center pb-[10vh]" : "")}>
+            <div className={"relative min-h-0 " + (msgs.length || live.busy ? "flex-1" : "h-20 shrink-0")}>
+            <div ref={scrollRef} onScroll={onScroll} className={"absolute inset-0 " + (msgs.length || live.busy ? "overflow-auto" : "overflow-hidden")}>
               <div className="mx-auto max-w-3xl px-6 py-6 space-y-5">
-                {msgs.length === 0 && !live.busy && (
-                  <div className="pt-16 text-center">
-                    <h2 className="text-2xl mb-5">How can I help with this folder?</h2>
-                    <div className="grid gap-2 max-w-md mx-auto">
-                      {suggestions.map((s) => (
-                        <button key={s} onClick={() => send(s)} disabled={!modelReady}
-                          className="text-left rounded-xl border border-line bg-card px-4 py-3 text-sm hover:border-accent disabled:opacity-50 transition-colors">{s}</button>
-                      ))}
-                    </div>
-                    {!modelReady && <p className="text-xs text-muted mt-3">Waiting for the model to finish loading…</p>}
-                  </div>
-                )}
-                {msgs.map((m) => <Row key={m.id} m={m} />)}
+                {msgs.length === 0 && !live.busy && <h1 className="text-2xl text-center tracking-tight">What should we work on?</h1>}
+                {msgs.map((m) => <Row key={m.id} m={m} actions={{ onDocument: openDocument, onVisual: () => openVisual(String(m.id)), onDraft: draft }} />)}
                 {live.thinking && <div className="text-xs text-muted italic whitespace-pre-wrap max-h-24 overflow-auto">{live.thinking}</div>}
                 {live.text && <Assistant>{live.text}</Assistant>}
                 {live.busy && !live.text && mine.length === 0 && (
@@ -308,21 +390,23 @@ Attached (read with read_attachment): ${files.join(", ")}`
                   )}
                   <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)} onPaste={onPaste} rows={1}
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
-                    placeholder={modelReady ? "Ask for something…" : "Model is still loading — you can type meanwhile"}
-                    className="w-full resize-none bg-transparent px-4 pt-3 pb-1 outline-none placeholder:text-muted" />
+                    placeholder="Ask for something…" aria-label="Message"
+                    className="w-full min-h-16 resize-none bg-transparent px-4 pt-4 pb-2 outline-none placeholder:text-muted" />
                   <div className="flex items-center justify-between px-3 pb-2">
-                    <button onClick={toggleEdits} title="Let me edit files inside this folder without asking each time"
-                      className={"flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors " + (autoEdit ? "bg-accent/15 text-accent" : "text-muted hover:bg-panel")}>
-                      {autoEdit ? <Check size={13} /> : <ShieldAlert size={13} />} {autoEdit ? "Edits allowed in folder" : "Ask before editing"}
+                    <div className="flex items-center gap-1 min-w-0">
+                    <button onClick={pickFiles} title="Attach files" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel"><Paperclip size={17} /></button>
+                    <button onClick={chooseFolder} disabled={live.busy} title="Start a chat in a folder" aria-label="Start a chat in a folder" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel disabled:opacity-30"><FolderOpen size={17} /></button>
+                    {curConv && <button onClick={() => invoke("open_workspace", { id: cur }) .catch(e => setErr(String(e)))} title={curConv.workspace} className="text-xs text-muted truncate max-w-36 hover:text-ink">{baseName(curConv.workspace) === curConv.id ? "Outputs" : baseName(curConv.workspace)}</button>}
+                    <button onClick={toggleEdits} title={autoEdit ? "Edits allowed in this folder" : "Ask before editing"} aria-label={autoEdit ? "Edits allowed in folder" : "Ask before editing"} aria-pressed={autoEdit} className={"p-2 rounded-lg hover:bg-panel " + (autoEdit ? "text-accent" : "text-muted")}>
+                      {autoEdit ? <Check size={15} /> : <ShieldAlert size={15} />}
                     </button>
-                    <div className="flex items-center gap-2">
-                    <button onClick={pickFiles} title="Attach files" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel">
-                      <Paperclip size={16} />
-                    </button>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                    {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}
                     {input.trim().length > 20 && !live.busy && (
                       <button onClick={tidy} disabled={tidying || !modelReady} title="Ask the model to turn this into a clear request"
                         className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted hover:bg-panel disabled:opacity-40">
-                        <Sparkles size={13} /> {tidying ? "Tidying…" : "Tidy up"}
+                        <Sparkles size={14} className={tidying ? "animate-pulse" : ""} />
                       </button>
                     )}
                     <button onPointerDown={(e) => { e.preventDefault(); voice.press(); }} onPointerUp={voice.release} onPointerLeave={voice.release}
@@ -344,11 +428,12 @@ Attached (read with read_attachment): ${files.join(", ")}`
                 </div>
               </div>
             </div>
-          </>
-        )}
+        </div>
       </main>
+    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
+      </div>
     {wizard && <Wizard onDone={() => setWizard(false)} />}
-    {showSettings && <Settings status={status} onClose={() => setShowSettings(false)} />}
+    {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
@@ -356,13 +441,12 @@ Attached (read with read_attachment): ${files.join(", ")}`
 function Assistant({ children }: { children: string }) {
   return (
     <div className="flex gap-3">
-      <div className="shrink-0 grid place-items-center w-7 h-7 rounded-full bg-accent text-white text-xs mt-0.5">L</div>
       <div className="prose min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
     </div>
   );
 }
 
-function Row({ m }: { m: Msg }) {
+function Row({ m, actions }: { m: Msg; actions?: RichActions }) {
   const b = m.body ?? {};
   if (m.role === "user")
     return (
@@ -378,7 +462,7 @@ function Row({ m }: { m: Msg }) {
     const nm = String(b.request?.name ?? b.name ?? "");
     const saved = /memory_save/.test(nm) && /Saved memory #(\d+): (.*)/.exec(String(b.output ?? ""));
     if (saved) return <MemoryChip id={Number(saved[1])} text={saved[2]} />;
-    const rich = !declined && b.status !== "error" ? richFor(nm, b.request?.args) : null;
+    const rich = !declined && b.status !== "error" ? richFor(nm, b.request?.args, actions) : null;
     if (rich) return <>{rich}</>;
     return (
       <details className="group ml-10 text-sm">

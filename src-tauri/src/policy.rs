@@ -135,6 +135,9 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
     if t.contains("ssh_exec") {
         return crate::sshpolicy::decide(args);
     }
+    if t.ends_with("assemble_document") || (t.ends_with("show_document") && !outside) {
+        return Decision::Allow;
+    }
     if t.contains("workspace_info") || t.contains("load_skill") || t.contains("read_attachment") || t.contains("show_chart") || t.contains("show_table") || t.contains("show_diagram") || t.contains("publish_artifact") || t.contains("update_plan") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
         return Decision::Allow;
     }

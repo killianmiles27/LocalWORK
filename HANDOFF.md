@@ -15,7 +15,22 @@ Rebuild and redeploy after a change:
 Read this first. It lists what already exists (do not re-add it), where it lives, how to build and test, and what is known to be broken or untested. Spec: `docs/implementation-spec.md`. Model/engine contract: `docs/MODEL-HANDOFF.md`. Design decisions: `docs/decisions.md`. Third-party notices: `NOTICE.md`.
 
 ## What it is
-A Windows desktop "AI coworker" app: Tauri 2 (Rust) shell + WebView2, React 19/Vite/Tailwind 4 UI. Everything runs offline on the user's PC. The model is served by **Strata** (separate folder, OpenAI-compatible server). The agent loop is the vendored **aionrs** (`--json-stream`), which talks to Strata and to our own **workbench MCP** (Python). The user picks a workspace folder per chat; the agent works on files in it.
+A Windows desktop "AI coworker" app: Tauri 2 (Rust) shell + WebView2, React 19/Vite/Tailwind 4 UI. Everything runs offline on the user's PC. The model is served by **Strata** (separate folder, OpenAI-compatible server). The agent loop is the vendored **aionrs** (`--json-stream`), which talks to Strata and to our own **workbench MCP** (Python). New chats automatically get an output folder under Documents/LocalWORK (or the configured projects location); the composer can also start a chat in a chosen existing folder.
+
+## October 16: document workspace and Open Intelligent UI
+
+See `docs/PROJECT_CONTEXT.md` for integration details and checks. Files & visuals
+opens beside chat with OfficeCLI HTML previews of docx/xlsx/pptx, Markdown/text
+previews, open/reveal, save-copy, revision selection and requests for changes.
+`show_document` presents a finished file. Supported direct edits and OfficeCLI
+mutations preserve prior workspace revisions; arbitrary shell writes are not
+covered. Exports never overwrite. These are approximate HTML previews, not a
+pixel-level Office renderer or in-app WYSIWYG editor.
+
+`assemble_document` integrates the MIT Open Intelligent UI theme, SVG/form styles,
+assembler pattern and response playbook from a pinned upstream commit, through the
+existing local agent and MCP. The cloud router and full upstream web/server stack
+are excluded. Follow-ups require user review. No production dependencies added.
 
 ## Layout
 | Path | What |

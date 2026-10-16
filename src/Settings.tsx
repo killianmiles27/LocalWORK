@@ -75,7 +75,7 @@ function SshHosts() {
   );
 }
 
-export default function Settings({ status, onClose }: { status: St; onClose: () => void }) {
+export default function Settings({ status, onClose, showTps, onShowTps }: { status: St; onClose: () => void; showTps: boolean; onShowTps: (on: boolean) => void }) {
   const [info, setInfo] = useState<Info | null>(null);
   const [dir, setDir] = useState("");
   const [mem, setMem] = useState<{ id: number; text: string }[]>([]);
@@ -119,9 +119,11 @@ export default function Settings({ status, onClose }: { status: St; onClose: () 
             <Row k="KV cache" v={info?.kv || "–"} />
             <Row k="Engine" v={st?.engine ? String(st.engine) : "–"} />
             <Row k="Status" v={status.state + (status.state === "ready" ? ` · up ${dur(st?.uptime_s)}` : "")} />
+            <button className="mt-2 rounded-lg border border-line px-3 py-1.5 text-sm hover:bg-panel" onClick={() => invoke(status.state === "stopped" || status.state === "error" ? "model_start" : "model_stop").catch(error => window.alert(String(error)))}>{status.state === "stopped" || status.state === "error" ? "Start model" : "Stop model"}</button>
           </section>
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Speed</h3>
+            <label className="flex items-center justify-between gap-4 py-2 text-sm">Show tokens per second in composer<input type="checkbox" checked={showTps} onChange={async e => { const on = e.target.checked; onShowTps(on); try { await invoke("set_setting", { key: "show_tps", value: on ? "1" : "0" }); } catch (error) { onShowTps(!on); window.alert(String(error)); } }} /></label>
             <Row k={generating ? "Generating now" : "Last reply"} v={tps != null ? `${num(tps)} tokens/s` : "–"} />
             <Row k="Prompt reading" v={pre != null ? `${num(pre, 0)} tokens/s` : "–"} />
             {generating && <Row k="Average this reply" v={`${num(live.tokens_per_s_mean)} tokens/s`} />}

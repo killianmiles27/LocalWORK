@@ -1,4 +1,6 @@
 mod agent;
+mod documents;
+mod desktop;
 mod http;
 mod paths;
 mod policy;
@@ -40,6 +42,14 @@ fn model_info(s: State<App>) -> Value {
 }
 
 #[tauri::command]
+async fn model_telemetry(s: State<'_, App>) -> Result<Option<f64>, String> {
+    let strata = s.strata.clone();
+    tauri::async_runtime::spawn_blocking(move || strata::telemetry(&strata))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn set_auto_edit(s: State<App>, id: String, on: bool) {
     if let Some(a) = s.agents.lock().unwrap().get(&id) {
         a.set_auto_edit(on);
@@ -66,13 +76,33 @@ fn list_conversations(s: State<App>) -> Vec<Value> {
 }
 
 #[tauri::command]
-fn create_conversation(s: State<App>, workspace: String) -> Result<String, String> {
-    if !std::path::Path::new(&workspace).is_dir() {
-        return Err("Workspace folder does not exist".into());
-    }
+fn open_workspace(s: State<App>, id: String) -> Result<(), String> {
+    let workspace = store::conv_info(&s.db.lock().unwrap(), &id)
+        .map(|(_, workspace, _)| workspace)
+        .ok_or_else(|| "Unknown chat".to_string())?;
+    desktop::reveal_folder(&workspace)
+}
+
+#[tauri::command]
+fn create_conversation(app: AppHandle, s: State<App>, workspace: Option<String>) -> Result<String, String> {
     let id = new_id();
+    let workspace = match workspace {
+        Some(path) => desktop::existing_workspace(&path)?,
+        None => default_workspace(&app, &s, &id)?,
+    };
     store::create_conv(&s.db.lock().unwrap(), &id, &workspace).map_err(|e| e.to_string())?;
     Ok(id)
+}
+
+fn default_workspace(app: &AppHandle, s: &State<App>, id: &str) -> Result<String, String> {
+    let parent = store::kv_get(&s.db.lock().unwrap(), "projects_folder")
+        .filter(|path| !path.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(|| app.path().document_dir().map(|p| p.join("LocalWORK")).map_err(|e| e.to_string()))?;
+    let folder = parent.join(id);
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create chat folder: {e}"))?;
+    Ok(folder.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -227,6 +257,20 @@ pub fn run() {
     let dir = paths::data_dir();
     // A second launch just focuses the first window (the plugin exits the second process).
     let builder = tauri::Builder::default()
+        .plugin(tauri::plugin::Builder::<tauri::Wry>::new("external-navigation")
+            .on_navigation(|_, url| {
+                if desktop::is_app_navigation(url) {
+                    true
+                } else if matches!(url.scheme(), "http" | "https") {
+                    if let Err(error) = desktop::open_external_url(url.as_str()) {
+                        eprintln!("could not open external link: {error}");
+                    }
+                    false
+                } else {
+                    true
+                }
+            })
+            .build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -264,6 +308,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            documents::documents_list, documents::document_preview, documents::document_open,
+            documents::document_revisions, documents::document_export,
+            documents::document_save_visual,
             setup::hardware_check, setup::set_strata_root, setup::set_web_access, setup::strata_update_check, setup::strata_update_apply,
             rollback::rollback_list,
             rollback::rollback_to,
@@ -271,10 +318,13 @@ pub fn run() {
             model_start,
             model_stop,
             list_conversations,
+            open_workspace,
             create_conversation,
             delete_conversation,
             load_messages,
             model_info,
+            model_telemetry,
+            desktop::open_external,
             set_auto_edit,
             agent_send,
             agent_stop,

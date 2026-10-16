@@ -1,7 +1,7 @@
 //! One aionrs process per conversation, spoken to over JSON Lines (--json-stream).
 //! The host owns the approval policy: aionrs runs in its default "ask for everything" mode and every
 //! tool_request is answered here, either automatically by policy or by the user through the UI.
-use crate::{paths, policy, store, strata, supervisor};
+use crate::{documents, paths, policy, store, strata, supervisor};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -41,6 +41,69 @@ fn write_line(inner: &mut Inner, v: &Value) {
     }
 }
 
+// Preserve a document before known file mutations, including approved MCP OfficeCLI edits.
+// Arbitrary shell scripts are outside this guarantee; never describe this as a filesystem sandbox.
+fn mutation_path<'a>(category: &str, tool: &str, args: &'a Value) -> Option<&'a str> {
+    let args = args.get("arguments").unwrap_or(args);
+    if category == "edit" {
+        return ["file_path", "path", "filePath", "output", "file"].iter()
+            .find_map(|key| args.get(*key).and_then(Value::as_str));
+    }
+    if tool.to_lowercase().ends_with("officecli") {
+        let argv = args.get("args")?.as_array()?;
+        let command = argv.first()?.as_str()?.to_ascii_lowercase();
+        if !matches!(command.as_str(), "view" | "get" | "query" | "list" | "validate" | "info" | "help" | "inspect" | "read" | "page_count") {
+            return argv.get(1)?.as_str();
+        }
+    }
+    None
+}
+
+fn preserve_document(workspace: &std::path::Path, category: &str, tool: &str, args: &Value, explicitly_approved: bool) -> Result<(), String> {
+    if let Some(path) = mutation_path(category, tool, args) {
+        // An explicit outside-workspace approval retains its original meaning. This workspace's
+        // history does not ingest files from other folders as a side effect of that approval.
+        if explicitly_approved {
+            if let (Ok(root), Ok(file)) = (workspace.canonicalize(), workspace.join(path).canonicalize()) {
+                if !file.starts_with(root) { return Ok(()); }
+            }
+        }
+        documents::snapshot(workspace, path).map_err(|e| format!("Could not preserve the previous document revision: {e}. The edit was not approved."))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::*;
+
+    #[test]
+    fn mutation_capture_covers_direct_edits_and_office_batches_only() {
+        let direct = json!({"file_path":"memo.md"});
+        assert_eq!(mutation_path("edit", "Write", &direct), Some("memo.md"));
+        let batch = json!({"arguments":{"args":["batch", "deck.pptx", "--input", ".build.json"]}});
+        assert_eq!(mutation_path("mcp", "workbench__officecli", &batch), Some("deck.pptx"));
+        assert!(mutation_path("mcp", "workbench__officecli", &json!({"args":["view","deck.pptx","html"]})).is_none());
+        assert!(mutation_path("exec", "ExecCommand", &json!({"command":"arbitrary script"})).is_none());
+    }
+
+    #[test]
+    fn explicit_external_edit_is_not_blocked_by_workspace_history() {
+        let temp = std::env::temp_dir().join(format!("lw-revision-approval-{:016x}", rand::random::<u64>()));
+        let workspace = temp.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let external = temp.join("outside.md");
+        std::fs::write(&external, "original").unwrap();
+        let args = json!({"file_path":external.to_str().unwrap()});
+        assert!(preserve_document(&workspace, "edit", "Write", &args, true).is_ok());
+        assert_eq!(std::fs::read_to_string(&external).unwrap(), "original");
+        // Both paths are freshly created descendants of the unique test directory.
+        std::fs::remove_file(external).unwrap();
+        std::fs::remove_dir(workspace).unwrap();
+        std::fs::remove_dir(temp).unwrap();
+    }
+}
+
 impl Agent {
     pub fn set_auto_edit(&self, v: bool) {
         *self.auto_edit.lock().unwrap() = v;
@@ -61,17 +124,22 @@ impl Agent {
     }
 
     pub fn answer(&self, call_id: &str, allow: bool, remember: bool) {
-        let mut g = self.inner.lock().unwrap();
-        let tool = g.pending.remove(call_id);
+        let tool = self.inner.lock().unwrap().pending.remove(call_id);
+        let Some(tool) = tool else { return };
         if allow {
+            let name = tool.get("tool").and_then(Value::as_str).unwrap_or("");
+            let category = tool.get("category").and_then(Value::as_str).unwrap_or("");
+            if let Err(reason) = preserve_document(&self.workspace, category, name, &tool["args"], true) {
+                write_line(&mut self.inner.lock().unwrap(), &json!({"type":"tool_deny", "call_id":call_id, "reason":reason}));
+                return;
+            }
+            let mut g = self.inner.lock().unwrap();
             if remember {
-                if let Some(t) = tool.as_ref().and_then(|t| t.get("tool")).and_then(|t| t.as_str()) {
-                    g.remembered.push(t.to_string());
-                }
+                g.remembered.push(name.to_string());
             }
             write_line(&mut g, &json!({"type": "tool_approve", "call_id": call_id, "scope": "once"}));
         } else {
-            write_line(&mut g, &json!({"type": "tool_deny", "call_id": call_id, "reason": "The user declined this action."}));
+            write_line(&mut self.inner.lock().unwrap(), &json!({"type": "tool_deny", "call_id": call_id, "reason": "The user declined this action."}));
         }
     }
 
@@ -300,6 +368,10 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 let remembered = agent.inner.lock().unwrap().remembered.clone();
                 match policy::decide(&name, &cat, &args, &agent.workspace, auto_edit, &remembered) {
                     policy::Decision::Allow => {
+                        if let Err(reason) = preserve_document(&agent.workspace, &cat, &name, &args, false) {
+                            write_line(&mut agent.inner.lock().unwrap(), &json!({"type":"tool_deny", "call_id":call_id, "reason":reason}));
+                            continue;
+                        }
                         let mut g = agent.inner.lock().unwrap();
                         write_line(&mut g, &json!({"type": "tool_approve", "call_id": call_id, "scope": "once"}));
                     }
@@ -308,7 +380,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                         write_line(&mut g, &json!({"type": "tool_deny", "call_id": call_id, "reason": why}));
                     }
                     policy::Decision::Ask { class, reason, can_remember } => {
-                        agent.inner.lock().unwrap().pending.insert(call_id.clone(), json!({"tool": name}));
+                        agent.inner.lock().unwrap().pending.insert(call_id.clone(), json!({"tool": name, "category": cat, "args": args}));
                         let _ = app.emit(
                             "approval-request",
                             json!({"conv": conv, "call_id": call_id, "tool": name, "class": class, "reason": reason,

@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
 import { Check, Circle, Loader2 } from "lucide-react";
+import SandboxedUi from "./SandboxedUi";
+
+export type RichActions = { onDocument?: (path: string) => void; onVisual?: () => void; onDraft?: (text: string) => void };
 
 const PALETTE = ["#2563eb", "#0d9488", "#d97706", "#7c3aed", "#db2777", "#16a34a", "#dc2626", "#0891b2"];
 const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : Number(v) || 0);
@@ -181,13 +184,13 @@ export function Diagram({ a }: { a: any }) {
   );
 }
 
-export function Artifact({ a }: { a: any }) {
+export function Artifact({ a, designSystem = false, actions }: { a: any; designSystem?: boolean; actions?: RichActions }) {
   const html = String(a.html ?? "");
-  // Opaque origin (no allow-same-origin) and a CSP that blocks all network access.
-  const doc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:">` + html;
   return (
     <Frame title={a.title}>
-      <iframe title={String(a.title ?? "artifact")} sandbox="allow-scripts" srcDoc={doc} className="w-full h-80 rounded-lg border border-line bg-white" />
+      {a.description && <p className="text-xs text-muted mb-2">{String(a.description)}</p>}
+      <SandboxedUi title={String(a.title ?? "Interactive visual")} html={html} designSystem={designSystem} onDraft={actions?.onDraft} />
+      {actions?.onVisual && <button onClick={actions.onVisual} className="mt-2 text-xs text-accent hover:underline">Open in workspace</button>}
     </Frame>
   );
 }
@@ -209,13 +212,15 @@ export function Plan({ a }: { a: any }) {
   );
 }
 
-export function richFor(name: string, args: any): React.ReactNode | null {
+export function richFor(name: string, args: any, actions?: RichActions): React.ReactNode | null {
   const a = args && typeof args === "object" ? (args.arguments ?? args) : null;
   if (!a) return null;
   if (/show_chart$/.test(name)) return <Chart a={a} />;
   if (/show_table$/.test(name)) return <Table a={a} />;
   if (/show_diagram$/.test(name)) return <Diagram a={a} />;
-  if (/publish_artifact$/.test(name)) return <Artifact a={a} />;
+  if (/assemble_document$/.test(name)) return <Artifact a={a} designSystem actions={actions} />;
+  if (/publish_artifact$/.test(name)) return <Artifact a={a} actions={actions} />;
+  if (/show_document$/.test(name)) return <Frame title={String(a.title ?? "Document ready")}><button onClick={() => actions?.onDocument?.(String(a.path))} className="text-sm text-accent hover:underline break-all">{String(a.path)} · Preview & revise</button></Frame>;
   if (/update_plan$/.test(name)) return <Plan a={a} />;
   return null;
 }

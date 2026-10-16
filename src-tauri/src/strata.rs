@@ -232,6 +232,45 @@ pub fn info(s: &Shared) -> serde_json::Value {
     })
 }
 
+/// Lightweight composer telemetry. Reads only the model HTTP endpoints and avoids sysinfo's
+/// process-tree refresh used by `info`, which is intentionally reserved for Settings.
+pub fn telemetry(s: &Shared) -> Option<f64> {
+    let (port, key, ready) = {
+        let g = s.lock().unwrap();
+        (g.status.port, g.key.clone(), g.status.state == "ready")
+    };
+    if !ready || port == 0 {
+        return None;
+    }
+    let current = http::get(port, "/status", Some(&key), Duration::from_millis(750))
+        .filter(|(status, _)| *status == 200)
+        .and_then(|(_, body)| serde_json::from_str::<serde_json::Value>(&body).ok());
+    if let Some(value) = current.as_ref().and_then(current_tokens_per_second) {
+        return Some(value);
+    }
+    let detailed = http::get(port, "/v1/status", Some(&key), Duration::from_millis(750))
+        .filter(|(status, _)| *status == 200)
+        .and_then(|(_, body)| serde_json::from_str::<serde_json::Value>(&body).ok())?;
+    current
+        .as_ref()
+        .and_then(last_tokens_per_second)
+        .or_else(|| last_tokens_per_second(&detailed))
+}
+
+fn current_tokens_per_second(value: &serde_json::Value) -> Option<f64> {
+    ["tokens_per_s", "tokens_per_s_current", "tokens_per_s_mean"]
+        .iter()
+        .find_map(|key| finite_positive(value.get(key).and_then(serde_json::Value::as_f64)))
+}
+
+fn last_tokens_per_second(value: &serde_json::Value) -> Option<f64> {
+    finite_positive(value.get("last_timings")?.get("predicted_per_second")?.as_f64())
+}
+
+fn finite_positive(value: Option<f64>) -> Option<f64> {
+    value.filter(|n| n.is_finite() && *n >= 0.0)
+}
+
 fn cpu_stats(s: &Shared) -> (String, f32, Option<f64>) {
     use std::sync::OnceLock;
     use sysinfo::{Pid, ProcessesToUpdate, System};
@@ -259,4 +298,19 @@ fn cpu_stats(s: &Shared) -> (String, f32, Option<f64>) {
         tree.iter().filter_map(|p| sys.process(*p)).map(|p| p.memory()).sum::<u64>() as f64 / 1073741824.0
     });
     (name, sys.global_cpu_usage(), gib)
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::{current_tokens_per_second, finite_positive, last_tokens_per_second};
+    use serde_json::json;
+
+    #[test]
+    fn telemetry_reads_live_and_last_rates_and_rejects_non_finite_values() {
+        assert_eq!(current_tokens_per_second(&json!({"tokens_per_s": 31.25})), Some(31.25));
+        assert_eq!(current_tokens_per_second(&json!({"tokens_per_s": null, "tokens_per_s_mean": 18})), Some(18.0));
+        assert_eq!(last_tokens_per_second(&json!({"last_timings":{"predicted_per_second":12}})), Some(12.0));
+        assert_eq!(current_tokens_per_second(&json!({"tokens_per_s":-1})), None);
+        assert_eq!(finite_positive(Some(f64::INFINITY)), None);
+    }
 }

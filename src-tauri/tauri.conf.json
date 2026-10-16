@@ -11,17 +11,37 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "LocalWORK", "width": 1280, "height": 820, "minWidth": 900, "minHeight": 600, "visible": true }
+      {
+        "label": "main",
+        "title": "LocalWORK",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "visible": true,
+        "decorations": false
+      }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": "frame-src 'self' about: blob: data:; object-src 'none'; base-uri 'self'",
+      "dangerousDisableAssetCspModification": [
+        "script-src",
+        "style-src"
+      ]
+    }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
     "publisher": "LocalWORK",
     "shortDescription": "Local work-style AI desktop app",
-    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "resources": {
       "../vendor/aionrs.exe": "vendor/aionrs.exe",
       "../vendor/officecli.exe": "vendor/officecli.exe",
@@ -35,7 +55,9 @@
       "../skills/": "skills/"
     },
     "windows": {
-      "webviewInstallMode": { "type": "embedBootstrapper" },
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
       "nsis": {
         "installMode": "currentUser",
         "startMenuFolder": "LocalWORK",
@@ -48,8 +70,12 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENERjRBRDgxOUE0Mjk4MjIKUldRaW1FS2FnYTMwelkzeWhwVmdwVEdsNXVrb054L3dSZjZ5UlJZdzBJeDUwNEJvRk5salZuelIK",
-      "endpoints": ["https://github.com/killianmiles27/LocalWORK/releases/latest/download/latest.json"],
-      "windows": { "installMode": "passive" }
+      "endpoints": [
+        "https://github.com/killianmiles27/LocalWORK/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

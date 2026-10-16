@@ -32,6 +32,8 @@ body { background: var(--color-bg); color: var(--color-ink); font-family: var(--
 * { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
+.workspace-panel { width: 48vw; min-width: 360px; max-width: 900px; }
+@media (max-width: 1000px) { .workspace-panel { width: 50vw; } }
 
 .prose { --tw-prose-body: var(--color-ink); --tw-prose-headings: var(--color-ink); --tw-prose-bold: var(--color-ink);
   --tw-prose-links: var(--color-accent); --tw-prose-code: var(--color-ink); --tw-prose-th-borders: var(--color-line);
@@ -41,3 +43,7 @@ button:disabled { cursor: default; }
 .prose :where(code):not(:where(pre *)) { background: var(--color-panel-2); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
 .prose :where(pre) { background: var(--color-panel); color: var(--color-ink); border: 1px solid var(--color-line); border-radius: 10px; }
 .prose :where(p, ul, ol) { margin-top: .6em; margin-bottom: .6em; }
+
+.window-control { width: 46px; height: 40px; display: grid; place-items: center; color: var(--color-muted); }
+.window-control:hover { background: var(--color-panel-2); color: var(--color-ink); }
+.window-close:hover { background: #c42b1c; color: white; }

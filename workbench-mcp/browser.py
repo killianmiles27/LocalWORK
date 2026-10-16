@@ -3,7 +3,7 @@
 One named browser session per conversation, one persistent profile per project (workspace folder).
 Origin rules: loopback, link-local and private ranges are refused (checked here for navigation, and as
 blocked origins inside the browser for every request, including page sub-requests)."""
-import hashlib, ipaddress, json, os, re, shlex, socket, subprocess, sys
+import hashlib, ipaddress, json, os, re, shlex, socket, subprocess, sys, tempfile
 from urllib.parse import urlparse
 
 CREATE_NO_WINDOW = 0x08000000
@@ -100,6 +100,40 @@ def _env():
     e = dict(os.environ)
     e["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS
     e["PLAYWRIGHT_MCP_BLOCKED_ORIGINS"] = ";".join(BLOCKED_ORIGINS)
+    if os.name == "nt":
+        # Playwright's bundled CLI starts the headless browser through
+        # child_process.spawn without windowsHide. Node inherits that option
+        # as false, which can briefly show a console window in a desktop app.
+        # Preload a tiny wrapper into the CLI process so all child processes
+        # created by Playwright hide their console windows.
+        shim = os.path.join(PROFILES, "windows-hide.cjs")
+        os.makedirs(PROFILES, exist_ok=True)
+        if not os.path.exists(shim):
+            fd, temporary_shim = tempfile.mkstemp(prefix="windows-hide-", suffix=".cjs", dir=PROFILES)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(
+                        'const cp = require("node:child_process");\n'
+                        'const spawn = cp.spawn;\n'
+                        'cp.spawn = function(command, args, options) {\n'
+                        '  if (!Array.isArray(args)) { options = args; args = []; }\n'
+                        '  const hidden = { ...(options || {}), windowsHide: true };\n'
+                        '  if (process.env.LOCALWORK_WINDOWS_HIDE_LOG) require("node:fs").appendFileSync(process.env.LOCALWORK_WINDOWS_HIDE_LOG, JSON.stringify({ command: String(command), windowsHide: hidden.windowsHide }) + "\\n");\n'
+                        '  return spawn.call(this, command, args, hidden);\n'
+                        '};\n'
+                    )
+                try:
+                    os.replace(temporary_shim, shim)
+                except OSError:
+                    if not os.path.exists(shim):
+                        raise
+            finally:
+                try:
+                    os.remove(temporary_shim)
+                except FileNotFoundError:
+                    pass
+        require_arg = "--require " + json.dumps(shim)
+        e["NODE_OPTIONS"] = " ".join(x for x in (e.get("NODE_OPTIONS", ""), require_arg) if x)
     return e
 
 

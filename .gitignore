@@ -8,3 +8,6 @@ vendor/*
 *.log
 workbench-mcp/libs/
 workbench-mcp/.cache/
+
+__pycache__/
+*.py[cod]

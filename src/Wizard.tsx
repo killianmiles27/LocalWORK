@@ -79,9 +79,9 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
         {step === 2 && (
           <>
             <h2 className="text-lg font-medium mb-1">Projects and web access</h2>
-            <p className="text-sm text-muted mb-3">Each chat works inside one folder. You choose it per chat; this is just where the picker starts.</p>
+            <p className="text-sm text-muted mb-3">New chats save their files in Documents/LocalWORK. You can choose another location here, or work in a specific folder from the chat.</p>
             <div className="flex items-center gap-2 text-sm">
-              <span className="flex-1 truncate rounded-lg border border-line px-2 py-1 text-muted">{proj || "No default (ask every time)"}</span>
+              <span className="flex-1 truncate rounded-lg border border-line px-2 py-1 text-muted">{proj || "Documents/LocalWORK"}</span>
               <button onClick={pickProjects} className="rounded-lg border border-line px-3 py-1 hover:border-accent">Choose…</button>
             </div>
             <label className="flex items-start gap-2 text-sm mt-4">

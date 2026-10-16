@@ -51,6 +51,10 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.reply(401, {"error": "unauthorized"})
         if self.path.startswith("/v1/models"):
             return self.reply(200, {"data": [{"id": cfg.get("model_name", "stub")}]})
+        if self.path == "/status":
+            return self.reply(200, {"tokens_per_s": 23.5})
+        if self.path == "/v1/status":
+            return self.reply(200, {"last_timings": {"predicted_per_second": 21.0}})
         return self.reply(200, {})
 
 

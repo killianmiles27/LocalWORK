@@ -21,6 +21,9 @@
 .PARAMETER Only         Run only these test ids, e.g. -Only T-L1,T-S3
 .PARAMETER RealStrata   Use the real Strata instead of the stub.
 .PARAMETER KeepInstalled  With -Installer: leave the app installed afterwards.
+.PARAMETER WorkRoot      Parent directory for isolated run data (defaults to TEMP).
+.PARAMETER KeepWork      Preserve reports, screenshots and synthetic fixtures after the run.
+# T-W1 selects the complete document/visual workspace group (T-W1 through T-W5, plus T-D1 through T-D6 desktop UX checks).
 #>
 [CmdletBinding()]
 param(
@@ -28,13 +31,17 @@ param(
   [string]$Installer,
   [int]$Iterations = 10,
   [string[]]$Only,
+  [string]$WorkRoot = $env:TEMP,
+  [switch]$KeepWork,
   [switch]$RealStrata,
   [switch]$KeepInstalled
 )
 $ErrorActionPreference = 'Stop'
 if ($Only) { $Only = @($Only | ForEach-Object { $_ -split ',' }) }   # -File passes "a,b" as one string
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$work = Join-Path $env:TEMP ("lw-e2e-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $WorkRoot | Out-Null
+$workBase = (Resolve-Path -LiteralPath $WorkRoot).Path
+$work = Join-Path $workBase ("lw-e2e-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force $work | Out-Null
 $results = New-Object System.Collections.ArrayList
 $consoleHits = New-Object System.Collections.ArrayList
@@ -204,6 +211,7 @@ function Repeat-Test($id, $name, [scriptblock]$body) {
   if (-not (Wanted $id)) { return }
   $fail = @(); $n = $Iterations
   for ($i = 1; $i -le $n; $i++) {
+    Write-Host ("Running {0} ({1}/{2})..." -f $id, $i, $n)
     New-Env
     try { $r = & $body $i; if ($r) { $fail += "run ${i}: $r" } } catch { $fail += "run ${i}: $($_.Exception.Message)" }
     Cleanup-All
@@ -270,7 +278,7 @@ function Count-Strata {
 }
 
 # The app is single-instance per identifier: a LocalWORK already running elsewhere (e.g. a dev build) would swallow every launch.
-$other = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'LocalWORK' -or $_.Name -eq 'localwork' } | Where-Object { $_.Path -ne $script:ExePath })
+$other = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'LocalWORK' -or $_.Name -eq 'localwork' })
 if ($other.Count) { throw ('Another LocalWORK is running (' + (($other | ForEach-Object { $_.Path }) -join ', ') + '). Close it first: the app is single-instance.') }
 Write-Host "App: $script:ExePath`nWork dir: $work`nStrata: $(if ($RealStrata) {'REAL'} else {'stub'})`n"
 Cleanup-All
@@ -462,6 +470,33 @@ if (Wanted 'T-U1') {
   Cleanup-All
 }
 
+# ---------------------------------------------------------------- document/visual workspace (real WebView, seeded data, no model inference)
+if (Wanted 'T-W1') {
+  New-Env
+  $workspaceDir = Join-Path $work 'workspace-fixtures'
+  $repoRoot = Split-Path -Parent (Split-Path -Parent $here)
+  $vendorRoot = Join-Path $repoRoot 'vendor'
+  $fixturePython = (Get-Command python).Source
+  & $fixturePython (Join-Path $here 'workspace-fixtures.py') $script:WbDir $workspaceDir (Join-Path $vendorRoot 'officecli.exe')
+  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare workspace fixtures' }
+  $app = Start-App
+  try {
+    if (-not (Wait-Ready $app)) { Record 'T-W1' 'Document/visual workspace' 'FAIL' 'App did not become ready' }
+    else {
+      & (Join-Path $vendorRoot 'node\node.exe') (Join-Path $here 'workspace-cdp.mjs') "http://127.0.0.1:$cdpPort" $work $workspaceDir
+      $workspaceReport = Join-Path $work 'workspace-results.json'
+      if (Test-Path -LiteralPath $workspaceReport) {
+        foreach ($r in (Get-Content -LiteralPath $workspaceReport -Raw | ConvertFrom-Json)) { Record $r.Id $r.Test $r.Status $r.Detail }
+      } else { Record 'T-W1' 'Document/visual workspace' 'FAIL' 'CDP driver did not produce its report' }
+    }
+  } finally {
+    $tree = Get-Tree $app.Id
+    [void]$app.CloseMainWindow()
+    [void](Wait-Gone $tree 10)
+    Cleanup-All
+  }
+}
+
 # ---------------------------------------------------------------- uninstall
 if ($Installer -and $didInstall -and -not $KeepInstalled -and (Wanted 'T-I2')) {
   $marker = Join-Path $env:LOCALAPPDATA 'Workbench\e2e-marker.txt'
@@ -482,7 +517,13 @@ if ($Installer -and $didInstall -and -not $KeepInstalled -and (Wanted 'T-I2')) {
 Write-Host "`n==== Summary ===="
 $results | Format-Table Id, Status, Test -AutoSize | Out-String | Write-Host
 $failed = @($results | Where-Object { $_.Status -eq 'FAIL' })
-Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+$results | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $work 'results.json') -Encoding utf8
+if ($KeepWork) { Write-Host "Test report: $(Join-Path $work 'results.json')" }
+else {
+  $resolvedWork = (Resolve-Path -LiteralPath $work).Path
+  if ((Split-Path -Parent $resolvedWork) -ne $workBase -or (Split-Path -Leaf $resolvedWork) -notmatch '^lw-e2e-[a-f0-9]{8}$') { throw "Refusing to remove an unexpected test directory: $resolvedWork" }
+  Remove-Item -LiteralPath $resolvedWork -Recurse -Force -ErrorAction SilentlyContinue
+}
 if ($failed.Count) { Write-Host "$($failed.Count) FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "All executed tests passed ($(@($results | Where-Object Status -eq 'SKIP').Count) skipped)" -ForegroundColor Green
 exit 0

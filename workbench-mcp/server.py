@@ -92,6 +92,21 @@ TOOLS = [
                         "required": ["nodes", "edges"]},
     },
     {
+        "name": "assemble_document",
+        "description": "Display an Open Intelligent UI interactive explanation, dashboard, comparison or working calculator. "
+                       "Pass title, description, and an HTML body fragment with inline CSS/JS. The host supplies the offline "
+                       "theme, SVG helpers and form styles. No network/CDN imports. sendPrompt(text) offers a follow-up "
+                       "for user review; it never sends automatically. Load the intelligent-ui skill first.",
+        "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "description": {"type": "string"},
+                        "html": {"type": "string", "maxLength": 200000}}, "required": ["title", "description", "html"]},
+    },
+    {
+        "name": "show_document",
+        "description": "Present a finished or revised workspace file in the document panel for preview, revisions, open and save-copy actions. "
+                       "Call after creating or editing a docx, xlsx, pptx, md, txt, csv, html or PDF. This does not create or validate the file.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "title": {"type": "string"}}, "required": ["path"]},
+    },
+    {
         "name": "publish_artifact",
         "description": "Show a small self-contained interactive page (calculator, mini app, visualization) in a sandboxed panel in the chat. Provide one complete HTML document with inline CSS/JS. It has no network access and cannot reach the user's files.",
         "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "html": {"type": "string"}}, "required": ["title", "html"]},
@@ -110,6 +125,19 @@ TOOLS = [
 
 
 def call_tool(name, args):
+    if name == "assemble_document":
+        html = args.get("html")
+        if not isinstance(html, str) or not html.strip() or len(html) > 200000:
+            raise ValueError("html must be a non-empty fragment of at most 200,000 characters")
+        return "Displayed with the bundled Open Intelligent UI design system. Controls run locally; follow-ups require user review."
+    if name == "show_document":
+        root = os.path.realpath(os.getcwd())
+        full = os.path.realpath(os.path.join(root, str(args.get("path", ""))))
+        if os.path.commonpath([root, full]) != root or not os.path.isfile(full):
+            raise ValueError("The document must exist inside the workspace")
+        if os.path.splitext(full)[1].lower() not in (".docx", ".xlsx", ".pptx", ".md", ".txt", ".csv", ".html", ".pdf", ".json"):
+            raise ValueError("Unsupported document type")
+        return "Presented in the document panel. This confirms the file exists, not that its contents or layout are correct."
     if name == "workspace_info":
         rows = []
         for root, dirs, files in os.walk(os.getcwd()):
