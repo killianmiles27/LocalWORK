@@ -405,7 +405,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
             <div className="shrink-0 px-6 pb-4">
               <div className="mx-auto max-w-3xl">
                 {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
-                <div className="rounded-2xl border border-line bg-card/80 backdrop-blur-md shadow-sm focus-within:border-accent transition-colors">
+                <div className="rounded-2xl border border-line bg-card/45 backdrop-blur-[3px] shadow-sm focus-within:border-accent transition-colors">
                   {files.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                       {files.map((f) => (
