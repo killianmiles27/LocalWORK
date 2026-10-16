@@ -11,7 +11,10 @@ const BAYER = (() => {
   for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) out[y * 8 + x] = (b4[(y & 3) * 4 + (x & 3)] * 4 + q[(y >> 2) * 2 + (x >> 2)]) / 64;
   return out;
 })();
+const tile = (x: number, y: number) => { const k = Math.sin(((x >> 3) * 127.1 + (y >> 3) * 311.7) * 43758.5453); return k - Math.floor(k); };
+const thr = (x: number, y: number) => (BAYER[(y & 7) * 8 + (x & 7)] + tile(x, y)) % 1;
 const glyph = (x: number, y: number) => { const k = Math.sin((x * 12.9898 + y * 78.233) * 43758.5453); return HEX[Math.floor((k - Math.floor(k)) * 16)]; };
+const CASTLE_X = .18; // castle centre as a fraction of the photo width; kept on the left at every window size
 const R = 85, RIPPLE_LIFE = 1.8, RIPPLE_BAND = 14, CAP = .34;
 
 export default function Mountain() {
@@ -23,15 +26,16 @@ export default function Mountain() {
     const css = () => getComputedStyle(document.documentElement);
     const dark = matchMedia("(prefers-color-scheme: dark)");
     const reduce = matchMedia("(prefers-reduced-motion: reduce)");
-    let W = 0, H = 0, cols = 0, rows = 0, lum = new Float32Array(0), heat = new Float32Array(0);
+    let dpr = 1, W = 0, H = 0, cols = 0, rows = 0, lum = new Float32Array(0), heat = new Float32Array(0);
     let img: ImageData | null = null, mouse: { x: number; y: number } | null = null, raf = 0, timer = 0, ink = "", base = .1, font = "";
     // bounding box (in cells) of cells that may still be glowing; empty when x0 > x1
     let bb = { x0: 1, y0: 1, x1: 0, y1: 0 };
     const ripples: { x: number; y: number; t: number }[] = [];
 
     function build() {
+      dpr = Math.min(2, devicePixelRatio || 1);
       W = innerWidth; H = innerHeight;
-      for (const c of [bc, gc]) { c.width = W; c.height = H; }
+      for (const g of [bx, gx]) { g.canvas.width = Math.round(W * dpr); g.canvas.height = Math.round(H * dpr); g.setTransform(dpr, 0, 0, dpr, 0, 0); }
       cols = Math.ceil(W / CW); rows = Math.ceil(H / CH);
       lum = new Float32Array(cols * rows); heat = new Float32Array(cols * rows);
       bb = { x0: 1, y0: 1, x1: 0, y1: 0 };
@@ -40,7 +44,7 @@ export default function Mountain() {
       base = parseFloat(st.getPropertyValue("--mountain-base")) || .1;
       font = "8px " + (st.getPropertyValue("--font-sans").trim() || "sans-serif");
       if (!img) return;
-      const iw = img.width, ih = img.height, sc = Math.max(W / iw, H / ih), ox = (iw * sc - W) / 2, oy = (ih * sc - H) / 2, dk = dark.matches;
+      const iw = img.width, ih = img.height, sc = Math.max(W / iw, H / ih), ox = Math.max(0, Math.min(iw * sc - W, CASTLE_X * iw * sc - Math.max(.18 * W, 320))), oy = (ih * sc - H) / 2, dk = dark.matches;
       for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
         const px = Math.min(iw - 1, Math.floor(((x + .5) * CW + ox) / sc)), py = Math.min(ih - 1, Math.floor(((y + .5) * CH + oy) / sc));
         let l = img.data[(py * iw + px) * 4] / 255; l = dk ? l : 1 - l; lum[y * cols + x] = Math.pow(l, 1.15);
@@ -58,7 +62,7 @@ export default function Mountain() {
     function paintBase() {
       bx.clearRect(0, 0, W, H); bx.font = font; bx.textBaseline = "top"; bx.fillStyle = ink; bx.globalAlpha = Math.min(CAP, base);
       for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
-        if (lum[y * cols + x] <= BAYER[(y & 7) * 8 + (x & 7)]) continue;
+        if (lum[y * cols + x] <= thr(x, y)) continue;
         bx.fillText(glyph(x, y), x * CW, y * CH);
       }
       bx.globalAlpha = 1;
@@ -104,7 +108,7 @@ export default function Mountain() {
         if (hv <= 0) continue;
         const nh = hv * .92 < .01 ? 0 : hv * .92; heat[i] = nh;
         if (nh > 0) { if (x < nx0) nx0 = x; if (x > nx1) nx1 = x; if (y < ny0) ny0 = y; if (y > ny1) ny1 = y; }
-        if (lum[i] <= BAYER[(y & 7) * 8 + (x & 7)]) continue;
+        if (lum[i] <= thr(x, y)) continue;
         // overlay alpha chosen so base + overlay composite to the target brightness
         const target = Math.min(CAP, base + hv * .45);
         gx.globalAlpha = 1 - (1 - target) / (1 - Math.min(CAP, base));

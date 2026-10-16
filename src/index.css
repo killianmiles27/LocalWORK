@@ -76,3 +76,6 @@ button:disabled { cursor: default; }
   .chat-row { animation: none; opacity: 1; }
   .sidebar { transition: none; }
 }
+
+/* Calm backing behind the conversation so text never fights the mountain texture. */
+.reading { background: color-mix(in oklab, var(--color-bg) 90%, transparent); border-radius: 18px; }
