@@ -148,6 +148,7 @@ export default function Settings({ status, onClose }: { status: St; onClose: () 
               ))}
             </ul>
           </section>
+          <StrataUpdate />
           <SshHosts />
           <Rollback />
           <section>
@@ -180,6 +181,51 @@ function Rollback() {
         </div>
       ))}
       {err && <div className="text-xs text-red-600">{err}</div>}
+    </section>
+  );
+}
+
+type Chk = { git: boolean; message?: string; head?: string; behind?: number; changes?: string[] };
+type Applied = { ok: boolean; before: string; after: string; restart: string | null; log_tail: string };
+
+function StrataUpdate() {
+  const [chk, setChk] = useState<Chk | null>(null);
+  const [res, setRes] = useState<Applied | null>(null);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  async function check() {
+    setBusy("Checking…"); setErr(""); setRes(null);
+    try { setChk(await invoke<Chk>("strata_update_check")); } catch (e) { setErr(String(e)); }
+    setBusy("");
+  }
+  async function apply() {
+    if (!confirm("Update Strata now? The model stops, updates, and restarts. Open chats are interrupted.")) return;
+    setBusy("Updating… this can take a few minutes"); setErr("");
+    try { setRes(await invoke<Applied>("strata_update_apply")); setChk(null); } catch (e) { setErr(String(e)); }
+    setBusy("");
+  }
+  return (
+    <section>
+      <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Model engine</h3>
+      <div className="text-sm text-muted mb-1">Strata runs the model. Checking looks only; nothing changes until you confirm.</div>
+      <button disabled={!!busy} onClick={check} className="rounded-lg border border-line px-3 py-1 text-sm hover:border-accent disabled:opacity-40">Check for Strata update</button>
+      {busy && <span className="ml-2 text-xs text-muted">{busy}</span>}
+      {chk && !chk.git && <div className="text-sm mt-2">{chk.message}</div>}
+      {chk?.git && chk.behind === 0 && <div className="text-sm mt-2">Strata is up to date ({chk.head}).</div>}
+      {chk?.git && !!chk.behind && (
+        <div className="mt-2 text-sm">
+          {chk.behind} new change{chk.behind > 1 ? "s" : ""} available:
+          <ul className="list-disc ml-5 text-xs text-muted my-1">{chk.changes?.map((c, i) => <li key={i}>{c}</li>)}</ul>
+          <button onClick={apply} className="rounded-lg bg-accent text-white px-3 py-1 text-sm">Update and restart the model</button>
+        </div>
+      )}
+      {res && (
+        <div className="mt-2 text-sm">
+          {res.ok ? `Updated (${res.before} to ${res.after}). The model is restarting; if it does not reach "ready", tell your coding agent.` : "The update did not finish cleanly."}
+          {!res.ok && <pre className="text-xs text-muted whitespace-pre-wrap mt-1">{[res.restart, res.log_tail].filter(Boolean).join(String.fromCharCode(10))}</pre>}
+        </div>
+      )}
+      {err && <div className="text-xs text-red-600 mt-1 break-all">{err}</div>}
     </section>
   );
 }

@@ -3,6 +3,7 @@ mod http;
 mod paths;
 mod policy;
 mod rollback;
+mod setup;
 mod ssh;
 mod sshpolicy;
 mod store;
@@ -252,6 +253,7 @@ pub fn run() {
         agents: Arc::new(Mutex::new(HashMap::new())),
     };
 
+    setup::init(&state.db);
     builder
         .manage(state)
         .setup(|app| {
@@ -262,6 +264,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            setup::hardware_check, setup::set_strata_root, setup::set_web_access, setup::strata_update_check, setup::strata_update_apply,
             rollback::rollback_list,
             rollback::rollback_to,
             model_status,

@@ -126,6 +126,9 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         .or_else(|| args.get("command").and_then(|v| v.as_str()))
         .unwrap_or("")
         .to_lowercase();
+    if crate::setup::WEB_OFF.load(std::sync::atomic::Ordering::SeqCst) && (t.contains("browser") || t.contains("web_search") || t.contains("web_fetch")) {
+        return Decision::Deny("Web access is turned off in Settings".into());
+    }
     if t.contains("browser") {
         return browser_decision(args);
     }

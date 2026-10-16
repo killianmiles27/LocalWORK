@@ -7,6 +7,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Mic, Paperclip, Plus, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
+import Wizard from "./Wizard";
 import { useVoice } from "./voice";
 import { richFor } from "./Rich";
 
@@ -45,6 +46,8 @@ export default function App() {
   const [files, setFiles] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [wizard, setWizard] = useState(false);
+  const [projDir, setProjDir] = useState<string | undefined>();
   const [atBottom, setAtBottom] = useState(true);
   const stick = useRef(true);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -67,6 +70,8 @@ export default function App() {
 
   useEffect(() => {
     refreshConvs();
+    invoke<string | null>("get_setting", { key: "wizard_done" }).then((v) => { if (!v) setWizard(true); }).catch(() => {});
+    invoke<string | null>("get_setting", { key: "projects_folder" }).then((v) => { if (v) setProjDir(v); }).catch(() => {});
     invoke<Status>("model_status").then(setStatus).catch(() => {});
     const subs = [
       listen<Status>("model-status", (e) => setStatus(e.payload)),
@@ -162,7 +167,7 @@ export default function App() {
   }, []);
 
   async function newConv() {
-    const dir = await open({ directory: true, title: "Choose a workspace folder" });
+    const dir = await open({ directory: true, title: "Choose a workspace folder", defaultPath: projDir });
     if (typeof dir !== "string") return;
     try { const id = await invoke<string>("create_conversation", { workspace: dir }); await refreshConvs(); setCur(id); }
     catch (e) { setErr(String(e)); }
@@ -342,6 +347,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
           </>
         )}
       </main>
+    {wizard && <Wizard onDone={() => setWizard(false)} />}
     {showSettings && <Settings status={status} onClose={() => setShowSettings(false)} />}
     </div>
   );
