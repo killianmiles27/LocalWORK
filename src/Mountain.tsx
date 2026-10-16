@@ -12,7 +12,7 @@ const BAYER = (() => {
   return out;
 })();
 const tile = (x: number, y: number) => { const k = Math.sin(((x >> 3) * 127.1 + (y >> 3) * 311.7) * 43758.5453); return k - Math.floor(k); };
-const thr = (x: number, y: number) => (BAYER[(y & 7) * 8 + (x & 7)] + tile(x, y)) % 1;
+const thr = (x: number, y: number) => { let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const glyph = (x: number, y: number) => { const k = Math.sin((x * 12.9898 + y * 78.233) * 43758.5453); return HEX[Math.floor((k - Math.floor(k)) * 16)]; };
 const CASTLE_X = .18; // castle centre as a fraction of the photo width; kept on the left at every window size
 const R = 85, RIPPLE_LIFE = 1.8, RIPPLE_BAND = 14, CAP = .34;

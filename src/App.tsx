@@ -380,7 +380,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
         <div className={"flex flex-col flex-1 min-h-0 " + (!msgs.length && !live.busy ? "justify-center pb-[10vh]" : "")}>
             <div className={"relative min-h-0 " + (msgs.length || live.busy ? "flex-1" : "h-20 shrink-0")}>
             <div ref={scrollRef} onScroll={onScroll} className={"absolute inset-0 " + (msgs.length || live.busy ? "overflow-auto" : "overflow-hidden")}>
-              <div className={"mx-auto max-w-3xl px-6 py-6 space-y-5 " + (msgs.length || live.busy ? "reading" : "")}>
+              <div className={"mx-auto max-w-3xl px-6 py-6 space-y-5"}>
                 {msgs.length === 0 && !live.busy && <h1 className="text-2xl text-center tracking-tight">What should we work on?</h1>}
                 {group(msgs).map((g) => g.kind === "tools"
                   ? <ToolGroup key={g.items[0].id} items={g.items} />
