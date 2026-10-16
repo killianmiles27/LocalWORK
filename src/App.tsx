@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Mic, Paperclip, Plus, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import { useVoice } from "./voice";
+import { richFor } from "./Rich";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
 type Msg = { id: number; role: string; body: any; ts: number };
@@ -371,6 +372,8 @@ function Row({ m }: { m: Msg }) {
     const nm = String(b.request?.name ?? b.name ?? "");
     const saved = /memory_save/.test(nm) && /Saved memory #(\d+): (.*)/.exec(String(b.output ?? ""));
     if (saved) return <MemoryChip id={Number(saved[1])} text={saved[2]} />;
+    const rich = !declined && b.status !== "error" ? richFor(nm, b.request?.args) : null;
+    if (rich) return <>{rich}</>;
     return (
       <details className="group ml-10 text-sm">
         <summary className="inline-flex items-center gap-2 cursor-pointer list-none rounded-lg border border-line bg-card px-3 py-1.5 text-muted hover:text-ink">

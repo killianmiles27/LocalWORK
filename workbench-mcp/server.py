@@ -72,6 +72,36 @@ TOOLS = [
                         "required": ["host", "command"]},
     },
     {
+        "name": "show_chart",
+        "description": "Show a chart inline in the chat. type: bar | line | pie. labels: category names; series: [{name, values:[numbers]}] (pie uses the first series). Use for numeric comparisons and trends instead of describing numbers.",
+        "inputSchema": {"type": "object", "properties": {"type": {"type": "string", "enum": ["bar", "line", "pie"]}, "title": {"type": "string"}, "labels": {"type": "array", "items": {"type": "string"}},
+                        "series": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "values": {"type": "array", "items": {"type": "number"}}}, "required": ["values"]}}},
+                        "required": ["type", "labels", "series"]},
+    },
+    {
+        "name": "show_table",
+        "description": "Show a table inline in the chat: columns (names) and rows (arrays of cell values).",
+        "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "columns": {"type": "array", "items": {"type": "string"}}, "rows": {"type": "array", "items": {"type": "array"}}}, "required": ["columns", "rows"]},
+    },
+    {
+        "name": "show_diagram",
+        "description": "Show a flow/architecture diagram inline: nodes [{id,label}] and edges [{from,to,label?}]. direction: LR or TD.",
+        "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "direction": {"type": "string", "enum": ["LR", "TD"]},
+                        "nodes": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "label": {"type": "string"}}, "required": ["id"]}},
+                        "edges": {"type": "array", "items": {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "label": {"type": "string"}}, "required": ["from", "to"]}}},
+                        "required": ["nodes", "edges"]},
+    },
+    {
+        "name": "publish_artifact",
+        "description": "Show a small self-contained interactive page (calculator, mini app, visualization) in a sandboxed panel in the chat. Provide one complete HTML document with inline CSS/JS. It has no network access and cannot reach the user's files.",
+        "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "html": {"type": "string"}}, "required": ["title", "html"]},
+    },
+    {
+        "name": "update_plan",
+        "description": "For multi-step work: publish or update your plan. steps: [{text, status: todo|doing|done}]. Call again as steps change.",
+        "inputSchema": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {"text": {"type": "string"}, "status": {"type": "string", "enum": ["todo", "doing", "done"]}}, "required": ["text"]}}}, "required": ["steps"]},
+    },
+    {
         "name": "workspace_info",
         "description": "List files in the workspace folder (names, sizes).",
         "inputSchema": {"type": "object", "properties": {}},
@@ -96,6 +126,14 @@ def call_tool(name, args):
     if name == "read_attachment":
         import attachments
         return attachments.read_attachment(args["path"], args.get("start", 0), args.get("max_chars", 12000))
+    if name in ("show_chart", "show_table", "show_diagram", "publish_artifact", "update_plan"):
+        if name == "show_chart" and not args.get("series"):
+            return "Error: series is required"
+        if name == "show_table" and not args.get("columns"):
+            return "Error: columns is required"
+        if name == "publish_artifact" and "<" not in str(args.get("html", "")):
+            return "Error: html must be a complete HTML document"
+        return "Shown to the user."
     if name == "ssh_exec":
         import ssh
         return ssh.ssh_exec(args["host"], args["command"], args.get("timeout", 60))

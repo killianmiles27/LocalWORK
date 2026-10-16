@@ -149,6 +149,7 @@ export default function Settings({ status, onClose }: { status: St; onClose: () 
             </ul>
           </section>
           <SshHosts />
+          <Rollback />
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">App</h3>
             <Row k="Data folder" v={dir || "–"} />
@@ -157,5 +158,28 @@ export default function Settings({ status, onClose }: { status: St; onClose: () 
         </div>
       </div>
     </div>
+  );
+}
+
+function Rollback() {
+  const [vs, setVs] = useState<{ version: string; current: boolean }[]>([]);
+  const [err, setErr] = useState("");
+  useEffect(() => { invoke<{ version: string; current: boolean }[]>("rollback_list").then(setVs).catch(() => {}); }, []);
+  return (
+    <section>
+      <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Versions</h3>
+      <div className="text-sm text-muted mb-1">Each version is saved when it first runs, and your chats are backed up before an update. Roll back if an update misbehaves.</div>
+      {vs.map((v) => (
+        <div key={v.version} className="flex items-center gap-2 py-1 text-sm">
+          <span className="flex-1">{v.version}{v.current ? " (running)" : ""}</span>
+          {!v.current && (
+            <button className="rounded-lg border border-line px-2 py-1 hover:border-accent" onClick={() => { if (confirm(`Roll back to version ${v.version}? The app will restart.`)) invoke("rollback_to", { version: v.version }).catch((e) => setErr(String(e))); }}>
+              Roll back to version
+            </button>
+          )}
+        </div>
+      ))}
+      {err && <div className="text-xs text-red-600">{err}</div>}
+    </section>
   );
 }

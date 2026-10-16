@@ -2,6 +2,7 @@ mod agent;
 mod http;
 mod paths;
 mod policy;
+mod rollback;
 mod ssh;
 mod sshpolicy;
 mod store;
@@ -243,6 +244,7 @@ pub fn run() {
     if let Err(e) = supervisor::init_job() {
         eprintln!("job object unavailable: {e}");
     }
+    rollback::on_start(&dir);
     let db = store::open(&dir).expect("open database");
     let state = App {
         db: Arc::new(Mutex::new(db)),
@@ -260,6 +262,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            rollback::rollback_list,
+            rollback::rollback_to,
             model_status,
             model_start,
             model_stop,
