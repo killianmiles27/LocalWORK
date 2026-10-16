@@ -17,7 +17,32 @@ const glyph = (x: number, y: number) => { const k = Math.sin((x * 12.9898 + y * 
 const CASTLE_X = .18; // castle centre as a fraction of the photo width; kept on the left at every window size
 const R = 85, RIPPLE_LIFE = 1.8, RIPPLE_BAND = 14, CAP = .34;
 
-export default function Mountain() {
+const IDLE_MS = 12000, DIM = .12, TYPING_DIM = .3;
+export default function Mountain({ inChat, busy }: { inChat: boolean; busy: boolean }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const idle = useRef(false);
+  const lastAct = useRef(performance.now());
+  // Art is full on the empty start screen, calm during a chat, and drifts back in slowly when nothing is happening.
+  useEffect(() => {
+    const el = wrapRef.current!;
+    let t = 0;
+    const apply = () => {
+      clearTimeout(t);
+      const quiet = !busy && idle.current;
+      if (quiet) { el.style.transition = "opacity 14s ease-in-out"; el.style.opacity = "1"; return; }
+      el.style.transition = "opacity .5s ease-out";
+      el.style.opacity = String(inChat || busy ? DIM : 1);
+      if (!busy) t = window.setTimeout(() => { idle.current = true; apply(); }, IDLE_MS);
+    };
+    const act = (e: Event) => {
+      if (e.type === "keydown") el.style.opacity = String(inChat ? DIM : TYPING_DIM);
+      idle.current = false; lastAct.current = performance.now(); apply();
+    };
+    apply();
+    const ev = ["keydown", "pointerdown", "wheel"] as const;
+    ev.forEach(n => addEventListener(n, act, { passive: true }));
+    return () => { clearTimeout(t); ev.forEach(n => removeEventListener(n, act)); };
+  }, [inChat, busy]);
   const baseRef = useRef<HTMLCanvasElement>(null);
   const glowRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -135,18 +160,18 @@ export default function Mountain() {
     const onLeave = () => { mouse = null; wake(); };
     const onClick = (e: MouseEvent) => { ripples.push({ x: e.clientX, y: e.clientY, t: performance.now() }); wake(); };
     const onVis = () => { if (document.hidden) { cancelAnimationFrame(raf); raf = 0; mouse = null; ripples.length = 0; heat.fill(0); bb = { x0: 1, y0: 1, x1: 0, y1: 0 }; gx.clearRect(0, 0, W, H); } };
-    addEventListener("pointermove", onMove, { passive: true }); addEventListener("dragover", onMove, { passive: true }); document.addEventListener("mouseleave", onLeave);
+    
     addEventListener("click", onClick, { passive: true }); addEventListener("resize", rebuild);
     document.addEventListener("visibilitychange", onVis); addEventListener("blur", onLeave);
     dark.addEventListener("change", rebuild);
     return () => {
       cancelAnimationFrame(raf); clearTimeout(timer);
-      removeEventListener("pointermove", onMove); removeEventListener("dragover", onMove); document.removeEventListener("mouseleave", onLeave);
+      
       removeEventListener("click", onClick); removeEventListener("resize", rebuild);
       document.removeEventListener("visibilitychange", onVis); removeEventListener("blur", onLeave);
       dark.removeEventListener("change", rebuild);
     };
   }, []);
-  const cls = "fixed inset-0 w-full h-full pointer-events-none z-0";
-  return <><canvas ref={baseRef} aria-hidden="true" className={cls} /><canvas ref={glowRef} aria-hidden="true" className={cls} /></>;
+  const cls = "absolute inset-0 w-full h-full";
+  return <div ref={wrapRef} aria-hidden="true" className="fixed inset-0 pointer-events-none z-0" style={{ opacity: 1 }}><canvas ref={baseRef} className={cls} /><canvas ref={glowRef} className={cls} /></div>;
 }

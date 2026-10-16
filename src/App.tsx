@@ -321,7 +321,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
 
   return (
     <div className="flex h-full flex-col relative z-10">
-      <Mountain />
+      <Mountain inChat={msgs.length > 0} busy={live.busy} />
       <div className="absolute right-0 top-0 z-40 flex h-10 items-center select-none">
         <button title="Minimize" aria-label="Minimize" onClick={() => getCurrentWindow().minimize()} className="window-control"><Minus size={14} /></button>
         <button title="Maximize or restore" aria-label="Maximize or restore" onClick={() => getCurrentWindow().toggleMaximize()} className="window-control"><Maximize2 size={12} /></button>
