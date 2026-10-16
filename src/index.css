@@ -65,7 +65,7 @@ button:disabled { cursor: default; }
 .window-close:hover { background: #c42b1c; color: white; }
 
 /* sidebar: flat panel, collapses smoothly, rows rise in once */
-.sidebar { transition: width .35s var(--ease-out-soft), opacity .25s; overflow: hidden; }
+.sidebar { transition: opacity .12s; overflow: hidden; backdrop-filter: blur(28px) saturate(1.1); background: color-mix(in oklab, var(--color-panel) 72%, transparent) !important; }
 .sidebar[data-open="false"] { width: 0; opacity: 0; border-right-width: 0; pointer-events: none; }
 .chat-row { position: relative; opacity: 0; animation: rise .45s var(--ease-out-soft) forwards; animation-delay: calc(var(--i, 0) * 28ms);
   transition: background-color .2s, transform .2s; }
@@ -77,3 +77,6 @@ button:disabled { cursor: default; }
   .sidebar { transition: none; }
 }
 
+
+/* Soft frosted backing so text never blends into the texture */
+.frost { backdrop-filter: blur(10px); background: color-mix(in oklab, var(--color-bg) 55%, transparent); border-radius: 14px; }

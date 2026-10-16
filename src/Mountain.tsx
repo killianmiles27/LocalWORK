@@ -6,43 +6,14 @@ import mountainUrl from "./assets/mountain.jpg";
 //  - an overlay canvas only animates cursor glow and click ripples, touching just the cells near them;
 //  - the animation loop stops entirely as soon as nothing is glowing, and while the window is hidden.
 const CW = 5, CH = 7, HEX = "0123456789abcdef";
-const BAYER = (() => {
-  const b4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5], q = [0, 2, 3, 1], out: number[] = [];
-  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) out[y * 8 + x] = (b4[(y & 3) * 4 + (x & 3)] * 4 + q[(y >> 2) * 2 + (x >> 2)]) / 64;
-  return out;
-})();
-const tile = (x: number, y: number) => { const k = Math.sin(((x >> 3) * 127.1 + (y >> 3) * 311.7) * 43758.5453); return k - Math.floor(k); };
 const thr = (x: number, y: number) => { let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
-const glyph = (x: number, y: number) => { const k = Math.sin((x * 12.9898 + y * 78.233) * 43758.5453); return HEX[Math.floor((k - Math.floor(k)) * 16)]; };
+const jx = (x: number, y: number) => ((Math.imul(x, 2246822519) ^ Math.imul(y, 3266489917)) >>> 0) % 5 - 2;
+const jy = (x: number, y: number) => ((Math.imul(x, 3266489917) ^ Math.imul(y, 668265263)) >>> 0) % 5 - 2;
+const glyph = (x: number, y: number) => HEX[(Math.imul(x ^ 0x9e37, 2654435761) ^ Math.imul(y ^ 0x85eb, 2246822519)) >>> 28];
 const CASTLE_X = .18; // castle centre as a fraction of the photo width; kept on the left at every window size
 const R = 85, RIPPLE_LIFE = 1.8, RIPPLE_BAND = 14, CAP = .34;
 
-const IDLE_MS = 12000, DIM = .12, TYPING_DIM = .3;
-export default function Mountain({ inChat, busy }: { inChat: boolean; busy: boolean }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const idle = useRef(false);
-  const lastAct = useRef(performance.now());
-  // Art is full on the empty start screen, calm during a chat, and drifts back in slowly when nothing is happening.
-  useEffect(() => {
-    const el = wrapRef.current!;
-    let t = 0;
-    const apply = () => {
-      clearTimeout(t);
-      const quiet = !busy && idle.current;
-      if (quiet) { el.style.transition = "opacity 14s ease-in-out"; el.style.opacity = "1"; return; }
-      el.style.transition = "opacity .5s ease-out";
-      el.style.opacity = String(inChat || busy ? DIM : 1);
-      if (!busy) t = window.setTimeout(() => { idle.current = true; apply(); }, IDLE_MS);
-    };
-    const act = (e: Event) => {
-      if (e.type === "keydown") el.style.opacity = String(inChat ? DIM : TYPING_DIM);
-      idle.current = false; lastAct.current = performance.now(); apply();
-    };
-    apply();
-    const ev = ["keydown", "pointerdown", "wheel"] as const;
-    ev.forEach(n => addEventListener(n, act, { passive: true }));
-    return () => { clearTimeout(t); ev.forEach(n => removeEventListener(n, act)); };
-  }, [inChat, busy]);
+export default function Mountain() {
   const baseRef = useRef<HTMLCanvasElement>(null);
   const glowRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -88,7 +59,7 @@ export default function Mountain({ inChat, busy }: { inChat: boolean; busy: bool
       bx.clearRect(0, 0, W, H); bx.font = font; bx.textBaseline = "top"; bx.fillStyle = ink; bx.globalAlpha = Math.min(CAP, base);
       for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
         if (lum[y * cols + x] <= thr(x, y)) continue;
-        bx.fillText(glyph(x, y), x * CW, y * CH);
+        bx.fillText(glyph(x, y), x * CW + jx(x, y) * .5, y * CH + jy(x, y) * .6);
       }
       bx.globalAlpha = 1;
     }
@@ -137,7 +108,7 @@ export default function Mountain({ inChat, busy }: { inChat: boolean; busy: bool
         // overlay alpha chosen so base + overlay composite to the target brightness
         const target = Math.min(CAP, base + hv * .45);
         gx.globalAlpha = 1 - (1 - target) / (1 - Math.min(CAP, base));
-        gx.fillText(glyph(x, y), x * CW, y * CH);
+        gx.fillText(glyph(x, y), x * CW + jx(x, y) * .5, y * CH + jy(x, y) * .6);
       }
       gx.globalAlpha = 1;
       bb = nx1 < 0 ? { x0: 1, y0: 1, x1: 0, y1: 0 } : { x0: nx0, y0: ny0, x1: nx1, y1: ny1 };
@@ -173,5 +144,5 @@ export default function Mountain({ inChat, busy }: { inChat: boolean; busy: bool
     };
   }, []);
   const cls = "absolute inset-0 w-full h-full";
-  return <div ref={wrapRef} aria-hidden="true" className="fixed inset-0 pointer-events-none z-0" style={{ opacity: 1 }}><canvas ref={baseRef} className={cls} /><canvas ref={glowRef} className={cls} /></div>;
+  return <div aria-hidden="true" className="fixed inset-0 pointer-events-none z-0"><canvas ref={baseRef} className={cls} /><canvas ref={glowRef} className={cls} /></div>;
 }

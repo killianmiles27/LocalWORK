@@ -321,7 +321,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
 
   return (
     <div className="flex h-full flex-col relative z-10">
-      <Mountain inChat={msgs.length > 0} busy={live.busy} />
+      <Mountain />
       <div className="absolute right-0 top-0 z-40 flex h-10 items-center select-none">
         <button title="Minimize" aria-label="Minimize" onClick={() => getCurrentWindow().minimize()} className="window-control"><Minus size={14} /></button>
         <button title="Maximize or restore" aria-label="Maximize or restore" onClick={() => getCurrentWindow().toggleMaximize()} className="window-control"><Maximize2 size={12} /></button>
@@ -405,7 +405,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
             <div className="shrink-0 px-6 pb-4">
               <div className="mx-auto max-w-3xl">
                 {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
-                <div className="rounded-2xl border border-line bg-card shadow-sm focus-within:border-accent transition-colors">
+                <div className="rounded-2xl border border-line bg-card/80 backdrop-blur-md shadow-sm focus-within:border-accent transition-colors">
                   {files.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                       {files.map((f) => (
@@ -574,7 +574,7 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number; win
 function Assistant({ children }: { children: string }) {
   return (
     <div className="flex gap-3">
-      <div className="prose min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
+      <div className="prose frost px-3 py-1.5 -mx-3 min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
     </div>
   );
 }
