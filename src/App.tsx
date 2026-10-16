@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, ArrowUp, Check, ChevronRight, FolderOpen, MessageSquare, Mic, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, FolderOpen, MessageSquare, Mic, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import Wizard from "./Wizard";
 import { useVoice } from "./voice";
@@ -50,6 +50,7 @@ export default function App() {
   const [wizard, setWizard] = useState(false);
   const [showTps, setShowTps] = useState(true);
   const [tps, setTps] = useState<number | null>(null);
+  const [ctx, setCtx] = useState<{ used: number | null; window: number }>({ used: null, window: 32768 });
   const navigation = useRef(0);
   const createdHere = useRef<string | null>(null);
   const creating = useRef<Promise<string> | null>(null);
@@ -70,6 +71,8 @@ export default function App() {
     finally { setTidying(false); }
   }
 
+  const refreshCtx = (id: string) =>
+    invoke<{ used: number | null; window: number }>("context_usage", { id }).then((c) => { if (curRef.current === id) setCtx(c); }).catch(() => {});
   const refreshConvs = () => invoke<Conv[]>("list_conversations").then(setConvs).catch((e) => setErr(String(e)));
   const reload = (id: string) =>
     invoke<Msg[]>("load_messages", { id }).then((m) => { if (curRef.current === id) setMsgs(m); }).catch((e) => setErr(String(e)));
@@ -93,7 +96,9 @@ export default function App() {
             setLive((l) => ({ ...l, busy: true, text: "", thinking: "" })); reload(conv); break;
           case "stream_end": case "error": case "agent_exit":
             setWorkspaceRefresh(n => n + 1);
-            setLive({ text: "", thinking: "", busy: false }); reload(conv); refreshConvs(); break;
+            setLive({ text: "", thinking: "", busy: false }); reload(conv); refreshConvs(); refreshCtx(conv); break;
+          case "info": setTimeout(() => refreshCtx(conv), 400); break;
+          case "title": refreshConvs(); break;
         }
       }),
     ];
@@ -108,7 +113,8 @@ export default function App() {
     setMsgs([]);
     setErr("");
     setWorkspaceRequest(undefined);
-    if (cur) reload(cur);
+    setCtx((c) => ({ ...c, used: null }));
+    if (cur) { reload(cur); refreshCtx(cur); }
   }, [cur]);
 
   useEffect(() => {
@@ -247,6 +253,7 @@ export default function App() {
   async function send(override?: string) {
     const typed = (override ?? input).trim();
     if ((!typed && !files.length) || live.busy || !modelReady) return;
+    if (typed === "/compact" && !files.length) { setInput(""); return compact(); }
     const body = files.length
       ? `${typed || "Please look at the attached file" + (files.length > 1 ? "s" : "") + "."}
 
@@ -261,6 +268,13 @@ Attached (read with read_attachment): ${files.join(", ")}`
       setFiles([]); setInput("");
       await invoke("agent_send", { id, text: body, autoEdit }); await reload(id); refreshConvs();
     } catch (e) { if (epoch === navigation.current) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); } }
+  }
+  async function compact() {
+    if (!cur || live.busy || !modelReady) return;
+    if (!msgs.some((m) => m.role === "assistant")) { setErr("Nothing to compact yet."); return; }
+    setErr(""); setLive({ text: "", thinking: "", busy: true });
+    try { await invoke("agent_compact", { id: cur }); }
+    catch (e) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
   }
   function answer(a: Approval, allow: boolean, remember: boolean) {
     invoke("agent_answer", { id: a.conv, callId: a.call_id, allow, remember });
@@ -356,7 +370,9 @@ Attached (read with read_attachment): ${files.join(", ")}`
             <div ref={scrollRef} onScroll={onScroll} className={"absolute inset-0 " + (msgs.length || live.busy ? "overflow-auto" : "overflow-hidden")}>
               <div className="mx-auto max-w-3xl px-6 py-6 space-y-5">
                 {msgs.length === 0 && !live.busy && <h1 className="text-2xl text-center tracking-tight">What should we work on?</h1>}
-                {msgs.map((m) => <Row key={m.id} m={m} actions={{ onDocument: openDocument, onVisual: () => openVisual(String(m.id)), onDraft: draft }} />)}
+                {group(msgs).map((g) => g.kind === "tools"
+                  ? <ToolGroup key={g.items[0].id} items={g.items} />
+                  : <Row key={g.m.id} m={g.m} actions={{ onDocument: openDocument, onVisual: () => openVisual(String(g.m.id)), onDraft: draft }} />)}
                 {live.thinking && <div className="text-xs text-muted italic whitespace-pre-wrap max-h-24 overflow-auto">{live.thinking}</div>}
                 {live.text && <Assistant>{live.text}</Assistant>}
                 {live.busy && !live.text && mine.length === 0 && (
@@ -402,6 +418,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
                     </button>
                     </div>
                     <div className="flex items-center gap-1.5">
+                    {cur && ctx.used != null && <ContextRing used={ctx.used} window={ctx.window} busy={live.busy} onCompact={compact} />}
                     {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}
                     {input.trim().length > 20 && !live.busy && (
                       <button onClick={tidy} disabled={tidying || !modelReady} title="Ask the model to turn this into a clear request"
@@ -438,6 +455,77 @@ Attached (read with read_attachment): ${files.join(", ")}`
   );
 }
 
+const isPlainTool = (m: Msg) => {
+  if (m.role !== "tool") return false;
+  const b = m.body ?? {};
+  const nm = String(b.request?.name ?? b.name ?? "");
+  if (/memory_save/.test(nm) && /Saved memory #(\d+): (.*)/.test(String(b.output ?? ""))) return false;
+  const declined = b.status === "cancelled";
+  return declined || b.status === "error" || !richFor(nm, b.request?.args, undefined);
+};
+type Block = { kind: "row"; m: Msg } | { kind: "tools"; items: Msg[] };
+function group(msgs: Msg[]): Block[] {
+  const out: Block[] = [];
+  for (const m of msgs) {
+    const last = out[out.length - 1];
+    if (isPlainTool(m)) { if (last?.kind === "tools") last.items.push(m); else out.push({ kind: "tools", items: [m] }); }
+    else out.push({ kind: "row", m });
+  }
+  return out;
+}
+
+const toolLabel = (m: Msg) => text(m.body?.request?.name ?? m.body?.name).replace(/^.*[_.:]{1,2}(?=[^_.:]+$)/, "").replace(/[_-]+/g, " ");
+
+function ToolGroup({ items }: { items: Msg[] }) {
+  const [open, setOpen] = useState(false);
+  const failed = items.filter((m) => m.body?.status === "error" || m.body?.status === "cancelled").length;
+  const names = Array.from(new Set(items.map(toolLabel))).slice(0, 3).join(", ");
+  return (
+    <div className="ml-10 text-sm text-muted">
+      <button onClick={() => setOpen(!open)} aria-expanded={open} className="inline-flex items-center gap-1.5 hover:text-ink">
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span>{items.length === 1 ? "Used a tool" : `Used ${items.length} tools`}{names && <span className="opacity-70"> · {names}{new Set(items.map(toolLabel)).size > 3 ? "…" : ""}</span>}{failed > 0 && <span className="text-red-600"> · {failed} not completed</span>}</span>
+      </button>
+      {open && (
+        <div className="mt-1 ml-1.5 border-l border-line pl-3 space-y-0.5">
+          {items.map((m) => {
+            const b = m.body ?? {};
+            const declined = b.status === "cancelled";
+            return (
+              <details key={m.id} className="group">
+                <summary className="flex items-center gap-2 cursor-pointer list-none py-0.5 hover:text-ink">
+                  {declined || b.status === "error" ? <X size={12} className="text-red-600" /> : <Wrench size={12} />}
+                  <span className="truncate">{declined ? "Declined: " : ""}{toolLabel(m)}</span>
+                </summary>
+                <pre className="my-1 text-xs whitespace-pre-wrap max-h-60 overflow-auto rounded-lg bg-panel border border-line p-3">{text(b.request?.args ?? {})}{"\n---\n"}{text(b.output)}</pre>
+              </details>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContextRing({ used, window: win, busy, onCompact }: { used: number; window: number; busy: boolean; onCompact: () => void }) {
+  const pct = Math.max(0, Math.min(1, used / win));
+  const r = 7, c = 2 * Math.PI * r;
+  const tone = pct >= 0.9 ? "text-red-500" : pct >= 0.7 ? "text-amber-500" : "text-accent";
+  const k = (n: number) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n));
+  return (
+    <button onClick={onCompact} disabled={busy} data-testid="context-ring"
+      title={`Context: ${k(used)} of ${k(win)} tokens used (${Math.round(pct * 100)}%). Older messages are summarized automatically at about 80%. Click to compact now.`}
+      aria-label={`Context ${Math.round(pct * 100)} percent full. Compact now`}
+      className="grid place-items-center w-7 h-7 rounded-lg hover:bg-panel disabled:opacity-50">
+      <svg width="18" height="18" viewBox="0 0 18 18" className="-rotate-90">
+        <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" className="text-line" />
+        <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={tone}
+          strokeDasharray={c} strokeDashoffset={c * (1 - pct)} />
+      </svg>
+    </button>
+  );
+}
+
 function Assistant({ children }: { children: string }) {
   return (
     <div className="flex gap-3">
@@ -455,6 +543,8 @@ function Row({ m, actions }: { m: Msg; actions?: RichActions }) {
       </div>
     );
   if (m.role === "assistant") return <Assistant>{text(b.text)}</Assistant>;
+  if (m.role === "notice")
+    return <div className="text-center text-xs text-muted">{text(b.text)}</div>;
   if (m.role === "error")
     return <div className="rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{text(typeof b === "string" ? b : b?.message ?? b)}</div>;
   if (m.role === "tool") {

@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub type Db = Arc<Mutex<Connection>>;
 
@@ -166,6 +166,33 @@ impl Agent {
     }
 }
 
+const COMPACT_MARK: &str = "# managed by LocalWORK";
+
+/// aionrs assumes a 200k window; tell it the real one so it compacts before the model overflows.
+/// Autocompact fires at 80% of the window. A folder's own .aionrs.toml is never overwritten.
+fn write_compact_config(workspace: &std::path::Path) {
+    let window = strata::context_window();
+    let reserve = (window / 10).clamp(1024, 4096);
+    let trigger = window * 8 / 10;
+    let buffer = window - reserve - trigger;
+    let text = format!(
+        "{COMPACT_MARK}
+[compact]
+context_window = {window}
+output_reserve = {reserve}
+autocompact_buffer = {buffer}
+emergency_buffer = {}
+",
+        (window / 20).min(1500)
+    );
+    let path = workspace.join(".aionrs.toml");
+    match std::fs::read_to_string(&path) {
+        Ok(old) if !old.starts_with(COMPACT_MARK) => {}
+        Ok(old) if old == text => {}
+        _ => { let _ = std::fs::write(&path, text); }
+    }
+}
+
 pub fn get_or_start(
     app: &AppHandle,
     agents: &Agents,
@@ -188,6 +215,7 @@ pub fn get_or_start(
         }
         (g.status.port, g.key.clone(), g.status.model.clone())
     };
+    write_compact_config(&workspace);
     let vendor = paths::vendor_dir();
     let exe = vendor.join("aionrs.exe");
     let mut cmd = Command::new(&exe);
@@ -300,6 +328,48 @@ fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Option<Value> {
     }))
 }
 
+/// Name a new chat from its first exchange, using the already-running model with a tiny prompt.
+fn maybe_title(app: &AppHandle, db: &Db, conv: &str) {
+    let key = format!("titled:{conv}");
+    let (first_user, first_reply) = {
+        let c = db.lock().unwrap();
+        if store::kv_get(&c, &key).is_some() { return; }
+        let msgs = store::messages(&c, conv);
+        let pick = |role: &str| msgs.iter().find(|m| m["role"] == role).and_then(|m| m["body"]["text"].as_str()).map(String::from);
+        let (Some(u), Some(a)) = (pick("user"), pick("assistant")) else { return };
+        store::kv_set(&c, &key, "1");
+        (u, a)
+    };
+    let st = app.state::<crate::App>().strata.clone();
+    let (db, app, conv) = (db.clone(), app.clone(), conv.to_string());
+    std::thread::spawn(move || {
+        let (port, bearer, model) = {
+            let g = st.lock().unwrap();
+            if g.status.state != "ready" { return; }
+            (g.status.port, g.key.clone(), g.status.model.clone())
+        };
+        let clip = |t: &str| -> String { t.chars().take(500).collect() };
+        let body = json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Write a title of at most 5 words for this chat. Reply with only the title: no quotes, no trailing punctuation."},
+                {"role": "user", "content": format!("User: {}
+
+Assistant: {}", clip(&first_user), clip(&first_reply))}
+            ],
+            "stream": false, "temperature": 0.2, "max_tokens": 24,
+            "chat_template_kwargs": {"enable_thinking": false},
+        }).to_string();
+        let Some((200, raw)) = crate::http::post_json(port, "/v1/chat/completions", Some(&bearer), &body, std::time::Duration::from_secs(60)) else { return };
+        let Ok(v) = serde_json::from_str::<Value>(&raw) else { return };
+        let t = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
+        let t: String = t.lines().next().unwrap_or("").trim().trim_matches(|c| matches!(c, '"' | '\'' | '*' | '.')).trim().chars().take(60).collect();
+        if t.len() < 3 { return; }
+        store::rename(&db.lock().unwrap(), &conv, &t);
+        let _ = app.emit("agent-event", json!({"conv": conv, "ev": {"type": "title"}}));
+    });
+}
+
 fn flush_text(db: &Db, conv: &str, text: &mut String, thinking: &mut String) {
     if text.trim().is_empty() && thinking.trim().is_empty() {
         text.clear();
@@ -409,8 +479,35 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 let c = db.lock().unwrap();
                 store::add_msg(&c, &conv, "tool", &json!({"call_id": call_id, "status": "cancelled", "output": ev.get("reason"), "request": ta}));
             }
+            "info" => {
+                let m = ev.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                if m.starts_with("Autocompact: summarized") || m.starts_with("Context compacted") {
+                    store::add_msg(&db.lock().unwrap(), &conv, "notice", &json!({"text": "Earlier messages were summarized to free up space."}));
+                    // After a manual /compact the agent is idle: ask for the new size ("Context Usage" info).
+                    if m.starts_with("Context compacted") {
+                        agent.send(json!({"type": "message", "msg_id": "ctx-after-compact", "content": "/context"}));
+                    }
+                } else if m.starts_with("Context Usage") {
+                    if let Some(pct) = m.lines().find_map(|l| {
+                        let a = l.find("tokens (")? + 8;
+                        l[a..].split('%').next()?.trim().parse::<f64>().ok()
+                    }) {
+                        let used = (pct / 100.0 * strata::context_window() as f64).round() as u64;
+                        store::kv_set(&db.lock().unwrap(), &format!("ctx:{conv}"), &used.to_string());
+                    }
+                }
+            }
             "stream_end" | "error" => {
+                // stream_end usage adds up every request of a turn (and any compaction), so it overstates the
+                // window. After a real turn ask aionrs for its exact figure; /context makes no model call.
+                if ty == "stream_end" && ev.pointer("/usage/input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) > 0 {
+                    agent.send(json!({"type": "message", "msg_id": "ctx-refresh", "content": "/context"}));
+                }
+                let answered = ty == "stream_end" && !text.trim().is_empty();
                 flush_text(&db, &conv, &mut text, &mut thinking);
+                if answered {
+                    maybe_title(&app, &db, &conv);
+                }
                 if ty == "error" {
                     let c = db.lock().unwrap();
                     store::add_msg(&c, &conv, "error", &ev["error"]);

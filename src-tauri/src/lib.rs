@@ -186,6 +186,19 @@ fn attach_bytes(s: State<App>, id: String, name: String, data: Vec<u8>) -> Resul
 }
 
 #[tauri::command]
+fn agent_compact(app: AppHandle, s: State<App>, id: String) -> Result<(), String> {
+    let a = agent::get_or_start(&app, &s.agents, &s.db, &s.strata, &id)?;
+    a.send(json!({"type": "message", "msg_id": new_id(), "content": "/compact"}));
+    Ok(())
+}
+
+#[tauri::command]
+fn context_usage(s: State<App>, id: String) -> Value {
+    let used = store::kv_get(&s.db.lock().unwrap(), &format!("ctx:{id}")).and_then(|v| v.parse::<u64>().ok());
+    json!({"used": used, "window": strata::context_window()})
+}
+
+#[tauri::command]
 fn agent_stop(s: State<App>, id: String) {
     if let Some(a) = s.agents.lock().unwrap().get(&id) {
         a.stop_turn();
@@ -328,6 +341,8 @@ pub fn run() {
             set_auto_edit,
             agent_send,
             agent_stop,
+            agent_compact,
+            context_usage,
             ssh::ssh_hosts, ssh::ssh_save_host, ssh::ssh_delete_host, ssh::ssh_public_key, ssh::ssh_scan, ssh::ssh_pin,
             attach_paths,
             attach_bytes,

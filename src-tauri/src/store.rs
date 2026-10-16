@@ -66,6 +66,7 @@ pub fn rename(c: &Connection, id: &str, title: &str) {
 pub fn delete_conv(c: &Connection, id: &str) {
     let _ = c.execute("DELETE FROM messages WHERE conv=?1", [id]);
     let _ = c.execute("DELETE FROM conversations WHERE id=?1", [id]);
+    let _ = c.execute("DELETE FROM kv WHERE k IN (?1, ?2)", params![format!("ctx:{id}"), format!("titled:{id}")]);
 }
 
 pub fn add_msg(c: &Connection, conv: &str, role: &str, body: &Value) {

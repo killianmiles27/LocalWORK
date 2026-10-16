@@ -101,6 +101,14 @@ Do not re-add these based only on an old feature checklist.
   Python's child plus an atomic Node preload setting `windowsHide: true` for
   Playwright's daemon/browser spawns. No ignored vendor patch is required.
 
+### Context management and chat polish
+- `agent::write_compact_config` writes a managed `<workspace>/.aionrs.toml` (marker `# managed by LocalWORK`; never overwrites a file without it) so aionrs uses the real Strata window (`strata::context_window()`, from `--max-context`) and autocompacts at about 80%. aionrs otherwise assumes 200k.
+- Composer ring (`ContextRing` in `App.tsx`) shows usage from kv `ctx:<conv>`, refreshed by sending `/context` after each turn; click or type `/compact` to compact (`agent_compact`). Commands: `agent_compact`, `context_usage`.
+- Compaction `info` events store a centered `notice` message.
+- Plain tool calls collapse into a muted "Used N tools" group (`ToolGroup`); rich tools and memory chips stay separate.
+- `agent::maybe_title` names a conversation once (kv `titled:<conv>`) with a tiny local-model call. `delete_conv` clears both kv keys.
+- Verified with a fake OpenAI server (no compaction at 5.5k tokens, compaction near 27k). Ring, grouping and titles were only compile-checked, not clicked through.
+
 ## Important files
 
 | Files | Responsibility |

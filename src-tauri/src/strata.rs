@@ -196,6 +196,20 @@ pub fn stop(app: Option<&AppHandle>, s: &Shared) {
 }
 
 /// Model + machine details for the Settings panel. The API key stays on this side; only data goes out.
+/// Context window of the configured model (its `--max-context`), 32768 if the config does not say.
+pub fn context_window() -> u64 {
+    let cfg = setting("modelConfig", paths::DEFAULT_MODEL_CONFIG);
+    std::fs::read_to_string(&cfg).ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("args").and_then(|a| a.as_array()).cloned())
+        .and_then(|a| {
+            let i = a.iter().position(|x| x.as_str() == Some("--max-context"))?;
+            a.get(i + 1)?.as_str()?.parse::<u64>().ok()
+        })
+        .filter(|n| *n >= 4096)
+        .unwrap_or(32768)
+}
+
 pub fn info(s: &Shared) -> serde_json::Value {
     use serde_json::{json, Value};
     let (port, key, model) = {
