@@ -1,108 +1,202 @@
-# LocalWORK handoff for the next coding agent
+# LocalWORK handoff
 
-## Where things live (read this first)
-| Place | Role |
+Updated 2026-10-16. Read this first, then the relevant sections of
+[docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md). This is project context, not a
+request to start implementing additional features. The current user's task sets scope.
+
+## Current baseline and locations
+
+- Shipped implementation: `43cde3b` on `main`, pushed to
+  https://github.com/killianmiles27/LocalWORK.
+- Source repository: `C:\Random\Working Folder\LocalWORK\app`.
+  The surrounding folder also holds Strata and local test/deployment artifacts;
+  those are outside Git. Do not mistake the parent folder for the repo root.
+- Installed app: `C:\Random\LocalWORK\LocalWORK.exe`.
+  Edit source in the repo, then build and deploy. Do not maintain separate product
+  changes in the installation directory.
+- The installed executable matched the tested release build by SHA256. The last
+  deployment verified 21 copied files and preserved a backup under
+  `C:\Random\Working Folder\LocalWORK\.deployment-backups\20261016-112657-25e4729e`.
+- User data: `%LOCALAPPDATA%\Workbench` (SQLite conversations/settings, logs,
+  revisions and rollback data). Preserve it during normal development/deployment.
+- No new GitHub release/installer was published for this work; `main` and the
+  user's existing local installation were updated.
+
+## Product intent and user preferences
+
+The goal is a friendly, local alternative to Claude Cowork / ChatGPT Work:
+one launch, local model startup, natural multi-step requests, attachments, web
+research, memory, documents, spreadsheets, slides and interactive visuals.
+Feature presence does not establish equivalent reliability or output quality.
+
+Prefer maintained existing GitHub projects and small adaptations over rebuilding
+existing engines or importing entire stacks. Avoid dependency bloat, technical
+labels in everyday UI, and mandatory folder selection. The user provided ChatGPT
+Work screenshots as layout inspiration. Model identity belongs in the sidebar;
+generation speed belongs beside the composer. Keep optional controls discoverable.
+
+## Architecture and existing capabilities
+
+Tauri 2 / Rust host with WebView2, React 19, Vite and Tailwind 4. This is not
+Electron. Strata is the separate local inference engine. A vendored aionrs process
+runs each conversation's agent loop; the local Python workbench MCP supplies tools.
+The Rust host owns approvals. Keep inference credentials in Rust, never frontend,
+logs or committed files. See `docs/MODEL-HANDOFF.md` for the engine contract.
+
+Already present: streaming chats, thinking/tool output, approvals, conversation
+history, persistent memory, attachment button/paste/drop, PDF/Office/text extraction,
+push-to-talk transcription and request tidying, web search/fetch, Playwright browser,
+OfficeCLI creation/editing, charts/tables/diagrams, plan checklist, SSH administration
+with host-key trust and policy, first-run setup, model engine update controls,
+single-instance handling, process cleanup, signed updater and version rollback.
+Do not re-add these based only on an old feature checklist.
+
+## What this work added or changed
+
+### Document workspace and interactive UI
+
+- A Files side panel beside chat: Word/Excel/PowerPoint HTML previews, Markdown/text
+  previews, file/visual selection, open externally, reveal, save copy, previous
+  versions, expanded preview, and Ask for changes. Revision requests fill the
+  composer for review; they do not auto-send. PDFs currently open externally.
+- `show_document` MCP tool presents an existing workspace file. Newly completed
+  results can open the panel; reopening a historical chat does not replay them.
+- `assemble_document` adapts a pinned MIT subset of CopilotKit/OpenIntelligentUI:
+  theme, SVG/form styles, assembler pattern and response playbook. Source and
+  license details are in `src/vendor/open-intelligent-ui/README.md` and NOTICE.md.
+  The full Next.js/FastAPI stack, cloud router, CDNs and Websandbox streaming
+  runtime are not included. No new production dependencies were added.
+- Interactive content uses opaque-origin sandboxed iframes, restrictive CSP,
+  validated bounded messages, blocked remote resources/navigation and explicit
+  follow-up review. Keep the parent/child CSP and sandbox tests together.
+- Supported direct edits and OfficeCLI mutations capture immutable, deduplicated
+  previous versions under app data before editing. Snapshots are source-bound;
+  exports refuse overwrites. Arbitrary shell writes and external-app changes are
+  outside this capture guarantee. There is no automatic destructive restore.
+- OfficeCLI receives normal DOS/UNC paths only after canonical containment checks.
+  Passing Windows `\\?\` paths directly caused false resident-session/file-lock errors.
+
+### Desktop and chat experience
+
+- New chat opens a usable composer. First send, attachment or paste creates a
+  separate `<OS Documents>\LocalWORK\<chat-id>` output folder. A configured
+  `projects_folder` overrides the parent. The OS Documents API handles relocation.
+- The composer folder button starts a new chat in an existing folder; it does not
+  retarget a conversation's existing agent/session. The folder-name button reveals
+  its location. Deleting a chat does not delete its output files.
+- Navigation generation guards stop delayed creation/attachment results from
+  switching back to an old chat or populating the wrong draft.
+- Native decorations were removed. Minimize/maximize/close and dragging are
+  integrated into the content header, with explicit Tauri window permissions.
+- Normal external HTTP(S) links use Windows ShellExecuteW, opening the system's
+  default browser. A frontend anchor handler and native navigation guard prevent
+  external web pages from replacing the app. Local Tauri/dev navigation stays local.
+  Markdown file previews still intentionally suppress their own links/images.
+- Sidebar shows the model and state, with fewer labels and no repeated folder paths.
+  Model start/stop controls remain available in Settings.
+- Composer TPS defaults on and persists via `show_tps` (`0` hides it). Lightweight
+  asynchronous telemetry uses model status endpoints without the heavier sysinfo
+  refresh. It shows current/last speed or a dash when unavailable.
+- Browser console flash fixed in `workbench-mcp/browser.py`: CREATE_NO_WINDOW on
+  Python's child plus an atomic Node preload setting `windowsHide: true` for
+  Playwright's daemon/browser spawns. No ignored vendor patch is required.
+
+## Important files
+
+| Files | Responsibility |
 | --- | --- |
-| GitHub `killianmiles27/LocalWORK` | **Master copy.** Point a coding agent here (or at the local clone below). |
-| `C:\Random\Working Folder\LocalWORKpp` | The local git clone and the source you edit. This folder is the repo root. The rest of `Working Folder\LocalWORK` (the `strata` model engine, benchmark notes, spec documents) is NOT part of the repo. |
-| `C:\Random\LocalWORK` | Only the **built app** the user runs. Never edit here; it is overwritten on every redeploy. |
+| `src/App.tsx`, `src/Settings.tsx`, `src/Wizard.tsx` | Chat lifecycle, composer, links, window controls, TPS and setup |
+| `src/Workspace.tsx`, `src/Rich.tsx` | File/visual panel and in-chat tool rendering |
+| `src/SandboxedUi.tsx`, `src/intelligent-ui.ts` | Sandboxed documents, bridge, offline HTML assembly |
+| `src-tauri/src/lib.rs`, `desktop.rs`, `strata.rs` | Commands, automatic folders, OS browser/folder opening, navigation and telemetry |
+| `src-tauri/src/documents.rs`, `agent.rs` | Containment, previews, exports, revisions and pre-edit capture |
+| `src-tauri/src/policy.rs`, `sshpolicy.rs`, `ssh.rs` | Approval/SSH trust boundaries |
+| `src-tauri/src/supervisor.rs`, `rollback.rs`, `store.rs` | Process lifecycle, recovery and persisted state |
+| `src-tauri/tauri.conf.json`, `capabilities/default.json` | Embedded assets, CSP and window permissions |
+| `workbench-mcp/server.py`, `browser.py`, `skills/intelligent-ui/` | Tools, quiet browser launcher and reused UI guidance |
+| `scripts/e2e/`, `scripts/tests/` | Isolated CDP acceptance checks and focused regressions |
+| `scripts/deploy-local.ps1` | Backup, deploy and hash-check the existing installation |
 
-Rebuild and redeploy after a change:
-1. `cd "C:\Random\Working Folder\LocalWORKpp"`, then `npm run build` and `npx tauri build --no-bundle` (never plain `cargo build --release`).
-2. Close LocalWORK. Copy `src-tauri	argetelease\localwork.exe` to `C:\Random\LocalWORK\LocalWORK.exe`, `workbench-mcp\*.py` to `C:\Random\LocalWORK\workbench-mcp\`, and `skills\` to `C:\Random\LocalWORK\skills\`.
-3. Commit and push to `main`.
+## Build, verify and deploy
 
-Read this first. It lists what already exists (do not re-add it), where it lives, how to build and test, and what is known to be broken or untested. Spec: `docs/implementation-spec.md`. Model/engine contract: `docs/MODEL-HANDOFF.md`. Design decisions: `docs/decisions.md`. Third-party notices: `NOTICE.md`.
+Commands below run from the repository root, not its parent. Existing vendor files
+and Strata's Python environment are required for browser/Office checks. Provisioning
+is documented in `scripts/fetch-vendor.ps1` and `scripts/install-mcp-libs.ps1`.
+Do not reinstall or download dependencies merely to inspect the project.
 
-## What it is
-A Windows desktop "AI coworker" app: Tauri 2 (Rust) shell + WebView2, React 19/Vite/Tailwind 4 UI. Everything runs offline on the user's PC. The model is served by **Strata** (separate folder, OpenAI-compatible server). The agent loop is the vendored **aionrs** (`--json-stream`), which talks to Strata and to our own **workbench MCP** (Python). New chats automatically get an output folder under Documents/LocalWORK (or the configured projects location); the composer can also start a chat in a chosen existing folder.
-
-## October 16: document workspace and Open Intelligent UI
-
-See `docs/PROJECT_CONTEXT.md` for integration details and checks. Files & visuals
-opens beside chat with OfficeCLI HTML previews of docx/xlsx/pptx, Markdown/text
-previews, open/reveal, save-copy, revision selection and requests for changes.
-`show_document` presents a finished file. Supported direct edits and OfficeCLI
-mutations preserve prior workspace revisions; arbitrary shell writes are not
-covered. Exports never overwrite. These are approximate HTML previews, not a
-pixel-level Office renderer or in-app WYSIWYG editor.
-
-`assemble_document` integrates the MIT Open Intelligent UI theme, SVG/form styles,
-assembler pattern and response playbook from a pinned upstream commit, through the
-existing local agent and MCP. The cloud router and full upstream web/server stack
-are excluded. Follow-ups require user review. No production dependencies added.
-
-## Layout
-| Path | What |
-| --- | --- |
-| `src/App.tsx` | Chat UI: sidebar, streaming, approval cards, attachments (button, paste, drag-drop), memory chips, voice button |
-| `src/Rich.tsx` | In-chat renderers: chart (bar/line/pie SVG), sortable table, diagram, sandboxed artifact iframe, plan checklist. `richFor(toolName,args)` is called from `Row` in App.tsx |
-| `src/Settings.tsx` | Settings: model/system info (CPU/RAM/VRAM/TPS), memory list, SSH hosts, Versions (rollback), App |
-| `src/voice.ts`, `src-tauri/src/voice.rs` | Push-to-talk voice (whisper.cpp) |
-| `src-tauri/src/lib.rs` | App entry, Tauri commands, single instance, updater plugin, state |
-| `src-tauri/src/agent.rs` | Spawns aionrs per conversation, builds system prompt (`system-prompt.md` + skill list + memories), routes events, calls `policy::decide`, stores messages |
-| `src-tauri/src/policy.rs` | Approval policy (info/edit/exec/mcp categories, workspace boundary, protected paths, browser rules). Allow-list of read-only MCP tools is in `mcp_decision` |
-| `src-tauri/src/sshpolicy.rs` | SSH command classifier (read-only auto-allow only for hosts with "read ok"; unit-tested) |
-| `src-tauri/src/ssh.rs` | SSH host store, key generation, host-key scan/pin commands |
-| `src-tauri/src/strata.rs` | Starts/stops/health-checks Strata (hidden, ephemeral port, key in memory) |
-| `src-tauri/src/supervisor.rs` | Windows Job Object, `pids.json` stale-process reaping |
-| `src-tauri/src/store.rs` | SQLite (conversations, messages, memories + FTS5) |
-| `src-tauri/src/rollback.rs` | Saves each version's exe to `%LOCALAPPDATA%\Workbench\rollback`, backs up the db before a new version first runs (`backups/`), `rollback_to` swaps the exe and restarts |
-| `workbench-mcp/server.py` | MCP tools: officecli, web_search, web_fetch, memory_*, load_skill, browser, workspace_info, read_attachment, ssh_exec, show_chart, show_table, show_diagram, publish_artifact, update_plan |
-| `workbench-mcp/{web,browser,memory,attachments,ssh}.py` | Tool implementations. Third-party Python libs go in `workbench-mcp/libs` (gitignored; `scripts/install-mcp-libs.ps1`) |
-| `skills/<name>/SKILL.md` | Skills auto-listed in the system prompt and loaded with `load_skill`: academic-docx, coding, officecli-basics, pptx-deck, research, ssh-admin, verify-document, xlsx-model |
-| `vendor/` + `vendor/manifest.json` + `scripts/fetch-vendor.ps1` | Pinned binaries (aionrs, officecli, node, playwright, chromium, whisper); fetched, not committed |
-| `scripts/e2e` | Test helpers |
-
-## Features that already exist (do not re-add)
-- Chat with streaming, stick-to-bottom scroll, thinking display, stop button, conversations list, delete, auto-titles.
-- Blue theme, light/dark, redesigned UI; Settings panel with model name/quant, CPU/RAM/VRAM, tokens/sec.
-- Approval policy with cards ("Allow once", "Allow for this chat", "Deny"); mode "Ask before editing" vs "Edits allowed in folder"; protected locations denied outright (e.g. `C:\Windows`).
-- Persistent memory (`memory_save/search/forget`), "Remembered" chip with Undo, memory list in Settings.
-- Office work via OfficeCLI (docx/xlsx/pptx) with skills and recipes; system prompt guidance.
-- Web search/fetch (results wrapped as untrusted), a browser tool (Playwright, per-project login sessions, private addresses blocked, consequential clicks ask).
-- Attachments: attach button, paste, drag-drop; agent reads them with `read_attachment` (pdf/docx/xlsx/pptx/csv/text/html).
-- Voice input.
-- SSH admin: `ssh_exec` tool, hosts + key + fingerprint-pinned known_hosts in Settings, read-only auto-allow per host, everything else asks, output wrapped untrusted, `ssh-admin` skill.
-- Charts, tables, diagrams, sandboxed artifacts (opaque origin + CSP, no network), plan view.
-- First-run wizard (`src/Wizard.tsx`, `src-tauri/src/setup.rs`): hardware check (GPU, driver, RAM, disk), Strata folder check/choice, default projects folder, web access on/off (off makes `policy.rs` deny browser/web_search/web_fetch).
-- Strata update check in Settings > Model engine: looks first (`git fetch`), shows what changed, and only updates (runs `UPDATE.bat`, restarts the model) after a confirm click.
-- Document check loop: the `verify-document` skill (validate, issues, outline, text, stats, fix, repeat up to 3 rounds). Text views only: officecli screenshot/pdf modes hang here (no browser or Word), so they are told not to be used.
-- Updater (signed NSIS), single instance, Job Object cleanup, version rollback and db backup.
-
-## Build, run, test
 ```powershell
-cd app
-npm install
-powershell scripts\fetch-vendor.ps1          # vendor binaries, pinned in vendor\manifest.json
-powershell scripts\install-mcp-libs.ps1      # python libs for the MCP (uses Strata's .venv python)
-npm run build                                 # vite
-npx tauri build --no-bundle                   # exe at src-tauri\target\release\localwork.exe
+npm run build
+npm run test:workspace
+& '..\strata\.venv\Scripts\python.exe' scripts/tests/test_workspace_tools.py
+python scripts/tests/browser_windows.py
+cargo test --offline --manifest-path src-tauri/Cargo.toml --lib desktop::tests
+cargo test --offline --manifest-path src-tauri/Cargo.toml --lib telemetry_tests
+cargo test --offline --manifest-path src-tauri/Cargo.toml --lib documents::tests
+cargo test --offline --manifest-path src-tauri/Cargo.toml --lib revision_tests
+npx tauri build --no-bundle
+pwsh -NoProfile -File scripts/e2e/run-all.ps1 -Exe src-tauri/target/release/localwork.exe -Only T-W1 -WorkRoot ../.e2e-runs -KeepWork
+pwsh -NoProfile -File scripts/deploy-local.ps1
 ```
-IMPORTANT: use `npx tauri build`, not plain `cargo build --release`: the latter produces an exe that points at the dev server (`localhost:1420`) and shows a blank page.
 
-Deploy layout (what the user runs): `C:\Random\LocalWORK\` has `LocalWORK.exe`, `vendor\`, `workbench-mcp\*.py` (+ `libs`), `skills\`. After a rebuild copy the exe, `workbench-mcp\*.py` and `skills\` there.
+Build through Tauri, not plain `cargo build --release`: plain Cargo can produce an
+executable pointing at the development server and display a blank window. The
+release executable is `src-tauri\target\release\localwork.exe`.
 
-Unit tests: `cd src-tauri; cargo test` (includes the SSH classifier). UI tests: launch with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9222"` and drive the page over CDP (click, set textarea via the native value setter + `input` event, click "Allow once" by innerText). Test workspace: `C:\Users\you\Documents\lw-test`.
+Deployment refuses while LocalWORK is running, backs up all replaced files first,
+copies the exe/MCP Python/skills/notices/handoff, then checks every hash. It leaves
+vendor binaries, models, user data and Git alone. No rebuild is needed for a
+handoff-only edit. Commit/push/release only within the current user's authorization.
 
-## Strata launch (see docs/MODEL-HANDOFF.md, authoritative)
-`server.py` + `selected-model.json` in the Strata folder; explicit `--host`/`--port` (ephemeral), no `--open`, API key in env `STRATA_API_KEY` (kept in memory, never logged, committed or sent to the frontend); readiness is verified on the protected `/v1/models` (`/health` is open). Context 32768, kv int8. The model takes 60 to 90 s to be ready. Default Strata path is in `paths.rs` (`DEFAULT_STRATA_ROOT`, overridable by `strataRoot` in settings.json).
+## Verification actually performed
 
-## Release and signing
-See `docs/release.md`. Updater key: `C:\Users\you\.tauri\localwork.key` (NEVER commit; public key is in `tauri.conf.json`). Bump version in `tauri.conf.json` and `Cargo.toml`, `npm run tauri -- build`, upload setup exe, `.sig` and `latest.json` to a GitHub Release. Installer is unsigned for Authenticode (SmartScreen warns).
+- Frontend production build and Tauri release build passed.
+- Three Node workspace/sandbox tests passed; Python MCP test passed six tool cases.
+- Nine focused Rust tests passed across desktop, telemetry, documents and revision
+  hooks. The opt-in OfficeCLI integration test also passed for DOCX/XLSX/PPTX.
+- Final CDP group: **11/11 passed**, covering Office/text/revision previews,
+  recovery/no-overwrite behavior, interactive controls/follow-up review, external
+  link dispatch, TPS persistence, automatic/optional folders, window controls,
+  delayed attachment/navigation races and model start/stop in Settings.
+- Lifecycle T-L1/T-L2/T-L3 passed on a preceding build: clean close, forced host
+  termination, engine failure/restart and conversation preservation. Earlier in
+  this work T-L1..T-L6 and T-S3/T-S5/T-S6 also passed with the stand-in.
+- Quiet-browser regression used real vendored Playwright/Chromium with isolated
+  profiles: open about:blank, snapshot, close; both spawns had windowsHide enabled,
+  and no new visible console window appeared. No browser process remained.
+- Deployment hashes matched; Git was clean and `origin/main` matched `43cde3b`
+  after the implementation push, before this handoff-only update.
 
-## Verified in the real app (this build)
-Chat, approvals, memory, skills loading, web, browser, attachments (xlsx, pptx, docx), charts, tables, diagrams, artifact iframe, plan view, rollback copy and db backup written on first run. Security tests: T-S1 (injection in an attached file was reported, not obeyed), T-S2 (write to `C:\Windows` refused, file absent), T-S3 (single localhost listener, unauthenticated `/v1/models` returns 401), T-S4 (artifact `fetch` and `window.parent` both blocked), logs contain no key/Authorization text.
+The CDP harness uses loopback port 9333, isolated app data and synthetic fixtures;
+it refuses to start if LocalWORK is already open. It needs no native PC control.
+`-Only T-W1` includes T-W1..T-W5 and T-D1..T-D6. Link dispatch/model-send boundaries
+are intercepted where appropriate; real Office binaries/rendering and native folder
+commands are exercised. Default inference is a lightweight Strata stand-in.
+Do not present these results as live-model output-quality evaluation. Test reports
+and screenshots are preserved under `../.e2e-runs/` with `-KeepWork`; the last full
+workspace/desktop report is `lw-e2e-7de42f61/results.json`. Never enable the debug
+port in the normal launcher.
 
-## Known gaps, untested, not built
-- **SSH live test (B8) not run**: no test server (WSL cannot start here: Hyper-V missing). Classifier is unit-tested; the Settings SSH panel was written but not exercised end to end.
-- **Rollback**: the Versions panel and exe swap are written; actually clicking "Roll back to version" with a second version was not tested (only one version exists). Restoring a db backup is manual (`backups\`); the spec's `app.db.bak-<version>` naming differs from ours (`workbench.db`, `workbench-from-<ver>-<ts>.db`).
-- T-S1 was tested with an attached file, not a fetched web page. T-S5/T-S6 only spot-checked (T-S6 not run).
-- Benchmarks B1 to B7 and B9 were not run as a suite; T-L1 to T-L7 and the 8 hour soak were not run as a suite (the model answered live document tasks in several sessions, but no long soak) (cleanup logic exists and was checked by hand earlier).
-- The Strata update apply path (`strata_update_apply`) was deliberately not run live, to avoid changing the working engine. The check step was verified.
-- Not built: pixel-level document rendering (see above), citation registry, `search_files` tool, an Activity view beyond the plan checklist, Authenticode signing.
-- The diagram layout is a simple layered layout (no crossing minimisation); charts are hand-rolled SVG (no zoom).
-- Tooling quirk: when editing regex-heavy Rust/Python with shell heredocs, backslashes can get mangled. Check for stray `\x08`; prefer a file-writing tool.
+## Remaining limitations and follow-up context
 
-## House rules
-No model identifiers in repo artifacts. Commit as the repo author with a `Co-Authored-By` trailer. Do not commit `libs`, `vendor` binaries or any key.
+- Office previews are approximate HTML; no in-app WYSIWYG Office editor or
+  pixel-perfect rendering. PDFs do not yet have an embedded preview.
+- Local-model multi-step reliability, final artifact quality and long-running
+  real-model acceptance/soak coverage remain separate from deterministic UI tests.
+- Prior review flagged lexical workspace checks and a malformed consequential
+  browser-action regex in legacy policy code. These were not repaired here;
+  inspect `policy.rs` before extending those trust boundaries.
+- The HTTP chunked-response unit test previously failed in the restricted
+  environment. Repository-wide rustfmt has pre-existing drift, including untouched
+  voice code. Do not claim the entire suite passes or bulk-format unrelated files.
+- Full live SSH administration, actual version-to-version rollback, live Strata
+  update application, installer acceptance for these changes, and an 8-hour soak
+  were not performed in this work. Older handoff claims are historical evidence,
+  not a current full acceptance pass.
+- Citation registry, dedicated `search_files` tool, broader Activity UI and
+  Authenticode signing remain outstanding. Existing diagrams/charts are basic.
+
+Keep changes scoped to the next request. Preserve pre-existing edits and consult
+relevant source before trusting documentation. No model identifiers in committed
+project artifacts; runtime model display is intentional. Never commit vendor/libs
+binaries or private keys. Use the configured repository author and a Co-Authored-By
+trailer for authorized commits. See `docs/release.md` for signing/release procedures.
