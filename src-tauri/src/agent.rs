@@ -283,7 +283,9 @@ For these kinds of task, call the load_skill tool with the skill name first and 
 }
 
 fn system_prompt(db: &Db) -> String {
-    let notes = { let c = db.lock().unwrap(); store::recent_memories(&c, 8) };
+    // Cross-chat memory is switched off: every chat starts fresh and knows nothing about the user.
+    let _ = db;
+    let notes: Vec<(i64, String)> = vec![];
     let base = format!("{SYSTEM_PROMPT}{}", skill_list());
     if notes.is_empty() {
         return base;
