@@ -2,6 +2,8 @@ mod agent;
 mod http;
 mod paths;
 mod policy;
+mod ssh;
+mod sshpolicy;
 mod store;
 mod strata;
 mod supervisor;
@@ -269,6 +271,7 @@ pub fn run() {
             set_auto_edit,
             agent_send,
             agent_stop,
+            ssh::ssh_hosts, ssh::ssh_save_host, ssh::ssh_delete_host, ssh::ssh_public_key, ssh::ssh_scan, ssh::ssh_pin,
             attach_paths,
             attach_bytes,
             agent_answer,

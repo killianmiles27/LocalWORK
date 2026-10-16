@@ -17,6 +17,64 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
+type Host = { host: string; user: string; port: number; read_ok: boolean };
+
+function SshHosts() {
+  const [hosts, setHosts] = useState<Record<string, Host>>({});
+  const [pub, setPub] = useState("");
+  const [f, setF] = useState({ name: "", host: "", user: "", port: "22", read_ok: true });
+  const [scan, setScan] = useState<{ keys: string; fingerprint: string } | null>(null);
+  const [msg, setMsg] = useState("");
+  const load = () => invoke<Record<string, Host>>("ssh_hosts").then(setHosts).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const inp = "rounded-lg border border-line bg-panel px-2 py-1 text-sm min-w-0";
+  async function check() {
+    setMsg("");
+    try { setScan(await invoke("ssh_scan", { host: f.host, port: Number(f.port) || 22 })); } catch (e) { setMsg(String(e)); }
+  }
+  async function save(pin: boolean) {
+    try {
+      if (pin && scan) await invoke("ssh_pin", { keys: scan.keys });
+      await invoke("ssh_save_host", { name: f.name, host: f.host, user: f.user, port: Number(f.port) || 22, readOk: f.read_ok });
+      setScan(null); setF({ name: "", host: "", user: "", port: "22", read_ok: true }); load();
+    } catch (e) { setMsg(String(e)); }
+  }
+  return (
+    <section>
+      <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">SSH hosts</h3>
+      {Object.keys(hosts).length === 0 && <div className="text-sm text-muted py-1">No servers yet. Add one so the assistant can look into it for you.</div>}
+      {Object.entries(hosts).map(([n, h]) => (
+        <div key={n} className="flex items-center gap-2 py-1 text-sm">
+          <span className="flex-1">{n} <span className="text-muted">{h.user}@{h.host}:{h.port}{h.read_ok ? " · reads allowed" : ""}</span></span>
+          <button className="text-muted hover:text-red-600 text-xs underline" onClick={() => invoke("ssh_delete_host", { name: n }).then(load)}>remove</button>
+        </div>
+      ))}
+      <div className="grid grid-cols-2 gap-2 mt-2">
+        <input className={inp} placeholder="Name (e.g. web1)" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        <input className={inp} placeholder="Host or IP" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} />
+        <input className={inp} placeholder="User" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} />
+        <input className={inp} placeholder="Port" value={f.port} onChange={(e) => setF({ ...f, port: e.target.value })} />
+      </div>
+      <label className="flex items-center gap-2 text-sm mt-2"><input type="checkbox" checked={f.read_ok} onChange={(e) => setF({ ...f, read_ok: e.target.checked })} /> Let the assistant run read-only commands without asking</label>
+      {!scan && <button disabled={!f.name || !f.host || !f.user} onClick={check} className="mt-2 rounded-lg bg-accent text-white px-3 py-1 text-sm disabled:opacity-40">Check server</button>}
+      {scan && (
+        <div className="mt-2 rounded-lg border border-line p-2 text-xs">
+          <div className="mb-1">Does this fingerprint match your server?</div>
+          <div className="font-mono break-all mb-2">{scan.fingerprint}</div>
+          <button onClick={() => save(true)} className="rounded-lg bg-accent text-white px-3 py-1 text-sm mr-2">Yes, trust and save</button>
+          <button onClick={() => setScan(null)} className="text-muted underline">Cancel</button>
+        </div>
+      )}
+      {msg && <div className="text-xs text-red-600 mt-1 break-all">{msg}</div>}
+      <div className="mt-2 text-xs text-muted">
+        Add this key to the server's <span className="font-mono">~/.ssh/authorized_keys</span>:
+        {pub ? <div className="font-mono break-all select-all mt-1 p-2 rounded-lg bg-panel text-ink">{pub}</div>
+          : <button className="ml-1 underline" onClick={() => invoke<string>("ssh_public_key").then(setPub).catch((e) => setMsg(String(e)))}>show key</button>}
+      </div>
+    </section>
+  );
+}
+
 export default function Settings({ status, onClose }: { status: St; onClose: () => void }) {
   const [info, setInfo] = useState<Info | null>(null);
   const [dir, setDir] = useState("");
@@ -90,6 +148,7 @@ export default function Settings({ status, onClose }: { status: St; onClose: () 
               ))}
             </ul>
           </section>
+          <SshHosts />
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">App</h3>
             <Row k="Data folder" v={dir || "–"} />
