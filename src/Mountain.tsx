@@ -1,7 +1,10 @@
 import { useEffect, useRef } from "react";
 import mountainUrl from "./assets/mountain.jpg";
 
-// Dithered-glyph mountain behind the app: nearly invisible at rest, brighter under the cursor, soft ripple on click.
+// Dithered-glyph mountain behind the app. Cheap by design:
+//  - the static picture is painted once per resize/theme change onto a base canvas (no per-frame work);
+//  - an overlay canvas only animates cursor glow and click ripples, touching just the cells near them;
+//  - the animation loop stops entirely as soon as nothing is glowing, and while the window is hidden.
 const CW = 5, CH = 7, HEX = "0123456789abcdef";
 const BAYER = (() => {
   const b4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5], q = [0, 2, 3, 1], out: number[] = [];
@@ -9,26 +12,33 @@ const BAYER = (() => {
   return out;
 })();
 const glyph = (x: number, y: number) => { const k = Math.sin((x * 12.9898 + y * 78.233) * 43758.5453); return HEX[Math.floor((k - Math.floor(k)) * 16)]; };
+const R = 85, RIPPLE_LIFE = 1.8, RIPPLE_BAND = 14, CAP = .34;
 
 export default function Mountain() {
-  const ref = useRef<HTMLCanvasElement>(null);
+  const baseRef = useRef<HTMLCanvasElement>(null);
+  const glowRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const cv = ref.current!, cx = cv.getContext("2d")!;
+    const bc = baseRef.current!, gc = glowRef.current!;
+    const bx = bc.getContext("2d")!, gx = gc.getContext("2d")!;
     const css = () => getComputedStyle(document.documentElement);
     const dark = matchMedia("(prefers-color-scheme: dark)");
     const reduce = matchMedia("(prefers-reduced-motion: reduce)");
     let W = 0, H = 0, cols = 0, rows = 0, lum = new Float32Array(0), heat = new Float32Array(0);
-    let img: ImageData | null = null, mouse: { x: number; y: number } | null = null, raf = 0, timer = 0, ink = "", base = .1;
+    let img: ImageData | null = null, mouse: { x: number; y: number } | null = null, raf = 0, timer = 0, ink = "", base = .1, font = "";
+    // bounding box (in cells) of cells that may still be glowing; empty when x0 > x1
+    let bb = { x0: 1, y0: 1, x1: 0, y1: 0 };
     const ripples: { x: number; y: number; t: number }[] = [];
 
     function build() {
-      const dpr = Math.min(2, devicePixelRatio || 1);
       W = innerWidth; H = innerHeight;
-      cv.width = W * dpr; cv.height = H * dpr; cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      for (const c of [bc, gc]) { c.width = W; c.height = H; }
       cols = Math.ceil(W / CW); rows = Math.ceil(H / CH);
       lum = new Float32Array(cols * rows); heat = new Float32Array(cols * rows);
-      ink = css().getPropertyValue("--color-mountain").trim() || "#3a47c4";
-      base = parseFloat(css().getPropertyValue("--mountain-base")) || .1;
+      bb = { x0: 1, y0: 1, x1: 0, y1: 0 };
+      const st = css();
+      ink = st.getPropertyValue("--color-mountain").trim() || "#3a47c4";
+      base = parseFloat(st.getPropertyValue("--mountain-base")) || .1;
+      font = "8px " + (st.getPropertyValue("--font-sans").trim() || "sans-serif");
       if (!img) return;
       const iw = img.width, ih = img.height, sc = Math.max(W / iw, H / ih), ox = (iw * sc - W) / 2, oy = (ih * sc - H) / 2, dk = dark.matches;
       for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
@@ -41,69 +51,98 @@ export default function Mountain() {
       const rv = Math.round(rr * CW / CH);
       for (let x = 0; x < cols; x++) { let a = 0, n = 0; for (let y = -rv; y < rows + rv; y++) { const yi = y + rv < rows ? y + rv : -1, yo = y - rv - 1; if (yi >= 0) { a += tmp[yi * cols + x]; n++; } if (yo >= 0) { a -= tmp[yo * cols + x]; n--; } if (y >= 0 && y < rows) bl[y * cols + x] = a / n; } }
       for (let i = 0; i < lum.length; i++) { const l = lum[i]; lum[i] = Math.max(0, Math.min(1, (l - .5) * 1.5 + .5 + (l - bl[i]) * 2.6)); }
+      paintBase();
+    }
+
+    // One static pass, no animation frames involved.
+    function paintBase() {
+      bx.clearRect(0, 0, W, H); bx.font = font; bx.textBaseline = "top"; bx.fillStyle = ink; bx.globalAlpha = Math.min(CAP, base);
+      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+        if (lum[y * cols + x] <= BAYER[(y & 7) * 8 + (x & 7)]) continue;
+        bx.fillText(glyph(x, y), x * CW, y * CH);
+      }
+      bx.globalAlpha = 1;
     }
 
     function frame(t: number) {
-      cx.clearRect(0, 0, W, H); cx.font = "8px " + (css().getPropertyValue("--font-sans").trim() || "sans-serif"); cx.textBaseline = "top"; cx.fillStyle = ink;
-      const R = 85;
+      raf = 0;
+      // Extend the box to cover this frame's sources, then only touch cells inside it.
+      let { x0, y0, x1, y1 } = bb;
+      const grow = (ax: number, ay: number, bx2: number, by2: number) => {
+        ax = Math.max(0, ax); ay = Math.max(0, ay); bx2 = Math.min(cols - 1, bx2); by2 = Math.min(rows - 1, by2);
+        if (x0 > x1) { x0 = ax; y0 = ay; x1 = bx2; y1 = by2; } else { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx2); y1 = Math.max(y1, by2); }
+      };
       if (mouse) {
         const cx0 = Math.floor(mouse.x / CW), cy0 = Math.floor(mouse.y / CH), rx = Math.ceil(R / CW), ry = Math.ceil(R / CH);
-        for (let y = Math.max(0, cy0 - ry); y < Math.min(rows, cy0 + ry); y++) for (let x = Math.max(0, cx0 - rx); x < Math.min(cols, cx0 + rx); x++) {
+        grow(cx0 - rx, cy0 - ry, cx0 + rx, cy0 + ry);
+        for (let y = Math.max(0, cy0 - ry); y <= Math.min(rows - 1, cy0 + ry); y++) for (let x = Math.max(0, cx0 - rx); x <= Math.min(cols - 1, cx0 + rx); x++) {
           const d = Math.hypot((x + .5) * CW - mouse.x, (y + .5) * CH - mouse.y);
-          if (d < R) { const h = 1 - d / R, i = y * cols + x; heat[i] = Math.max(heat[i], h * h * .5); }
+          if (d < R) { const h = 1 - d / R, i = y * cols + x; if (h * h * .5 > heat[i]) heat[i] = h * h * .5; }
         }
       }
       for (let i = ripples.length - 1; i >= 0; i--) {
         const p = ripples[i], age = (t - p.t) / 1000;
-        if (age > 1.8) { ripples.splice(i, 1); continue; }
-        const rad = age * 170, amp = .28 * (1 - age / 1.8);
-        for (let y = 0; y < rows; y++) {
-          const dy = (y + .5) * CH - p.y; if (Math.abs(dy) > rad + 14) continue;
-          for (let x = 0; x < cols; x++) {
-            const dx = (x + .5) * CW - p.x, w = Math.abs(Math.hypot(dx, dy) - rad);
-            if (w < 14) { const k = amp * (1 - w / 14), j = y * cols + x; if (k > heat[j]) heat[j] = k; }
+        if (age > RIPPLE_LIFE) { ripples.splice(i, 1); continue; }
+        const rad = age * 170, amp = .28 * (1 - age / RIPPLE_LIFE), ext = rad + RIPPLE_BAND;
+        const ax = Math.floor((p.x - ext) / CW), ay = Math.floor((p.y - ext) / CH), ex = Math.ceil((p.x + ext) / CW), ey = Math.ceil((p.y + ext) / CH);
+        grow(ax, ay, ex, ey);
+        for (let y = Math.max(0, ay); y <= Math.min(rows - 1, ey); y++) {
+          const dy = (y + .5) * CH - p.y;
+          for (let x = Math.max(0, ax); x <= Math.min(cols - 1, ex); x++) {
+            const w = Math.abs(Math.hypot((x + .5) * CW - p.x, dy) - rad);
+            if (w < RIPPLE_BAND) { const k = amp * (1 - w / RIPPLE_BAND), j = y * cols + x; if (k > heat[j]) heat[j] = k; }
           }
         }
       }
-      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
-        const i = y * cols + x, hv = heat[i];
-        if (hv > 0) heat[i] = hv * .92 < .01 ? 0 : hv * .92;
-        if (lum[i] <= BAYER[(y & 7) * 8 + (x & 7)]) continue;
-        cx.globalAlpha = Math.min(.34, base + hv * .45);
-        cx.fillText(glyph(x, y), x * CW, y * CH);
-      }
-      cx.globalAlpha = 1;
-      raf = requestAnimationFrame(frame);
-    }
+      if (x0 > x1) { gx.clearRect(0, 0, W, H); bb = { x0: 1, y0: 1, x1: 0, y1: 0 }; return; }
 
-    // With reduced motion: draw one still frame, no cursor or ripple animation.
-    const still = () => { cancelAnimationFrame(raf); frame(0); cancelAnimationFrame(raf); };
-    const start = () => { cancelAnimationFrame(raf); if (reduce.matches) still(); else raf = requestAnimationFrame(frame); };
-    const rebuild = () => { clearTimeout(timer); timer = window.setTimeout(() => { build(); start(); }, 120); };
+      gx.clearRect(x0 * CW, y0 * CH, (x1 - x0 + 1) * CW + CW, (y1 - y0 + 1) * CH + CH);
+      gx.font = font; gx.textBaseline = "top"; gx.fillStyle = ink;
+      let nx0 = 1e9, ny0 = 1e9, nx1 = -1, ny1 = -1;
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const i = y * cols + x, hv = heat[i];
+        if (hv <= 0) continue;
+        const nh = hv * .92 < .01 ? 0 : hv * .92; heat[i] = nh;
+        if (nh > 0) { if (x < nx0) nx0 = x; if (x > nx1) nx1 = x; if (y < ny0) ny0 = y; if (y > ny1) ny1 = y; }
+        if (lum[i] <= BAYER[(y & 7) * 8 + (x & 7)]) continue;
+        // overlay alpha chosen so base + overlay composite to the target brightness
+        const target = Math.min(CAP, base + hv * .45);
+        gx.globalAlpha = 1 - (1 - target) / (1 - Math.min(CAP, base));
+        gx.fillText(glyph(x, y), x * CW, y * CH);
+      }
+      gx.globalAlpha = 1;
+      bb = nx1 < 0 ? { x0: 1, y0: 1, x1: 0, y1: 0 } : { x0: nx0, y0: ny0, x1: nx1, y1: ny1 };
+      // Keep going only while something is glowing or the cursor / a ripple is a source.
+      if (nx1 >= 0 || mouse || ripples.length) raf = requestAnimationFrame(frame);
+    }
+    const wake = () => { if (!raf && !reduce.matches && !document.hidden && img) raf = requestAnimationFrame(frame); };
+
+    const rebuild = () => { clearTimeout(timer); timer = window.setTimeout(() => { if (img) build(); }, 150); };
 
     const im = new Image();
     im.onload = () => {
       const c = document.createElement("canvas"); c.width = im.width; c.height = im.height;
       const g = c.getContext("2d")!; g.drawImage(im, 0, 0); img = g.getImageData(0, 0, c.width, c.height);
-      build(); start();
+      build();
     };
     im.src = mountainUrl;
 
-    const onMove = (e: MouseEvent) => { if (!reduce.matches) mouse = { x: e.clientX, y: e.clientY }; };
-    const onLeave = () => { mouse = null; };
-    const onClick = (e: MouseEvent) => { if (!reduce.matches) ripples.push({ x: e.clientX, y: e.clientY, t: performance.now() }); };
-    const onVis = () => { if (document.hidden) cancelAnimationFrame(raf); else start(); };
-    addEventListener("mousemove", onMove); document.addEventListener("mouseleave", onLeave);
-    addEventListener("click", onClick); addEventListener("resize", rebuild);
-    document.addEventListener("visibilitychange", onVis);
-    dark.addEventListener("change", rebuild); reduce.addEventListener("change", rebuild);
+    const onMove = (e: MouseEvent) => { mouse = { x: e.clientX, y: e.clientY }; wake(); };
+    const onLeave = () => { mouse = null; wake(); };
+    const onClick = (e: MouseEvent) => { ripples.push({ x: e.clientX, y: e.clientY, t: performance.now() }); wake(); };
+    const onVis = () => { if (document.hidden) { cancelAnimationFrame(raf); raf = 0; mouse = null; ripples.length = 0; heat.fill(0); bb = { x0: 1, y0: 1, x1: 0, y1: 0 }; gx.clearRect(0, 0, W, H); } };
+    addEventListener("mousemove", onMove, { passive: true }); document.addEventListener("mouseleave", onLeave);
+    addEventListener("click", onClick, { passive: true }); addEventListener("resize", rebuild);
+    document.addEventListener("visibilitychange", onVis); addEventListener("blur", onLeave);
+    dark.addEventListener("change", rebuild);
     return () => {
       cancelAnimationFrame(raf); clearTimeout(timer);
       removeEventListener("mousemove", onMove); document.removeEventListener("mouseleave", onLeave);
       removeEventListener("click", onClick); removeEventListener("resize", rebuild);
-      document.removeEventListener("visibilitychange", onVis);
-      dark.removeEventListener("change", rebuild); reduce.removeEventListener("change", rebuild);
+      document.removeEventListener("visibilitychange", onVis); removeEventListener("blur", onLeave);
+      dark.removeEventListener("change", rebuild);
     };
   }, []);
-  return <canvas ref={ref} aria-hidden="true" className="fixed inset-0 w-full h-full pointer-events-none z-0" />;
+  const cls = "fixed inset-0 w-full h-full pointer-events-none z-0";
+  return <><canvas ref={baseRef} aria-hidden="true" className={cls} /><canvas ref={glowRef} aria-hidden="true" className={cls} /></>;
 }
