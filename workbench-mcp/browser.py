@@ -166,6 +166,21 @@ def _clean_snapshots():
         pass
 
 
+SNAPSHOT_MAX = 4000  # chars; the local model has a 32k-token window
+
+
+def _slim(body):
+    """Drop tokens that carry no meaning for the model: pointer markers and deep indentation."""
+    out = []
+    for line in body.splitlines():
+        n = len(line) - len(line.lstrip(" "))
+        line = " " * min(n // 2, 12) + line.lstrip(" ").replace(" [cursor=pointer]", "")
+        if line.strip() in ("- generic:", "- generic"):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def _inline_snapshots(text):
     """The CLI writes snapshots to files; return their contents inline so the model can read them."""
     def sub(m):
@@ -179,8 +194,9 @@ def _inline_snapshots(text):
                 pass
         except OSError:
             return m.group(0)
-        if len(body) > 14000:
-            body = body[:14000] + "\n[snapshot truncated]"
+        body = _slim(body)
+        if len(body) > SNAPSHOT_MAX:
+            body = body[:SNAPSHOT_MAX] + "\n[snapshot truncated; click or read a more specific element instead]"
         return "\n" + body
     return re.sub(r"- \[Snapshot\]\(([^)]+\.yml)\)", sub, text)
 

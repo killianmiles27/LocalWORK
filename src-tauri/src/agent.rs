@@ -221,6 +221,8 @@ pub fn get_or_start(
     let mut cmd = Command::new(&exe);
     cmd.args(["--json-stream", "--provider", "openai", "--base-url", &format!("http://127.0.0.1:{port}/v1")])
         .args(["--api-key", &key, "--model", &model, "--max-turns", "30", "--no-color"])
+        // Without this aionrs asks for 20k output tokens, which cannot fit (or compact) in a 32k window.
+        .args(["--max-tokens", &(strata::context_window() / 8).clamp(1024, 4096).to_string()])
         .args(["--system-prompt", &system_prompt(&db)])
         .arg("--project-dir")
         .arg(&workspace);
