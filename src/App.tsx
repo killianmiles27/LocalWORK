@@ -512,17 +512,50 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number; win
   const r = 7, c = 2 * Math.PI * r;
   const tone = pct >= 0.9 ? "text-red-500" : pct >= 0.7 ? "text-amber-500" : "text-accent";
   const k = (n: number) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n));
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const bar = tone.replace("text-", "bg-");
   return (
-    <button onClick={onCompact} disabled={busy} data-testid="context-ring"
-      title={`Context: ${k(used)} of ${k(win)} tokens used (${Math.round(pct * 100)}%). Older messages are summarized automatically at about 80%. Click to compact now.`}
-      aria-label={`Context ${Math.round(pct * 100)} percent full. Compact now`}
-      className="grid place-items-center w-7 h-7 rounded-lg hover:bg-panel disabled:opacity-50">
-      <svg width="18" height="18" viewBox="0 0 18 18" className="-rotate-90">
-        <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" className="text-line" />
-        <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={tone}
-          strokeDasharray={c} strokeDashoffset={c * (1 - pct)} />
-      </svg>
-    </button>
+    <div ref={box} className="relative">
+      <button onClick={() => setOpen((o) => !o)} data-testid="context-ring"
+        aria-label={`Context ${Math.round(pct * 100)} percent full. Show details`} aria-expanded={open}
+        className="grid place-items-center w-7 h-7 rounded-lg hover:bg-panel">
+        <svg width="18" height="18" viewBox="0 0 18 18" className="-rotate-90">
+          <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" className="text-line" />
+          <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={tone}
+            strokeDasharray={c} strokeDashoffset={c * (1 - pct)} />
+        </svg>
+      </button>
+      {open && (
+        <div data-testid="context-popover" className="absolute bottom-full right-0 mb-2 w-72 rounded-xl border border-line bg-panel shadow-lg p-4 text-sm z-20">
+          <div className="text-xs text-muted mb-2">This chat</div>
+          <div className="flex items-baseline justify-between">
+            <span className="font-medium">Context window</span>
+            <span className="text-xs text-muted">{k(used)} of {k(win)} · {Math.round(pct * 100)}%</span>
+          </div>
+          <div className="relative mt-1.5 h-1.5 rounded-full bg-line overflow-hidden">
+            <div className={`h-full rounded-full ${bar}`} style={{ width: `${pct * 100}%` }} />
+          </div>
+          <div className="relative mt-1 h-2">
+            <div className="absolute top-0 h-2 w-px bg-muted" style={{ left: "80%" }} />
+          </div>
+          <p className="text-xs text-muted">Older messages are summarized automatically at about 80% (the tick).</p>
+          <div className="my-3 border-t border-line" />
+          <button onClick={() => { setOpen(false); onCompact(); }} disabled={busy}
+            className="w-full rounded-lg border border-line px-3 py-1.5 text-left hover:bg-panel-2 disabled:opacity-50">
+            Compact now
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
