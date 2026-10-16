@@ -65,7 +65,7 @@ button:disabled { cursor: default; }
 .window-close:hover { background: #c42b1c; color: white; }
 
 /* sidebar: flat panel, collapses smoothly, rows rise in once */
-.sidebar { transition: opacity .12s; overflow: hidden; backdrop-filter: blur(28px) saturate(1.1); background: color-mix(in oklab, var(--color-panel) 72%, transparent) !important; }
+.sidebar { transition: opacity .12s; overflow: hidden; backdrop-filter: blur(10px); background: color-mix(in oklab, var(--color-panel) 78%, transparent) !important; }
 .sidebar[data-open="false"] { width: 0; opacity: 0; border-right-width: 0; pointer-events: none; }
 .chat-row { position: relative; opacity: 0; animation: rise .45s var(--ease-out-soft) forwards; animation-delay: calc(var(--i, 0) * 28ms);
   transition: background-color .2s, transform .2s; }
@@ -79,4 +79,6 @@ button:disabled { cursor: default; }
 
 
 /* Soft frosted backing so text never blends into the texture */
-.frost { backdrop-filter: blur(10px); background: color-mix(in oklab, var(--color-bg) 55%, transparent); border-radius: 14px; }
+.frost { backdrop-filter: blur(14px); background: color-mix(in oklab, var(--color-bg) 42%, transparent); border-radius: 30px;
+  --f: 26px; -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent), linear-gradient(to bottom, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent);
+  -webkit-mask-composite: source-in; mask-composite: intersect; }

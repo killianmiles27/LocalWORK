@@ -574,7 +574,7 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number; win
 function Assistant({ children }: { children: string }) {
   return (
     <div className="flex gap-3">
-      <div className="prose frost px-3 py-1.5 -mx-3 min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
+      <div className="prose frost px-8 py-6 -mx-8 -my-4 min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
     </div>
   );
 }
