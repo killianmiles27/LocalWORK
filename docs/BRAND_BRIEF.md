@@ -28,15 +28,18 @@ Audience: curious non-experts who want a capable assistant without accounts, sub
 ## Color starting point (tokens)
 | token | light | dark |
 |---|---|---|
-| bg | #f3f1ea | #101518 |
-| panel | #e8e7de | #141a1d |
-| panel-2 | #dcdcd0 | #1e272b |
-| line | #d8d7ca | #263237 |
-| ink | #1d2326 | #e8eef0 |
-| muted | #6b787b | #8a9a9f |
-| accent (glacier teal) | #0b7a75 | #5ed0c0 |
-| mountain ink | #1f6f78 | #6fcfd0 |
-Open to refining the accent and adding one warm secondary (amber/ember) for rare highlights.
+| bg | #f4f1ea | #171717 |
+| panel | #ece8de | #1c1c1c |
+| panel-2 | #e2ddd0 | #262628 |
+| line | #dedacc | #2b2b31 |
+| ink | #22212b | #ececf1 |
+| muted | #7a778a | #8d8d9a |
+| accent (indigo, keep) | #3a47c4 | #9fb0ff |
+| mountain ink | #3a47c4 | #9fb0ff |
+| ember (extra) | #d9663a | #ff9a6b |
+| sage (extra) | #3f8f6b | #7fd0a4 |
+| gold (extra) | #c9962b | #f0c36a |
+The indigo palette is liked and stays the core. Teal was tried and rejected. Propose additional supporting colors that sit with it.
 
 ## Constraints
 - Windows desktop (Tauri), offline-first; assets as SVG/PNG/ICO, no web fonts beyond bundled ones.

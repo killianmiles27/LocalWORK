@@ -3,17 +3,20 @@
 @plugin "@tailwindcss/typography";
 
 @theme {
-  --color-bg: #f3f1ea;
-  --color-panel: #e8e7de;
-  --color-panel-2: #dcdcd0;
-  --color-card: #f9f8f3;
-  --color-line: #d8d7ca;
-  --color-ink: #1d2326;
-  --color-muted: #6b787b;
-  --color-accent: #0b7a75;
-  --color-accent-dark: #086660;
+  --color-bg: #f4f1ea;
+  --color-panel: #ece8de;
+  --color-panel-2: #e2ddd0;
+  --color-card: #faf8f3;
+  --color-line: #dedacc;
+  --color-ink: #22212b;
+  --color-muted: #7a778a;
+  --color-accent: #3a47c4;
+  --color-accent-dark: #2f3aa6;
   --color-accent-fg: #ffffff;
-  --color-mountain: #1f6f78;
+  --color-mountain: #3a47c4;
+  --color-ember: #d9663a;
+  --color-sage: #3f8f6b;
+  --color-gold: #c9962b;
   --font-sans: "Manrope Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-serif: "Georgia", "Cambria", serif;
   /* compact scale: 13px body */
@@ -25,21 +28,24 @@
   --ease-out-soft: cubic-bezier(.2, .8, .2, 1);
 }
 
-:root { --mountain-base: .17; }
+:root { --mountain-base: .15; }
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #101518;
-    --color-panel: #141a1d;
-    --color-panel-2: #1e272b;
-    --color-card: #182024;
-    --color-line: #263237;
-    --color-ink: #e8eef0;
-    --color-muted: #8a9a9f;
-    --color-accent: #5ed0c0;
-    --color-accent-dark: #8ae3d5;
-    --color-accent-fg: #06201d;
-    --color-mountain: #6fcfd0;
-    --mountain-base: .24;
+    --color-bg: #171717;
+    --color-panel: #1c1c1c;
+    --color-panel-2: #262628;
+    --color-card: #202022;
+    --color-line: #2b2b31;
+    --color-ink: #ececf1;
+    --color-muted: #8d8d9a;
+    --color-accent: #9fb0ff;
+    --color-accent-dark: #b6c3ff;
+    --color-accent-fg: #14152b;
+    --color-mountain: #9fb0ff;
+    --color-ember: #ff9a6b;
+    --color-sage: #7fd0a4;
+    --color-gold: #f0c36a;
+    --mountain-base: .18;
   }
 }
 
@@ -82,3 +88,9 @@ button:disabled { cursor: default; }
 .frost { backdrop-filter: blur(3px); background: color-mix(in oklab, var(--color-bg) 14%, transparent); border-radius: 30px;
   --f: 26px; -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent), linear-gradient(to bottom, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent);
   -webkit-mask-composite: source-in; mask-composite: intersect; }
+
+/* extra colours, used sparingly alongside the indigo accent */
+::selection { background: color-mix(in oklab, var(--color-ember) 28%, transparent); }
+textarea, input { caret-color: var(--color-ember); }
+.prose a:hover { color: var(--color-ember); }
+.prose :where(strong) { color: var(--color-ink); }

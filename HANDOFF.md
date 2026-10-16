@@ -24,8 +24,9 @@ request to start implementing additional features. The current user's task sets 
 
 ## Branding (2026-10-16)
 
-Calm, flat, no gradients. Manrope, compact 13px scale in `src/index.css` `@theme`. Glacier-teal accent:
-light `#0b7a75` on `#f3f1ea`, dark `#5ed0c0` on `#101518`. `src/Mountain.tsx` paints the dithered-glyph
+Calm, flat, no gradients. Manrope, compact 13px scale in `src/index.css` `@theme`. Indigo accent (kept on purpose, user
+likes it; teal was tried and rejected): light `#3a47c4` on `#f4f1ea`, dark `#9fb0ff` on `#171717`. Extra tokens
+added beside it: ember `#d9663a`/`#ff9a6b` (selection, caret, link hover), sage and gold for status. `src/Mountain.tsx` paints the dithered-glyph
 mountain (`src/assets/mountain.jpg`, castle anchored left) once per resize/theme change onto one canvas:
 integer-hash noise and per-cell jitter avoid banding, no animation loop, no click/cursor effects.
 Message text sits on `.frost` (3px blur, 14% tint, feathered mask); the sidebar and composer use similar
