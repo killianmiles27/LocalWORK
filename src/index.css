@@ -98,3 +98,8 @@ textarea, input { caret-color: var(--color-ember); }
 /* UI chrome is not selectable; only chat messages, composer and form fields are */
 body { user-select: none; -webkit-user-select: none; cursor: default; }
 .prose, .prose *, .user-text, textarea, input, [contenteditable], pre, code { user-select: text; -webkit-user-select: text; }
+
+/* Plain mode (Settings > Scenic look off): normal solid UI, no frosted layers */
+:root[data-plain="1"] .frost { backdrop-filter: none; background: none; mask-image: none; -webkit-mask-image: none; border-radius: 0; }
+:root[data-plain="1"] .sidebar { backdrop-filter: none; background: var(--color-panel) !important; }
+:root[data-plain="1"] .composer-box { backdrop-filter: none; background: var(--color-card) !important; }

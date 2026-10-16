@@ -75,7 +75,7 @@ function SshHosts() {
   );
 }
 
-export default function Settings({ status, onClose, showTps, onShowTps }: { status: St; onClose: () => void; showTps: boolean; onShowTps: (on: boolean) => void }) {
+export default function Settings({ status, onClose, showTps, onShowTps, scenic, onScenic }: { status: St; onClose: () => void; showTps: boolean; onShowTps: (on: boolean) => void; scenic: boolean; onScenic: (on: boolean) => void }) {
   const [info, setInfo] = useState<Info | null>(null);
   const [dir, setDir] = useState("");
   const [mem, setMem] = useState<{ id: number; text: string }[]>([]);
@@ -123,6 +123,7 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
           </section>
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Speed</h3>
+            <label className="flex items-center justify-between gap-4 py-2 text-sm">Scenic look (mountain background, frosted text)<input type="checkbox" checked={scenic} onChange={e => onScenic(e.target.checked)} /></label>
             <label className="flex items-center justify-between gap-4 py-2 text-sm">Show tokens per second in composer<input type="checkbox" checked={showTps} onChange={async e => { const on = e.target.checked; onShowTps(on); try { await invoke("set_setting", { key: "show_tps", value: on ? "1" : "0" }); } catch (error) { onShowTps(!on); window.alert(String(error)); } }} /></label>
             <Row k={generating ? "Generating now" : "Last reply"} v={tps != null ? `${num(tps)} tokens/s` : "–"} />
             <Row k="Prompt reading" v={pre != null ? `${num(pre, 0)} tokens/s` : "–"} />

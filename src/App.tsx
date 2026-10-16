@@ -54,6 +54,8 @@ export default function App() {
   const [workspaceRequest, setWorkspaceRequest] = useState<{ path?: string; visual?: string; nonce: number }>();
   const [wizard, setWizard] = useState(false);
   const [showTps, setShowTps] = useState(true);
+  const [scenic, setScenic] = useState(() => { try { return localStorage.getItem("scenic") !== "off"; } catch { return true; } });
+  useEffect(() => { document.documentElement.dataset.plain = scenic ? "" : "1"; try { localStorage.setItem("scenic", scenic ? "on" : "off"); } catch { /* ignore */ } }, [scenic]);
   const [tps, setTps] = useState<number | null>(null);
   const [ctx, setCtx] = useState<{ used: number | null; window: number }>({ used: null, window: 32768 });
   const navigation = useRef(0);
@@ -321,7 +323,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
 
   return (
     <div className="flex h-full flex-col relative z-10">
-      <Mountain />
+      {scenic && <Mountain />}
       <div className="absolute right-0 top-0 z-40 flex h-10 items-center select-none">
         <button title="Minimize" aria-label="Minimize" onClick={() => getCurrentWindow().minimize()} className="window-control"><Minus size={14} /></button>
         <button title="Maximize or restore" aria-label="Maximize or restore" onClick={() => getCurrentWindow().toggleMaximize()} className="window-control"><Maximize2 size={12} /></button>
@@ -405,7 +407,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
             <div className="shrink-0 px-6 pb-4">
               <div className="mx-auto max-w-3xl">
                 {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
-                <div className="rounded-2xl border border-line bg-card/45 backdrop-blur-[3px] shadow-sm focus-within:border-accent transition-colors">
+                <div className="rounded-2xl border border-line composer-box bg-card/45 backdrop-blur-[3px] shadow-sm focus-within:border-accent transition-colors">
                   {files.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                       {files.map((f) => (
@@ -430,7 +432,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
                     </button>
                     </div>
                     <div className="flex items-center gap-1.5">
-                    {cur && ctx.used != null && <ContextRing used={ctx.used} window={ctx.window} busy={live.busy} onCompact={compact} />}
+                    {cur && <ContextRing used={ctx.used ?? 0} window={ctx.window} busy={live.busy} onCompact={compact} />}
                     {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}
                     {input.trim().length > 20 && !live.busy && (
                       <button onClick={tidy} disabled={tidying || !modelReady} title="Ask the model to turn this into a clear request"
@@ -462,7 +464,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
     {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
       </div>
     {wizard && <Wizard onDone={() => setWizard(false)} />}
-    {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} onClose={() => setShowSettings(false)} />}
+    {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} scenic={scenic} onScenic={setScenic} onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
@@ -574,7 +576,7 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number; win
 function Assistant({ children }: { children: string }) {
   return (
     <div className="flex gap-3">
-      <div className="prose frost px-8 py-6 -mx-8 -my-4 min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
+      <div className="prose frost px-8 py-3 -mx-8 min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
     </div>
   );
 }
