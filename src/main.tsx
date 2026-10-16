@@ -14,7 +14,7 @@ class Boundary extends Component<{ children: ReactNode }, { err: Error | null }>
         <div className="max-w-xl">
           <h1 className="text-lg font-semibold mb-2">Something went wrong in the interface</h1>
           <pre className="text-xs whitespace-pre-wrap bg-panel border border-line rounded-lg p-3 mb-3">{String(this.state.err.stack ?? this.state.err)}</pre>
-          <button className="rounded-lg bg-accent text-white px-4 py-2" onClick={() => location.reload()}>Reload</button>
+          <button className="rounded-lg bg-accent text-accent-fg px-4 py-2" onClick={() => location.reload()}>Reload</button>
         </div>
       </div>
     );

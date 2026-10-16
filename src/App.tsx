@@ -6,13 +6,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, FolderOpen, MessageSquare, Mic, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, FolderOpen, MessageSquare, Mic, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import Wizard from "./Wizard";
 import { useVoice } from "./voice";
 import { richFor } from "./Rich";
 import type { RichActions } from "./Rich";
 import Workspace from "./Workspace";
+import Mountain from "./Mountain";
 import type { VisualItem } from "./Workspace";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
@@ -34,6 +35,10 @@ const baseName = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ||
 export default function App() {
   const [convs, setConvs] = useState<Conv[]>([]);
   const [cur, setCur] = useState<string | null>(null);
+  const [sidebarPref, setSidebarPref] = useState(() => { try { return localStorage.getItem("sidebar") !== "closed"; } catch { return true; } });
+  const [winW, setWinW] = useState(() => innerWidth);
+  useEffect(() => { const f = () => setWinW(innerWidth); addEventListener("resize", f); return () => removeEventListener("resize", f); }, []);
+  function toggleSidebar() { setSidebarPref(v => { try { localStorage.setItem("sidebar", v ? "closed" : "open"); } catch { /* ignore */ } return !v; }); }
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [live, setLive] = useState({ text: "", thinking: "", busy: false });
   const [status, setStatus] = useState<Status>({ state: "starting", detail: "", port: 0, model: "" });
@@ -312,8 +317,11 @@ Attached (read with read_attachment): ${files.join(", ")}`
     if (typeof path === "string") { openDocument(path); setWorkspaceRefresh(n => n + 1); }
   }, [msgs, cur]);
 
+  const sidebarOpen = sidebarPref && winW >= (workspaceOpen && cur ? 1280 : 760);
+
   return (
-    <div className="flex h-full flex-col relative">
+    <div className="flex h-full flex-col relative z-10">
+      <Mountain />
       <div className="absolute right-0 top-0 z-40 flex h-10 items-center select-none">
         <button title="Minimize" aria-label="Minimize" onClick={() => getCurrentWindow().minimize()} className="window-control"><Minus size={14} /></button>
         <button title="Maximize or restore" aria-label="Maximize or restore" onClick={() => getCurrentWindow().toggleMaximize()} className="window-control"><Maximize2 size={12} /></button>
@@ -321,20 +329,22 @@ Attached (read with read_attachment): ${files.join(", ")}`
       </div>
       <div className="flex flex-1 min-h-0">
       {dragging && <div className="fixed inset-0 z-50 grid place-items-center bg-accent/10 border-2 border-dashed border-accent pointer-events-none text-accent font-medium">Drop files to attach them</div>}
-      <aside className={"w-[250px] shrink-0 bg-panel flex-col " + (workspaceOpen && cur ? "hidden xl:flex" : "flex")}>
-        <div className="p-3">
+      <aside data-open={sidebarOpen} className="sidebar w-[240px] shrink-0 bg-panel border-r border-line flex flex-col">
+        <div className="w-[240px] flex flex-col h-full">
+        <div className="p-2 flex items-center gap-1">
           <button onClick={newConv} disabled={live.busy}
-            className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-panel-2 transition-colors">
-            <SquarePen size={18} className="text-muted" />
+            className="flex-1 flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium hover:bg-panel-2 transition-colors">
+            <SquarePen size={16} className="text-muted" />
             New chat
           </button>
+          <button onClick={toggleSidebar} title="Collapse chats" aria-label="Collapse chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel-2 hover:text-ink transition-colors"><PanelLeftClose size={16} /></button>
         </div>
-        <div className="px-4 pb-1 text-xs font-medium text-muted">Recents</div>
+        <div className="px-4 pt-1 pb-1 text-xs font-medium text-muted">Recents</div>
         <div className="flex-1 overflow-auto px-2 pb-2">
           {convs.length === 0 && <div className="px-3 py-2 text-sm text-muted">No chats yet</div>}
-          {convs.map((c) => (
-            <div key={c.id} onClick={() => selectConversation(c.id)} title={c.workspace}
-              className={"group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer text-sm " + (c.id === cur ? "bg-panel-2" : "hover:bg-panel-2/60")}>
+          {convs.map((c, i) => (
+            <div key={c.id} onClick={() => selectConversation(c.id)} title={c.workspace} aria-current={c.id === cur} style={{ "--i": Math.min(i, 14) } as React.CSSProperties}
+              className={"chat-row group flex items-center gap-2 rounded-lg px-3 py-1.5 cursor-pointer " + (c.id === cur ? "bg-panel-2" : "hover:bg-panel-2/60")}>
               <MessageSquare size={14} className="shrink-0 text-muted" />
               <div className="min-w-0 flex-1">
                 <div className="truncate">{c.title}</div>
@@ -351,17 +361,19 @@ Attached (read with read_attachment): ${files.join(", ")}`
           ))}
         </div>
         <div className="px-3 py-3 flex items-center gap-3 text-sm" title={status.detail || label}>
-          <span className="grid place-items-center w-9 h-9 rounded-full bg-panel-2 shrink-0 relative">
+          <span className="grid place-items-center w-8 h-8 rounded-full bg-panel-2 shrink-0 relative">
             <span className="font-medium">L</span><span className={"absolute bottom-0 right-0 w-2.5 h-2.5 border-2 border-panel rounded-full " + dotCls} />
           </span>
           <div className="min-w-0 flex-1"><div className="truncate" title={status.model}>{status.model || "Local model"}</div><div className="text-xs text-muted">{label.replace("Model ", "")}</div></div>
           {(status.state === "stopped" || status.state === "error") && <button title="Start model" className="text-xs text-accent" onClick={() => invoke("model_start").catch(e => setErr(String(e)))}>Retry</button>}
           <button title="Settings" className="p-1 text-muted hover:text-ink" onClick={() => setShowSettings(true)}><Gear size={17} /></button>
         </div>
+        </div>
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0">
-        <header data-tauri-drag-region className={"flex items-center gap-2 pl-6 h-12 text-sm shrink-0 " + (workspaceOpen && cur ? "pr-4" : "pr-36")} >
+        <header data-tauri-drag-region className={"flex items-center gap-2 pl-3 h-11 text-sm shrink-0 " + (workspaceOpen && cur ? "pr-4" : "pr-36")} >
+          {!sidebarOpen && <button onClick={toggleSidebar} title="Show chats" aria-label="Show chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink transition-colors shrink-0"><PanelLeftOpen size={16} /></button>}
           <span className="truncate text-muted pointer-events-none">{curConv?.title}</span>
           {cur && <button onClick={() => setWorkspaceOpen(!workspaceOpen)} aria-label="Files & visuals" title="Files" aria-expanded={workspaceOpen} className="ml-auto shrink-0 inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted hover:bg-panel"><PanelRight size={16} />Files</button>}
         </header>
@@ -438,7 +450,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
                         className="grid place-items-center w-8 h-8 rounded-lg bg-ink text-bg"><Square size={12} fill="currentColor" /></button>
                     ) : (
                       <button onClick={() => send()} disabled={(!input.trim() && !files.length) || !modelReady} title={modelReady ? "Send" : "Waiting for the model"}
-                        className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-white disabled:opacity-30 hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
+                        className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-accent-fg disabled:opacity-30 hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
                     )}
                     </div>
                   </div>
@@ -608,7 +620,7 @@ function ApprovalCard({ a, answer }: { a: Approval; answer: (a: Approval, allow:
       <div className="text-xs text-muted mt-1">{a.tool} · {a.class}</div>
       <pre className="text-xs bg-card border border-line rounded-lg p-2 mt-2 max-h-40 overflow-auto whitespace-pre-wrap">{text(a.args)}</pre>
       <div className="flex flex-wrap gap-2 mt-3 text-sm">
-        <button onClick={() => answer(a, true, false)} className="rounded-lg bg-accent hover:bg-accent-dark text-white px-3 py-1.5">Allow once</button>
+        <button onClick={() => answer(a, true, false)} className="rounded-lg bg-accent hover:bg-accent-dark text-accent-fg px-3 py-1.5">Allow once</button>
         {a.can_remember && <button onClick={() => answer(a, true, true)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-accent">Allow for this chat</button>}
         <button onClick={() => answer(a, false, false)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-red-500">Deny</button>
       </div>

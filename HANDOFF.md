@@ -22,6 +22,17 @@ request to start implementing additional features. The current user's task sets 
 - No new GitHub release/installer was published for this work; `main` and the
   user's existing local installation were updated.
 
+## Branding (2026-10-16)
+
+Calm, flat, no gradients. Manrope (bundled via `@fontsource-variable/manrope`), compact 13px
+scale set in `src/index.css` `@theme`. Light bg `#f4f1ea` / accent `#3a47c4`; dark bg `#171717` /
+accent `#9fb0ff`. `src/Mountain.tsx` draws the dithered-glyph mountain (`src/assets/mountain.jpg`)
+behind everything: faint at rest, brighter under the cursor, soft ripple on click, still frame
+under reduced motion. The chats sidebar is collapsible (toggle in its header, or the icon in the
+top bar when closed), remembers the choice in localStorage and auto-collapses on narrow windows.
+No icon rail and no Chat/Work switch, on purpose. The context ring opens a details popover with
+a "Compact now" button; clicking it never compacts by itself.
+
 ## Product intent and user preferences
 
 The goal is a friendly, local alternative to Claude Cowork / ChatGPT Work:

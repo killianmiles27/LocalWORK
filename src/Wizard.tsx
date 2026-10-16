@@ -48,7 +48,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
   const gpuOk = !!hw?.gpu && (hw.gpu.vram_gib ?? 0) >= 6;
   const ramOk = (hw?.ram_gib ?? 0) >= 16;
   const diskOk = (hw?.disk_free_gib ?? 0) >= 5;
-  const btn = "rounded-lg bg-accent text-white px-4 py-1.5 text-sm disabled:opacity-40";
+  const btn = "rounded-lg bg-accent text-accent-fg px-4 py-1.5 text-sm disabled:opacity-40";
 
   return (
     <div className="fixed inset-0 z-[60] grid place-items-center bg-black/50 p-4">

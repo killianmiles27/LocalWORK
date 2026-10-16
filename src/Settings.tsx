@@ -56,12 +56,12 @@ function SshHosts() {
         <input className={inp} placeholder="Port" value={f.port} onChange={(e) => setF({ ...f, port: e.target.value })} />
       </div>
       <label className="flex items-center gap-2 text-sm mt-2"><input type="checkbox" checked={f.read_ok} onChange={(e) => setF({ ...f, read_ok: e.target.checked })} /> Let the assistant run read-only commands without asking</label>
-      {!scan && <button disabled={!f.name || !f.host || !f.user} onClick={check} className="mt-2 rounded-lg bg-accent text-white px-3 py-1 text-sm disabled:opacity-40">Check server</button>}
+      {!scan && <button disabled={!f.name || !f.host || !f.user} onClick={check} className="mt-2 rounded-lg bg-accent text-accent-fg px-3 py-1 text-sm disabled:opacity-40">Check server</button>}
       {scan && (
         <div className="mt-2 rounded-lg border border-line p-2 text-xs">
           <div className="mb-1">Does this fingerprint match your server?</div>
           <div className="font-mono break-all mb-2">{scan.fingerprint}</div>
-          <button onClick={() => save(true)} className="rounded-lg bg-accent text-white px-3 py-1 text-sm mr-2">Yes, trust and save</button>
+          <button onClick={() => save(true)} className="rounded-lg bg-accent text-accent-fg px-3 py-1 text-sm mr-2">Yes, trust and save</button>
           <button onClick={() => setScan(null)} className="text-muted underline">Cancel</button>
         </div>
       )}
@@ -218,7 +218,7 @@ function StrataUpdate() {
         <div className="mt-2 text-sm">
           {chk.behind} new change{chk.behind > 1 ? "s" : ""} available:
           <ul className="list-disc ml-5 text-xs text-muted my-1">{chk.changes?.map((c, i) => <li key={i}>{c}</li>)}</ul>
-          <button onClick={apply} className="rounded-lg bg-accent text-white px-3 py-1 text-sm">Update and restart the model</button>
+          <button onClick={apply} className="rounded-lg bg-accent text-accent-fg px-3 py-1 text-sm">Update and restart the model</button>
         </div>
       )}
       {res && (
