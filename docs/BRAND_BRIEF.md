@@ -21,7 +21,7 @@ Audience: curious non-experts who want a capable assistant without accounts, sub
 - A dithered-glyph mountain (hex characters 0-9 a-f as grain) painted behind everything: a castle on the left under an Alpine ridge, faint but legible, drawn once, no animation loop.
 - Text sits on only a whisper of frosted backing (about 3px blur, 14% tint), feathered and rounded, so the mountain shows through.
 - Compact, quiet type scale (13px body), Manrope.
-- Delight, not noise: a very slight wave through message text as the cursor moves; instant, lag-free sidebar collapse.
+- Delight, not noise: instant, lag-free sidebar collapse; no cursor or click effects (a text wave was tried and rejected).
 - No icon rail, no Chat/Work switch. A collapsible chats sidebar only.
 - Performance is part of the brand: nothing that burns CPU/GPU at rest.
 

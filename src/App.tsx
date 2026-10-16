@@ -14,7 +14,6 @@ import { richFor } from "./Rich";
 import type { RichActions } from "./Rich";
 import Workspace from "./Workspace";
 import Mountain from "./Mountain";
-import { startTextWave } from "./textWave";
 import type { VisualItem } from "./Workspace";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
@@ -39,7 +38,6 @@ export default function App() {
   const [sidebarPref, setSidebarPref] = useState(() => { try { return localStorage.getItem("sidebar") !== "closed"; } catch { return true; } });
   const [winW, setWinW] = useState(() => innerWidth);
   useEffect(() => { const f = () => setWinW(innerWidth); addEventListener("resize", f); return () => removeEventListener("resize", f); }, []);
-  useEffect(() => startTextWave(), []);
   function toggleSidebar() { setSidebarPref(v => { try { localStorage.setItem("sidebar", v ? "closed" : "open"); } catch { /* ignore */ } return !v; }); }
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [live, setLive] = useState({ text: "", thinking: "", busy: false });

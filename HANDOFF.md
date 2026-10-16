@@ -30,8 +30,7 @@ added beside it: ember `#d9663a`/`#ff9a6b` (selection, caret, link hover), sage 
 mountain (`src/assets/mountain.jpg`, castle anchored left) once per resize/theme change onto one canvas:
 integer-hash noise and per-cell jitter avoid banding, no animation loop, no click/cursor effects.
 Message text sits on `.frost` (3px blur, 14% tint, feathered mask); the sidebar and composer use similar
-light backing. `src/textWave.ts` adds a very slight wave to message text while the pointer moves (rAF only
-while moving, off under reduced motion). The chats sidebar collapses instantly and remembers its state;
+light backing. The chats sidebar collapses instantly and remembers its state;
 no rail, no Chat/Work switch. Cross-chat memory injection is disabled in `agent.rs` on purpose.
 Rebrand brief for Claude Design: `docs/BRAND_BRIEF.md`.
 
