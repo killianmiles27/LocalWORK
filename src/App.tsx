@@ -586,7 +586,7 @@ function Row({ m, actions }: { m: Msg; actions?: RichActions }) {
   if (m.role === "user")
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-2xl bg-panel-2 px-4 py-2.5 whitespace-pre-wrap break-words">{text(b.text)}</div>
+        <div className="max-w-[80%] user-text rounded-2xl bg-panel-2 px-4 py-2.5 whitespace-pre-wrap break-words">{text(b.text)}</div>
       </div>
     );
   if (m.role === "assistant") return <Assistant>{text(b.text)}</Assistant>;

@@ -94,3 +94,7 @@ button:disabled { cursor: default; }
 textarea, input { caret-color: var(--color-ember); }
 .prose a:hover { color: var(--color-ember); }
 .prose :where(strong) { color: var(--color-ink); }
+
+/* UI chrome is not selectable; only chat messages, composer and form fields are */
+body { user-select: none; -webkit-user-select: none; cursor: default; }
+.prose, .prose *, .user-text, textarea, input, [contenteditable], pre, code { user-select: text; -webkit-user-select: text; }
