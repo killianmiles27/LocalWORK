@@ -141,13 +141,15 @@ function Set-Settings($cfgPath) {
 }
 
 function Start-App {
-  $saved = @{ L = $env:LOCALAPPDATA; W = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS; K = $env:E2E_KEY_OUT }
+  $saved = @{ L = $env:LOCALAPPDATA; W = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS; U = $env:WEBVIEW2_USER_DATA_FOLDER; K = $env:E2E_KEY_OUT }
   $env:LOCALAPPDATA = $script:DataRoot
+  # Isolate WebView cookies/localStorage as well as the app's SQLite/settings.
+  $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $script:DataRoot 'WebView2'
   $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$cdpPort --remote-allow-origins=*"
   $script:KeyFile = Join-Path $script:DataRoot 'key.txt'
   $env:E2E_KEY_OUT = $script:KeyFile
   try { return Start-Process -FilePath $script:ExePath -PassThru } finally {
-    $env:LOCALAPPDATA = $saved.L; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $saved.W; $env:E2E_KEY_OUT = $saved.K
+    $env:LOCALAPPDATA = $saved.L; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $saved.W; $env:WEBVIEW2_USER_DATA_FOLDER = $saved.U; $env:E2E_KEY_OUT = $saved.K
   }
 }
 
@@ -338,8 +340,14 @@ Repeat-Test 'T-L3' 'Kill Strata: stopped state, Restart works, conversation inta
 Repeat-Test 'T-L4' 'Launch twice quickly: one window, one Strata' {
   $a1 = Start-App
   $a2 = Start-App
-  if (-not $a2.WaitForExit(10000)) { Stop-Process -Id $a2.Id -Force; return 'second launch did not exit' }
-  if (-not (Wait-Ready $a1)) { return 'first instance never became ready' }
+  # Windows can schedule either launch first. Verify exactly one survives, without
+  # assuming the second Start-Process call must lose the single-instance race.
+  $deadline = [Diagnostics.Stopwatch]::StartNew()
+  while (-not $a1.HasExited -and -not $a2.HasExited -and $deadline.Elapsed.TotalSeconds -lt 15) { Start-Sleep -Milliseconds 100 }
+  if (-not $a1.HasExited -and -not $a2.HasExited) { return 'both launches remained alive' }
+  if ($a1.HasExited -and $a2.HasExited) { return 'both launches exited' }
+  $primary = if ($a1.HasExited) { $a2 } else { $a1 }
+  if (-not (Wait-Ready $primary)) { return 'surviving instance never became ready' }
   Start-Sleep -Seconds 2
   $apps = App-Procs
   if ($apps.Count -ne 1) { return "expected 1 LocalWORK.exe, found $($apps.Count)" }
@@ -347,8 +355,8 @@ Repeat-Test 'T-L4' 'Launch twice quickly: one window, one Strata' {
   # venv launcher + real interpreter = 2 python processes per Strata; the stub's grandchild runs `-c`, so it is not counted.
   $roots = @($s | Where-Object { $ids = $s.ProcessId; -not ($ids -contains $_.ParentProcessId) })
   if ($roots.Count -ne 1) { return "expected 1 Strata, found $($roots.Count)" }
-  $tree = Get-Tree $a1.Id
-  [void]$a1.CloseMainWindow()
+  $tree = Get-Tree $primary.Id
+  [void]$primary.CloseMainWindow()
   $g = Wait-Gone $tree 10
   if (-not $g.Ok) { return "processes left after close: $(($g.Left | % { $_.Name + ':' + $_.ProcessId }) -join ',')" }
 }
@@ -496,6 +504,37 @@ if (Wanted 'T-W1') {
     Cleanup-All
   }
 }
+
+# ---------------------------------------------------------------- uninstall
+if ((Wanted 'T-A1') -or (Wanted 'T-A2') -or (Wanted 'T-C1') -or (($Only -contains 'T-G1') -and $RealStrata)) {
+  New-Env
+  $app = Start-App
+  try {
+    if (-not (Wait-Ready $app)) { Record 'T-A1' 'Agent regressions' 'FAIL' 'App did not become ready' }
+    else {
+      $repoRoot = Split-Path -Parent (Split-Path -Parent $here)
+      $nodeExe = Join-Path $repoRoot 'vendor\node\node.exe'
+      $drivers = @()
+      if (Wanted 'T-A1') { $drivers += 'automatic' }
+      if ((Wanted 'T-A2') -and -not $RealStrata) { $drivers += 'stop' }
+      if (Wanted 'T-C1') { $drivers += 'context' }
+      if (($Only -contains 'T-G1') -and $RealStrata) { $drivers += 'gapminder' }
+      foreach ($driver in $drivers) {
+        & $nodeExe (Join-Path $here "$driver-cdp.mjs") "http://127.0.0.1:$cdpPort" $work
+        $report = Join-Path $work "$driver-results.json"
+        if (Test-Path -LiteralPath $report) {
+          foreach ($r in (Get-Content -LiteralPath $report -Raw | ConvertFrom-Json)) { Record $r.Id $r.Test $r.Status $r.Detail }
+        } else { Record $driver 'Agent regression' 'FAIL' 'CDP driver did not produce its report' }
+      }
+    }
+  } finally {
+    $tree = Get-Tree $app.Id
+    [void]$app.CloseMainWindow()
+    [void](Wait-Gone $tree 10)
+    Cleanup-All
+  }
+}
+if (($Only -contains 'T-G1') -and -not $RealStrata) { Record 'T-G1' 'Live Gapminder assignment' 'SKIP' 'Requires -RealStrata; a stub cannot evaluate reasoning' }
 
 # ---------------------------------------------------------------- uninstall
 if ($Installer -and $didInstall -and -not $KeepInstalled -and (Wanted 'T-I2')) {

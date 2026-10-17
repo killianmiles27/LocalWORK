@@ -50,8 +50,11 @@ async fn model_telemetry(s: State<'_, App>) -> Result<Option<f64>, String> {
 }
 
 #[tauri::command]
-fn set_auto_edit(s: State<App>, id: String, on: bool) {
-    if let Some(a) = s.agents.lock().unwrap().get(&id) {
+fn set_auto_edit(s: State<App>, id: Option<String>, on: bool) {
+    store::kv_set(&s.db.lock().unwrap(), "auto_edit", if on { "1" } else { "0" });
+    let _ = id;
+    let agents = s.agents.lock().unwrap();
+    for a in agents.values() {
         a.set_auto_edit(on);
     }
 }
@@ -119,9 +122,10 @@ fn load_messages(s: State<App>, id: String) -> Vec<Value> {
 }
 
 #[tauri::command]
-fn agent_send(app: AppHandle, s: State<App>, id: String, text: String, auto_edit: bool) -> Result<(), String> {
+fn agent_send(app: AppHandle, s: State<App>, id: String, text: String) -> Result<(), String> {
     let a = agent::get_or_start(&app, &s.agents, &s.db, &s.strata, &id)?;
-    a.set_auto_edit(auto_edit);
+    let enabled = store::kv_get(&s.db.lock().unwrap(), "auto_edit").map(|v| v != "0").unwrap_or(true);
+    a.set_auto_edit(enabled);
     {
         let c = s.db.lock().unwrap();
         store::add_msg(&c, &id, "user", &json!({"text": text}));
@@ -200,8 +204,12 @@ fn context_usage(s: State<App>, id: String) -> Value {
 
 #[tauri::command]
 fn agent_stop(s: State<App>, id: String) {
-    if let Some(a) = s.agents.lock().unwrap().get(&id) {
+    let agent = s.agents.lock().unwrap().remove(&id);
+    if let Some(a) = agent {
         a.stop_turn();
+        // Upstream can stall while shutting down an MCP session after Stop.
+        // Give it a bounded graceful exit, then stop only this agent's tree.
+        a.shutdown();
     }
 }
 
@@ -294,26 +302,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
 
-    // Single-instance has decided we are the primary: now it is safe to reap leftovers and join the job.
-    let killed = supervisor::cleanup_stale(&dir);
-    if killed > 0 {
-        eprintln!("cleaned up {killed} stale process tree(s)");
-    }
-    if let Err(e) = supervisor::init_job() {
-        eprintln!("job object unavailable: {e}");
-    }
-    rollback::on_start(&dir);
-    let db = store::open(&dir).expect("open database");
-    let state = App {
-        db: Arc::new(Mutex::new(db)),
-        strata: Arc::new(Mutex::new(strata::Strata::new())),
-        agents: Arc::new(Mutex::new(HashMap::new())),
-    };
-
-    setup::init(&state.db);
     builder
-        .manage(state)
-        .setup(|app| {
+        .setup(move |app| {
+            // Plugin setup runs during build, not when .plugin() is called.
+            // Only the primary may reap processes or open shared app state.
+            let killed = supervisor::cleanup_stale(&dir);
+            if killed > 0 { eprintln!("cleaned up {killed} stale process tree(s)"); }
+            if let Err(e) = supervisor::init_job() { eprintln!("job object unavailable: {e}"); }
+            rollback::on_start(&dir);
+            let state = App {
+                db: Arc::new(Mutex::new(store::open(&dir)?)),
+                strata: Arc::new(Mutex::new(strata::Strata::new())),
+                agents: Arc::new(Mutex::new(HashMap::new())),
+            };
+            setup::init(&state.db);
+            app.manage(state);
             // Start the model as soon as the app opens; the status pill follows it.
             let handle = app.handle().clone();
             let st = app.state::<App>().strata.clone();

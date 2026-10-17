@@ -1,9 +1,9 @@
-"""Browser tool for the workbench MCP server: drives a vendored Playwright CLI + headless Chromium.
+"""Browser tool for the workbench MCP server: drives a headless, isolated Playwright browser.
 
 One named browser session per conversation, one persistent profile per project (workspace folder).
 Origin rules: loopback, link-local and private ranges are refused (checked here for navigation, and as
 blocked origins inside the browser for every request, including page sub-requests)."""
-import hashlib, ipaddress, json, os, re, shlex, socket, subprocess, sys, tempfile
+import hashlib, ipaddress, json, os, re, shlex, socket, subprocess, sys, tempfile, time
 from urllib.parse import urlparse
 
 CREATE_NO_WINDOW = 0x08000000
@@ -13,12 +13,13 @@ BROWSERS = os.environ.get("BROWSER_BROWSERS", "")
 PROFILES = os.environ.get("BROWSER_PROFILES", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".browser"))
 SESSION = re.sub(r"[^A-Za-z0-9_-]", "", os.environ.get("BROWSER_SESSION", "default"))[:24] or "default"
 TIMEOUT = 90
+_failed_evaluations = 0
 
 # Commands the model may run. No run-code, no state/cookie/route/storage commands.
 ALLOWED = {
     "open", "goto", "snapshot", "click", "dblclick", "fill", "type", "press", "hover", "select", "check", "uncheck",
     "drag", "upload", "screenshot", "eval", "go-back", "go-forward", "reload", "resize", "console", "network",
-    "tab-list", "tab-new", "tab-select", "tab-close", "close", "wait",
+    "tab-list", "tab-new", "tab-select", "tab-close", "close", "wait", "find",
 }
 NAVIGATE = {"open", "goto", "tab-new"}
 
@@ -79,12 +80,16 @@ def _headless_shell():
     raise RuntimeError("The bundled browser is not installed (vendor\\browsers is missing).")
 
 
+def _launch_options():
+    return {"executablePath": _headless_shell(), "headless": True}
+
+
 def _config(profile):
     out = os.path.join(_workspace(), ".browser")
     os.makedirs(out, exist_ok=True)
     cfg = {
         "browser": {"browserName": "chromium", "userDataDir": profile,
-                    "launchOptions": {"executablePath": _headless_shell(), "headless": True}},
+                    "launchOptions": _launch_options()},
         "network": {"blockedOrigins": BLOCKED_ORIGINS},
         "outputDir": out,
         "timeouts": {"action": 8000, "navigation": 45000},
@@ -160,7 +165,7 @@ def _clean_snapshots():
     d = os.path.join(_workspace(), ".browser")
     try:
         for f in os.listdir(d):
-            if f.endswith((".yml", ".log")):
+            if f.endswith((".yml", ".log")) and f != "snapshot-latest.yml":
                 os.remove(os.path.join(d, f))
     except OSError:
         pass
@@ -170,12 +175,14 @@ SNAPSHOT_MAX = 4000  # chars; the local model has a 32k-token window
 
 
 def _slim(body):
-    """Drop tokens that carry no meaning for the model: pointer markers and deep indentation."""
+    """Drop inert wrappers and excess indentation while retaining actionable targets."""
     out = []
     for line in body.splitlines():
         n = len(line) - len(line.lstrip(" "))
+        clickable = "[cursor=pointer]" in line
         line = " " * min(n // 2, 12) + line.lstrip(" ").replace(" [cursor=pointer]", "")
-        if line.strip() in ("- generic:", "- generic"):
+        # Unnamed clickable widgets still need a reference even without a label.
+        if not clickable and re.fullmatch(r"- generic(?: \[ref=[\w-]+\])?:?", line.strip()):
             continue
         out.append(line)
     return "\n".join(out)
@@ -188,6 +195,11 @@ def _inline_snapshots(text):
         try:
             with open(p, encoding="utf-8", errors="replace") as f:
                 body = f.read()
+            # Keep a recoverable full snapshot when the compact tool response clips
+            # controls later on a long page. The agent can read this file in ranges.
+            if len(_slim(body)) > SNAPSHOT_MAX:
+                with open(os.path.join(_workspace(), ".browser", "snapshot-latest.yml"), "w", encoding="utf-8") as full:
+                    full.write(_slim(body))
             try:
                 os.remove(p)
             except OSError:
@@ -196,12 +208,29 @@ def _inline_snapshots(text):
             return m.group(0)
         body = _slim(body)
         if len(body) > SNAPSHOT_MAX:
-            body = body[:SNAPSHOT_MAX] + "\n[snapshot truncated; click or read a more specific element instead]"
+            body = body[:SNAPSHOT_MAX] + "\n[snapshot truncated; use Read on .browser/snapshot-latest.yml in ranges for the remaining controls]"
         return "\n" + body
+    def inline(m):
+        body = _slim(m.group(1))
+        if len(body) > SNAPSHOT_MAX:
+            directory = os.path.join(_workspace(), ".browser")
+            os.makedirs(directory, exist_ok=True)
+            with open(os.path.join(directory, "snapshot-latest.yml"), "w", encoding="utf-8") as full:
+                full.write(body)
+            body = body[:SNAPSHOT_MAX] + "\n[snapshot truncated; use find <text>, snapshot <ref>, or Read .browser/snapshot-latest.yml in ranges]\n"
+        return "### Snapshot\n" + body + "\n"
+    text = re.sub(r"(?ms)^### Snapshot\n(.*?)(?=^### |\Z)", inline, text)
     return re.sub(r"- \[Snapshot\]\(([^)]+\.yml)\)", sub, text)
 
 
+def _result_text(output):
+    # The CLI echoes the submitted JavaScript after its result. Repeating long
+    # eval scripts in every tool result needlessly fills the context window.
+    return re.sub(r"(?ms)^### Ran Playwright code\n.*?(?=^### |\Z)", "", output).strip()
+
+
 def run(args):
+    global _failed_evaluations
     cmd = args.get("command")
     rest = args.get("args") or []
     if isinstance(rest, str):
@@ -230,9 +259,36 @@ def run(args):
             return "Browser is open."
     else:
         _ensure_open()
+    if cmd == "wait":
+        # playwright-cli has no wait command. Keep the advertised tool contract
+        # bounded and return fresh state after scripts/animations have advanced.
+        try:
+            seconds = float(rest[0]) if rest else 1.0
+        except ValueError:
+            raise ValueError("wait expects seconds between 0 and 30") from None
+        if not 0 <= seconds <= 30:
+            raise ValueError("wait expects seconds between 0 and 30")
+        time.sleep(seconds)
+        cmd, rest = "snapshot", []
     rc, out = _run([cmd, *rest])
-    out = _inline_snapshots(out).strip()
+    out = _result_text(_inline_snapshots(out))
     _clean_snapshots()
+    # The CLI sometimes reports a page evaluation failure with process exit 0.
+    # Surface it as a failed MCP tool, retaining the full trace outside context.
+    error = re.search(r"(?m)^### Error\s*\n(.+)", out)
+    if rc != 0 or error:
+        if cmd == "eval":
+            _failed_evaluations += 1
+        directory = os.path.join(_workspace(), ".browser")
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "last-error.txt"), "w", encoding="utf-8") as full:
+            full.write(out)
+        detail = error.group(1).strip() if error else out[-1000:].strip()
+        hint = ""
+        if cmd == "eval" and _failed_evaluations >= 2:
+            hint = " Repeated evaluation failures: change approach. Use snapshot/find and labelled page controls instead of guessing more internal properties."
+        raise RuntimeError((detail[:1000] or f"browser exited {rc}") + hint + " Full details: .browser/last-error.txt")
+    _failed_evaluations = 0
     if cmd in ("goto", "click", "dblclick", "press", "go-back", "go-forward", "reload", "tab-select", "tab-new"):
         # A redirect can land somewhere private; the in-browser block stops its requests, but say so clearly.
         m = re.search(r"Page URL: (\S+)", out)
@@ -242,9 +298,7 @@ def run(args):
             except ValueError as e:
                 _run(["goto", "about:blank"])
                 raise ValueError(str(e) + " The page was closed.")
-    if rc != 0:
-        raise RuntimeError(out[-3000:] or f"browser exited {rc}")
-    return out[-24000:] or "OK"
+    return (out[:24000] + "\n[output truncated]" if len(out) > 24000 else out) or "OK"
 
 
 def shutdown():

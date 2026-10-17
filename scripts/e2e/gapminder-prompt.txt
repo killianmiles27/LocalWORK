@@ -1,0 +1,19 @@
+1. Select one country of your choice, and then run the Gapminder animation from 1800 to the present day. Use the same parameters as in the video (Life Expectancy and Income on the axes, Population for the size of the bubbles). You shouldn't have to change anything other than selecting a country.
+
+2. At the end of the animation, take a screenshot of the final frame. The image should show the full trajectory (a trail of bubbles across time).
+
+3. Write a data story of your selected country in no more than one page (two to three paragraphs). Drawing on insights from this week's resources, describe the overall trajectory of the country's development, noting that patterns may change across different time periods. Also identify any major disruptions or shifts in the trend, and explain whether these changes can be linked to specific historical events (such as wars, economic crises, or policy changes) and how these events could have shaped them.
+
+4. Organize your assignment in the following order: title page, data story (two to three paragraphs), and figure. Insert your screenshot at the end of your document as a figure, including a figure number, caption, and proper APA citation.
+
+5. Add your screenshot at the end and submit your paper after proofreading and editing.
+
+6. Cite and reference your source(s) in APA format (APA Style).
+
+Please submit a written assignment of 250-500 words. Please support your arguments with examples and references to the readings and ensure your submission follows APA formatting.
+
+Your paper will automatically be evaluated through Turnitin when you submit your assignment in this activity. Turnitin is a service that checks your work for improper citation or potential plagiarism by comparing it against a database of web pages, student papers, and articles from academic books and publications. Ensure that your work is entirely your own and that you have not plagiarized any material. Additionally, refer to the Academic Resources for Writing and Communication page in this course for information about the Turnitin Draft Coach service.
+
+Save your assignment using a naming convention that includes your first and last name and the activity number (or description). Do not add punctuation or special characters.
+
+https://www.gapminder.org/tools/#$chart-type=bubbles&url=v1

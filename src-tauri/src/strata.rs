@@ -87,7 +87,9 @@ pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
     let mut cmd = Command::new(&python);
     cmd.arg("-u")
         .arg(&server)
-        .args(["--engine", "strata", "--config", &cfg, "--host", "127.0.0.1", "--port", &port.to_string()])
+        // aionrs compaction has a separate 20k output cap, independent of --max-tokens.
+        // Fit that cap to remaining space; Strata still rejects an oversized input.
+        .args(["--engine", "strata", "--config", &cfg, "--host", "127.0.0.1", "--port", &port.to_string(), "--fit-max-tokens"])
         .current_dir(&root)
         .env("STRATA_API_KEY", &key)
         .env("PYTHONUNBUFFERED", "1")

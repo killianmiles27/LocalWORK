@@ -28,7 +28,7 @@ os.environ["BROWSER_SESSION"] = "quiet-test-" + uuid.uuid4().hex[:12]
 user32 = ctypes.windll.user32
 
 
-def visible_console_windows():
+def visible_windows(class_name):
     found = set()
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -37,7 +37,7 @@ def visible_console_windows():
             return True
         cls = ctypes.create_unicode_buffer(128)
         user32.GetClassNameW(hwnd, cls, len(cls))
-        if cls.value != "ConsoleWindowClass":
+        if cls.value != class_name:
             return True
         found.add(int(hwnd))
         return True
@@ -56,13 +56,16 @@ def main():
     import browser
 
     stop_monitor = threading.Event()
-    baseline_consoles = visible_console_windows()
+    baseline_consoles = visible_windows("ConsoleWindowClass")
+    baseline_browsers = visible_windows("Chrome_WidgetWin_1")
     new_consoles = set()
+    new_browsers = set()
     records = []
 
     def monitor():
         while not stop_monitor.is_set():
-            new_consoles.update(visible_console_windows() - set(baseline_consoles))
+            new_consoles.update(visible_windows("ConsoleWindowClass") - baseline_consoles)
+            new_browsers.update(visible_windows("Chrome_WidgetWin_1") - baseline_browsers)
             stop_monitor.wait(0.01)
 
     monitor_thread = threading.Thread(target=monitor, daemon=True)
@@ -73,10 +76,14 @@ def main():
         opened = browser.run({"command": "open"})
         if "opened" not in opened.lower() and "open" not in opened.lower():
             raise RuntimeError(f"Browser did not report a successful open: {opened}")
+        if visible_windows("Chrome_WidgetWin_1") - baseline_browsers:
+            raise RuntimeError("The background browser showed a visible window")
         snapshot = browser.run({"command": "snapshot"})
         if "about:blank" not in snapshot and "Page" not in snapshot:
             raise RuntimeError(f"Unexpected about:blank snapshot output: {snapshot}")
         browser.run({"command": "close"})
+        if visible_windows("Chrome_WidgetWin_1") - baseline_browsers:
+            raise RuntimeError("The isolated browser window remained visible after close")
         records = [json.loads(line) for line in spawn_log.read_text(encoding="utf-8").splitlines()]
         browser_spawns = [r for r in records if pathlib.Path(r["command"]).name.lower() == "chrome-headless-shell.exe"]
         if not records or any(not r["windowsHide"] for r in records):
@@ -99,7 +106,9 @@ def main():
 
     if new_consoles:
         raise RuntimeError(f"New visible console windows appeared during browser launch: {sorted(new_consoles)}")
-    print("PASS: headless browser opened about:blank, returned a snapshot, closed, and showed no new console window")
+    if new_browsers:
+        raise RuntimeError(f"New visible browser windows appeared: {sorted(new_browsers)}")
+    print("PASS: headless browser opened about:blank, returned a snapshot, closed, and showed no browser or console window")
     print(f"PASS: {len(records)} Playwright child spawns set windowsHide, including Chromium")
 
 

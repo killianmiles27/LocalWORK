@@ -13,7 +13,6 @@ import { useVoice } from "./voice";
 import { richFor } from "./Rich";
 import type { RichActions } from "./Rich";
 import Workspace from "./Workspace";
-import Mountain from "./Mountain";
 import type { VisualItem } from "./Workspace";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
@@ -44,7 +43,8 @@ export default function App() {
   const [status, setStatus] = useState<Status>({ state: "starting", detail: "", port: 0, model: "" });
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [input, setInput] = useState("");
-  const [autoEdit, setAutoEdit] = useState(false);
+  const [autoEdit, setAutoEdit] = useState(true);
+  const autoEditInteracted = useRef(false);
   const [err, setErr] = useState("");
   const [files, setFiles] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -54,8 +54,6 @@ export default function App() {
   const [workspaceRequest, setWorkspaceRequest] = useState<{ path?: string; visual?: string; nonce: number }>();
   const [wizard, setWizard] = useState(false);
   const [showTps, setShowTps] = useState(true);
-  const [scenic, setScenic] = useState(() => { try { return localStorage.getItem("scenic") !== "off"; } catch { return true; } });
-  useEffect(() => { document.documentElement.dataset.plain = scenic ? "" : "1"; try { localStorage.setItem("scenic", scenic ? "on" : "off"); } catch { /* ignore */ } }, [scenic]);
   const [tps, setTps] = useState<number | null>(null);
   const [ctx, setCtx] = useState<{ used: number | null; window: number }>({ used: null, window: 32768 });
   const navigation = useRef(0);
@@ -86,6 +84,7 @@ export default function App() {
 
   useEffect(() => {
     refreshConvs();
+    invoke<string | null>("get_setting", { key: "auto_edit" }).then(v => { if (!autoEditInteracted.current) setAutoEdit(v !== "0"); }).catch(() => {});
     invoke<string | null>("get_setting", { key: "show_tps" }).then(v => setShowTps(v !== "0")).catch(() => {});
     invoke<string | null>("get_setting", { key: "wizard_done" }).then((v) => { if (!v) setWizard(true); }).catch(() => {});
     invoke<string | null>("get_setting", { key: "projects_folder" }).then((v) => { if (v) setProjDir(v); }).catch(() => {});
@@ -102,9 +101,11 @@ export default function App() {
           case "tool_request": case "tool_running": case "tool_result": case "tool_cancelled":
             setLive((l) => ({ ...l, busy: true, text: "", thinking: "" })); reload(conv); break;
           case "stream_end": case "error": case "agent_exit":
+            setApprovals(a => a.filter(pending => pending.conv !== conv));
             setWorkspaceRefresh(n => n + 1);
             setLive({ text: "", thinking: "", busy: false }); reload(conv); refreshConvs(); refreshCtx(conv); break;
-          case "info": setTimeout(() => refreshCtx(conv), 400); break;
+          case "context_usage": setCtx({ used: ev.used, window: ev.window }); break;
+          case "info": refreshCtx(conv); break;
           case "title": refreshConvs(); break;
         }
       }),
@@ -173,8 +174,9 @@ export default function App() {
   }
   function toggleEdits() {
     const next = !autoEdit;
+    autoEditInteracted.current = true;
     setAutoEdit(next);
-    if (cur) invoke("set_auto_edit", { id: cur, on: next }).catch(() => {});
+    invoke("set_auto_edit", { id: cur, on: next }).catch(() => setAutoEdit(!next));
   }
 
   useEffect(() => {
@@ -273,7 +275,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
       const id = await ensureConversation();
       if (epoch !== navigation.current) return;
       setFiles([]); setInput("");
-      await invoke("agent_send", { id, text: body, autoEdit }); await reload(id); refreshConvs();
+      await invoke("agent_send", { id, text: body }); await reload(id); refreshConvs();
     } catch (e) { if (epoch === navigation.current) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); } }
   }
   async function compact() {
@@ -323,7 +325,6 @@ Attached (read with read_attachment): ${files.join(", ")}`
 
   return (
     <div className="flex h-full flex-col relative z-10">
-      {scenic && <Mountain />}
       <div className="absolute right-0 top-0 z-40 flex h-10 items-center select-none">
         <button title="Minimize" aria-label="Minimize" onClick={() => getCurrentWindow().minimize()} className="window-control"><Minus size={14} /></button>
         <button title="Maximize or restore" aria-label="Maximize or restore" onClick={() => getCurrentWindow().toggleMaximize()} className="window-control"><Maximize2 size={12} /></button>
@@ -407,7 +408,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
             <div className="shrink-0 px-6 pb-4">
               <div className="mx-auto max-w-3xl">
                 {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
-                <div className="rounded-2xl border border-line composer-box bg-card/45 backdrop-blur-[3px] shadow-sm focus-within:border-accent transition-colors">
+                <div className="rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
                   {files.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                       {files.map((f) => (
@@ -427,12 +428,12 @@ Attached (read with read_attachment): ${files.join(", ")}`
                     <button onClick={pickFiles} title="Attach files" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel"><Paperclip size={17} /></button>
                     <button onClick={chooseFolder} disabled={live.busy} title="Start a chat in a folder" aria-label="Start a chat in a folder" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel disabled:opacity-30"><FolderOpen size={17} /></button>
                     {curConv && <button onClick={() => invoke("open_workspace", { id: cur }) .catch(e => setErr(String(e)))} title={curConv.workspace} className="text-xs text-muted truncate max-w-36 hover:text-ink">{baseName(curConv.workspace) === curConv.id ? "Outputs" : baseName(curConv.workspace)}</button>}
-                    <button onClick={toggleEdits} title={autoEdit ? "Edits allowed in this folder" : "Ask before editing"} aria-label={autoEdit ? "Edits allowed in folder" : "Ask before editing"} aria-pressed={autoEdit} className={"p-2 rounded-lg hover:bg-panel " + (autoEdit ? "text-accent" : "text-muted")}>
+                    <button onClick={toggleEdits} title={autoEdit ? "Automatic mode on" : "Automatic mode off"} aria-label={autoEdit ? "Automatic mode on" : "Automatic mode off"} aria-pressed={autoEdit} className={"p-2 rounded-lg hover:bg-panel " + (autoEdit ? "text-accent" : "text-muted")}>
                       {autoEdit ? <Check size={15} /> : <ShieldAlert size={15} />}
                     </button>
                     </div>
                     <div className="flex items-center gap-1.5">
-                    {cur && <ContextRing used={ctx.used ?? 0} window={ctx.window} busy={live.busy} onCompact={compact} />}
+                    {cur && <ContextRing used={ctx.used} window={ctx.window} busy={live.busy} onCompact={compact} />}
                     {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}
                     {input.trim().length > 20 && !live.busy && (
                       <button onClick={tidy} disabled={tidying || !modelReady} title="Ask the model to turn this into a clear request"
@@ -464,7 +465,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
     {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
       </div>
     {wizard && <Wizard onDone={() => setWizard(false)} />}
-    {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} scenic={scenic} onScenic={setScenic} onClose={() => setShowSettings(false)} />}
+    {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
@@ -521,8 +522,9 @@ function ToolGroup({ items }: { items: Msg[] }) {
   );
 }
 
-function ContextRing({ used, window: win, busy, onCompact }: { used: number; window: number; busy: boolean; onCompact: () => void }) {
-  const pct = Math.max(0, Math.min(1, used / win));
+function ContextRing({ used, window: win, busy, onCompact }: { used: number | null; window: number; busy: boolean; onCompact: () => void }) {
+  const known = used !== null && win > 0;
+  const pct = known ? Math.max(0, Math.min(1, used / win)) : 0;
   const r = 7, c = 2 * Math.PI * r;
   const tone = pct >= 0.9 ? "text-red-500" : pct >= 0.7 ? "text-amber-500" : "text-accent";
   const k = (n: number) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n));
@@ -540,12 +542,12 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number; win
   return (
     <div ref={box} className="relative">
       <button onClick={() => setOpen((o) => !o)} data-testid="context-ring"
-        aria-label={`Context ${Math.round(pct * 100)} percent full. Show details`} aria-expanded={open}
+        aria-label={known ? `Context approximately ${Math.round(pct * 100)} percent full. Show details` : "Context usage unavailable. Show details"} aria-expanded={open}
         className="grid place-items-center w-7 h-7 rounded-lg hover:bg-panel">
         <svg width="18" height="18" viewBox="0 0 18 18" className="-rotate-90">
           <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" className="text-line" />
-          <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={tone}
-            strokeDasharray={c} strokeDashoffset={c * (1 - pct)} />
+          {known && <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={tone}
+            strokeDasharray={c} strokeDashoffset={c * (1 - pct)} />}
         </svg>
       </button>
       {open && (
@@ -553,7 +555,7 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number; win
           <div className="text-xs text-muted mb-2">This chat</div>
           <div className="flex items-baseline justify-between">
             <span className="font-medium">Context window</span>
-            <span className="text-xs text-muted">{k(used)} of {k(win)} · {Math.round(pct * 100)}%</span>
+            <span className="text-xs text-muted">{known ? `~${k(used ?? 0)} of ${k(win)} (${Math.round(pct * 100)}%)` : "Not measured yet"}</span>
           </div>
           <div className="relative mt-1.5 h-1.5 rounded-full bg-line overflow-hidden">
             <div className={`h-full rounded-full ${bar}`} style={{ width: `${pct * 100}%` }} />
@@ -561,7 +563,7 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number; win
           <div className="relative mt-1 h-2">
             <div className="absolute top-0 h-2 w-px bg-muted" style={{ left: "80%" }} />
           </div>
-          <p className="text-xs text-muted">Older messages are summarized automatically at about 80% (the tick).</p>
+          <p className="text-xs text-muted">Older messages are summarized automatically at about 80% (the tick). {busy ? "Usage updates when the current turn finishes." : "Usage is estimated by the agent."}</p>
           <div className="my-3 border-t border-line" />
           <button onClick={() => { setOpen(false); onCompact(); }} disabled={busy}
             className="w-full rounded-lg border border-line px-3 py-1.5 text-left hover:bg-panel-2 disabled:opacity-50">
@@ -576,7 +578,7 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number; win
 function Assistant({ children }: { children: string }) {
   return (
     <div className="flex gap-3">
-      <div className="prose frost px-8 py-3 -mx-8 min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
+      <div className="prose py-3 min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
     </div>
   );
 }

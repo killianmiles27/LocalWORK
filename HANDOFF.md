@@ -1,38 +1,84 @@
 # LocalWORK handoff
 
-Updated 2026-10-16. Read this first, then the relevant sections of
+Updated 2026-10-17. Read this first, then the relevant sections of
 [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md). This is project context, not a
 request to start implementing additional features. The current user's task sets scope.
 
 ## Current baseline and locations
 
-- Shipped implementation: `43cde3b` on `main`, pushed to
-  https://github.com/killianmiles27/LocalWORK.
+- Repository baseline at the start of this bug-fix pass: `18c928a` on `main`.
+  The current fixes are local uncommitted changes; no automatic GitHub push.
+  Remote: https://github.com/killianmiles27/LocalWORK.
 - Source repository: `C:\Random\Working Folder\LocalWORK\app`.
   The surrounding folder also holds Strata and local test/deployment artifacts;
   those are outside Git. Do not mistake the parent folder for the repo root.
 - Installed app: `C:\Random\LocalWORK\LocalWORK.exe`.
   Edit source in the repo, then build and deploy. Do not maintain separate product
   changes in the installation directory.
-- The installed executable matched the tested release build by SHA256. The last
-  deployment verified 21 copied files and preserved a backup under
-  `C:\Random\Working Folder\LocalWORK\.deployment-backups\20261016-112657-25e4729e`.
+- `scripts/deploy-local.ps1` backs up replaced files beneath
+  `C:\Random\Working Folder\LocalWORK\.deployment-backups` and verifies every
+  copied file by SHA256. It includes the patched agent and manifest; model files,
+  other vendor tools and user data are preserved.
 - User data: `%LOCALAPPDATA%\Workbench` (SQLite conversations/settings, logs,
   revisions and rollback data). Preserve it during normal development/deployment.
-- No new GitHub release/installer was published for this work; `main` and the
-  user's existing local installation were updated.
+- Local deployment and GitHub updates are separate. This pass does not create a
+  commit, push, release or new installer automatically.
 
-## Branding (2026-10-16)
+## Current UI and agent reliability (2026-10-16)
 
-Calm, flat, no gradients. Manrope, compact 13px scale in `src/index.css` `@theme`. Indigo accent (kept on purpose, user
-likes it; teal was tried and rejected): light `#3a47c4` on `#f4f1ea`, dark `#9fb0ff` on `#171717`. Extra tokens
-added beside it: ember `#d9663a`/`#ff9a6b` (selection, caret, link hover), sage and gold for status. `src/Mountain.tsx` paints the dithered-glyph
-mountain (`src/assets/mountain.jpg`, castle anchored left) once per resize/theme change onto one canvas:
-integer-hash noise and per-cell jitter avoid banding, no animation loop, no click/cursor effects.
-Message text sits on `.frost` (3px blur, 14% tint, feathered mask); the sidebar and composer use similar
-light backing. The chats sidebar collapses instantly and remembers its state;
-no rail, no Chat/Work switch. Cross-chat memory injection is disabled in `agent.rs` on purpose.
-Rebrand brief for Claude Design: `docs/BRAND_BRIEF.md`.
+Flat Manrope interface with the existing indigo palette. The scenic background,
+mountain image/canvas, scenic toggle and frosted/translucent layers are removed.
+Automatic mode defaults on and persists across chats/restarts. Context usage is
+labelled as estimated, unknown values stay unknown, and internal usage requests
+cannot finish an active UI turn. Compaction runs at 80% of the actual window;
+Strata fits upstream's separate summary output reserve to the remaining space.
+The agent browser runs headlessly in its isolated profile; the visible-browser
+behavior was removed at the user's request. Screenshots and page interaction work
+in the background.
+The headless Windows lifecycle check passed with no browser/console windows;
+an unrelated TodoMVC smoke test passed fill, Enter, checkbox, filter and screenshot.
+These are browser-tool checks, not a general model reasoning benchmark.
+Website-specific agent guidance has since been removed. The Gapminder recipe is
+only a test fixture under scripts/e2e/fixtures, never an installed skill. Earlier
+model runs used the guide and are guided evaluations. General prompt/research
+guidance now emphasizes targeted evidence, stopping conditions and task notes;
+it has not yet passed a broad model-workflow benchmark.
+The agent now has a reproducible source patch for task-neutral compaction
+(800–1200-token target, 3072 output allowance, truncated summaries rejected).
+Build it with scripts/build-agent.ps1; see patches/aionrs-localwork.patch and
+vendor/manifest.json. Office checks have a single verify bundle; Word page-count
+repagination is opt-in with a 20s bound because it hung during live checks.
+Default DOCX checks completed in 1.83s. Browser errors now report failures even
+when the CLI exits zero, with full diagnostics saved outside the model response.
+See docs/PROJECT_CONTEXT.md for implementation boundaries and focused checks.
+
+## This bug-fix pass: verified results and limits
+
+- Frontend and Tauri release builds passed. Rust library suite: 18 passed,
+  one optional Office integration test excluded. Browser-output tests: 5 passed;
+  workspace/sandbox Node tests: 3 passed; Python MCP protocol check passed.
+- CDP verified Automatic persistence, context unknown/percentage/compaction
+  rendering, real agent first-send/Stop/resume, and the document workspace.
+  Lifecycle checks verified single-instance startup after the initialization fix.
+- Visible Edge/Playwright browser checks passed with isolated profiles and no
+  extra console windows. The live Gapminder recipe verified Japan's 1800–2025
+  trajectory. Browser outputs remove code echoes and limit snapshot noise.
+- Automatic policy regressions cover harmless eval labels, `className`, quoted
+  workspace paths with spaces/repeated separators, and routine shell wrappers.
+  Destructive commands, outside paths and recognized consequential actions retain
+  their checks. This remains classification, not a script sandbox.
+- The full real-model assignment run `lw-e2e-1e7bde83` had zero approval requests
+  and two successful automatic compactions. It created, checked, closed and
+  presented a DOCX with a 257-word, two-paragraph story, page numbers, one-inch
+  margins, references before the final figure, and the exact captured trajectory
+  embedded. The harness recorded FAIL at its 25-minute deadline while waiting
+  for the final chat reply. Do not relabel that run as a timed acceptance pass.
+- That output is a draft: real identity/course readings are missing, its placeholder
+  filename contains an underscore, figure text has a first-line indent, and final
+  visual pagination/citation details need review. No course submission occurred.
+  Structural validation and artifact presentation do not establish rubric quality.
+- Evidence is outside Git in `../.e2e-runs/`; the live run includes transcript,
+  screenshots, results and `gapminder-file-qa.json`. Source fixes are uncommitted.
 
 ## Product intent and user preferences
 
@@ -114,12 +160,30 @@ Do not re-add these based only on an old feature checklist.
   Playwright's daemon/browser spawns. No ignored vendor patch is required.
 
 ### Context management and chat polish
-- `agent::write_compact_config` writes a managed `<workspace>/.aionrs.toml` (marker `# managed by LocalWORK`; never overwrites a file without it) so aionrs uses the real Strata window (`strata::context_window()`, from `--max-context`) and autocompacts at about 80%. aionrs otherwise assumes 200k.
-- Composer ring (`ContextRing` in `App.tsx`) shows usage from kv `ctx:<conv>`, refreshed by sending `/context` after each turn; click or type `/compact` to compact (`agent_compact`). Commands: `agent_compact`, `context_usage`.
-- Compaction `info` events store a centered `notice` message.
-- Plain tool calls collapse into a muted "Used N tools" group (`ToolGroup`); rich tools and memory chips stay separate.
-- `agent::maybe_title` names a conversation once (kv `titled:<conv>`) with a tiny local-model call. `delete_conv` clears both kv keys.
-- Verified with a fake OpenAI server (no compaction at 5.5k tokens, compaction near 27k). Ring, grouping and titles were only compile-checked, not clicked through.
+
+- Managed compact keys are merged into project TOML with the existing toml_edit
+  library, preserving unrelated custom settings and supporting inline tables.
+- Ring measurements come from /context projections and are refreshed directly by
+  context_usage events. Usage updates after each turn; internal stream endings
+  never clear a user's active turn.
+- Strata launches with --fit-max-tokens because upstream summary requests reserve
+  20,000 output tokens independently of --max-tokens for ordinary replies.
+- Automatic mode is global KV state, defaults on, and applies to existing/new
+  agents. Recognized consequential browser actions retain checks; the classifier
+  does not provide a full script or OS sandbox.
+- Browser output excludes repeated CLI JavaScript echoes and empty chart
+  containers, handles both inline and file-backed snapshots, and keeps recoverable
+  clipped text. Targeted find and bounded wait are supported. Credential detection
+  no longer mistakes JavaScript className for SSN.
+- Startup initialization runs inside Tauri setup, after the single-instance
+  plugin, preventing a second launch from cleaning up the first model process.
+- The host serializes message commands because upstream drops messages received
+  while another command is active. Stop has a graceful shutdown allowance followed
+  by process-tree cleanup; stopped readers cannot forward stale UI/tool events.
+- Browser instructions prefer targeted controls, avoid whole-page dumps and guessed
+  URL schemas, and honor requested document styles such as APA. The per-request
+  model-round limit is 60 for multi-step work.
+- Plain tools remain grouped; title generation remains unchanged.
 
 ## Important files
 
@@ -167,7 +231,7 @@ copies the exe/MCP Python/skills/notices/handoff, then checks every hash. It lea
 vendor binaries, models, user data and Git alone. No rebuild is needed for a
 handoff-only edit. Commit/push/release only within the current user's authorization.
 
-## Verification actually performed
+## Prior document-workspace verification (before this bug-fix pass)
 
 - Frontend production build and Tauri release build passed.
 - Three Node workspace/sandbox tests passed; Python MCP test passed six tool cases.
@@ -202,11 +266,11 @@ port in the normal launcher.
   pixel-perfect rendering. PDFs do not yet have an embedded preview.
 - Local-model multi-step reliability, final artifact quality and long-running
   real-model acceptance/soak coverage remain separate from deterministic UI tests.
-- Prior review flagged lexical workspace checks and a malformed consequential
-  browser-action regex in legacy policy code. These were not repaired here;
-  inspect `policy.rs` before extending those trust boundaries.
-- The HTTP chunked-response unit test previously failed in the restricted
-  environment. Repository-wide rustfmt has pre-existing drift, including untouched
+- Path traversal normalization, protected-location boundaries and the malformed
+  consequential-action regex have been repaired. Arbitrary scripts are still not
+  sandboxed by this policy classifier.
+- The HTTP chunked-response unit test passes with normal loopback permissions.
+  Repository-wide rustfmt has pre-existing drift, including untouched
   voice code. Do not claim the entire suite passes or bulk-format unrelated files.
 - Full live SSH administration, actual version-to-version rollback, live Strata
   update application, installer acceptance for these changes, and an 8-hour soak

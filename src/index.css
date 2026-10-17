@@ -13,7 +13,6 @@
   --color-accent: #3a47c4;
   --color-accent-dark: #2f3aa6;
   --color-accent-fg: #ffffff;
-  --color-mountain: #3a47c4;
   --color-ember: #d9663a;
   --color-sage: #3f8f6b;
   --color-gold: #c9962b;
@@ -28,7 +27,6 @@
   --ease-out-soft: cubic-bezier(.2, .8, .2, 1);
 }
 
-:root { --mountain-base: .15; }
 @media (prefers-color-scheme: dark) {
   :root {
     --color-bg: #171717;
@@ -41,11 +39,9 @@
     --color-accent: #9fb0ff;
     --color-accent-dark: #b6c3ff;
     --color-accent-fg: #14152b;
-    --color-mountain: #9fb0ff;
     --color-ember: #ff9a6b;
     --color-sage: #7fd0a4;
     --color-gold: #f0c36a;
-    --mountain-base: .18;
   }
 }
 
@@ -71,7 +67,7 @@ button:disabled { cursor: default; }
 .window-close:hover { background: #c42b1c; color: white; }
 
 /* sidebar: flat panel, collapses smoothly, rows rise in once */
-.sidebar { transition: opacity .12s; overflow: hidden; backdrop-filter: blur(6px); background: color-mix(in oklab, var(--color-panel) 60%, transparent) !important; }
+.sidebar { transition: opacity .12s; overflow: hidden; }
 .sidebar[data-open="false"] { width: 0; opacity: 0; border-right-width: 0; pointer-events: none; }
 .chat-row { position: relative; opacity: 0; animation: rise .45s var(--ease-out-soft) forwards; animation-delay: calc(var(--i, 0) * 28ms);
   transition: background-color .2s, transform .2s; }
@@ -84,10 +80,6 @@ button:disabled { cursor: default; }
 }
 
 
-/* Soft frosted backing so text never blends into the texture */
-.frost { backdrop-filter: blur(3px); background: color-mix(in oklab, var(--color-bg) 14%, transparent); border-radius: 30px;
-  --f: 26px; -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent), linear-gradient(to bottom, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent);
-  -webkit-mask-composite: source-in; mask-composite: intersect; }
 
 /* extra colours, used sparingly alongside the indigo accent */
 ::selection { background: color-mix(in oklab, var(--color-ember) 28%, transparent); }
@@ -98,8 +90,3 @@ textarea, input { caret-color: var(--color-ember); }
 /* UI chrome is not selectable; only chat messages, composer and form fields are */
 body { user-select: none; -webkit-user-select: none; cursor: default; }
 .prose, .prose *, .user-text, textarea, input, [contenteditable], pre, code { user-select: text; -webkit-user-select: text; }
-
-/* Plain mode (Settings > Scenic look off): normal solid UI, no frosted layers */
-:root[data-plain="1"] .frost { backdrop-filter: none; background: none; mask-image: none; -webkit-mask-image: none; border-radius: 0; }
-:root[data-plain="1"] .sidebar { backdrop-filter: none; background: var(--color-panel) !important; }
-:root[data-plain="1"] .composer-box { backdrop-filter: none; background: var(--color-card) !important; }

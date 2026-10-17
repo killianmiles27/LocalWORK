@@ -10,7 +10,8 @@ TOOLS = [
         "name": "officecli",
         "description": "Create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files with OfficeCLI. "
                        "Pass the CLI arguments as a list, e.g. [\"create\",\"report.docx\"], [\"view\",\"report.docx\"], "
-                       "[\"validate\",\"report.xlsx\"]. Build documents fast with [\"batch\",\"file.docx\",\"--input\",\"build.json\"]. Paths are relative to the workspace. This is a tool, not a shell command.",
+                       "[\"validate\",\"report.xlsx\"]. For a combined verification in one model tool call, pass [\"verify\",\"file.docx\"] (also .xlsx/.pptx); this app wrapper runs validate, issues, outline and text views, plus ordinary Word stats. Add \"--page-count\" as a third argument only when page count is required; Word repagination is bounded to 20 seconds. This is an app wrapper, not a native OfficeCLI command. "
+                       "Build documents fast with [\"batch\",\"file.docx\",\"--input\",\"build.json\"]. Paths are relative to the workspace. This is a tool, not a shell command.",
         "inputSchema": {"type": "object", "properties": {"args": {"type": "array", "items": {"type": "string"}}},
                         "required": ["args"]},
     },
@@ -48,11 +49,11 @@ TOOLS = [
     },
     {
         "name": "browser",
-        "description": "Drive a real headless browser (Chromium) for pages that web_fetch cannot read: interactive or script-rendered sites, "
+        "description": "Drive an isolated background browser for pages that web_fetch cannot read: interactive or script-rendered sites, "
                        "forms, downloads. Pass a command and its arguments, e.g. {\"command\":\"goto\",\"args\":[\"https://example.com\"]}. "
-                       "Commands: goto <url>, snapshot (page as text with element refs like e12), click <ref>, fill <ref> <text>, type <text>, "
+                       "Commands: goto <url>, snapshot [ref] (page or element as text with refs like e12), find <text> (matching controls and context), click <ref>, fill <ref> <text>, type <text>, "
                        "press <key>, select <ref> <value>, check/uncheck <ref>, hover <ref>, screenshot, eval <js function>, go-back, reload, "
-                       "tab-list, tab-new [url], tab-select <n>, tab-close, wait, close. Every action returns a fresh snapshot. "
+                       "tab-list, tab-new [url], tab-select <n>, tab-close, wait <seconds> (0-30), close. Every action returns fresh state. "
                        "Local and private-network addresses are blocked. Login sessions persist per project.",
         "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}},
                                        "label": {"type": "string", "description": "For click/fill/type/press: the visible text or name of the element you are acting on (e.g. 'Sign in button', 'Password field'). Always provide it."}},
@@ -191,6 +192,54 @@ def call_tool(name, args):
             a = a.split()
         if not isinstance(a, list) or not a:
             raise ValueError("args must be a non-empty list of strings")
+        if a[0] == "verify":
+            if len(a) not in (2, 3):
+                raise ValueError('verify expects ["verify","file.docx"] or ["verify","file.docx","--page-count"]')
+            file_path = str(a[1])
+            extension = os.path.splitext(file_path)[1].lower()
+            if extension not in (".docx", ".xlsx", ".pptx"):
+                raise ValueError("verify supports only .docx, .xlsx, and .pptx files")
+            page_count = len(a) == 3 and a[2] == "--page-count"
+            if len(a) == 3 and (not page_count or extension != ".docx"):
+                raise ValueError('the optional "--page-count" argument is supported only for .docx verification')
+            commands = [
+                ("validate", ["validate", file_path], 120),
+                ("issues", ["view", file_path, "issues"], 120),
+                ("outline", ["view", file_path, "outline"], 120),
+                ("text", ["view", file_path, "text"], 120),
+            ]
+            if extension == ".docx":
+                stats_command = ["view", file_path, "stats"]
+                if page_count:
+                    stats_command.append("--page-count")
+                commands.append(("Word stats" if not page_count else "Word page-count stats", stats_command, 20 if page_count else 120))
+
+            sections = []
+            failed = False
+            truncated = False
+            for label, command, timeout in commands:
+                try:
+                    result = subprocess.run([OFFICECLI, *command], capture_output=True, text=True, timeout=timeout,
+                                            creationflags=CREATE_NO_WINDOW, stdin=subprocess.DEVNULL)
+                    output = (result.stdout or "") + (result.stderr or "")
+                    ok = result.returncode == 0
+                    status = "OK" if ok else f"FAILED (exit {result.returncode})"
+                except Exception as exc:
+                    output = str(exc)
+                    ok = False
+                    status = "FAILED (could not run)"
+                failed = failed or not ok
+                if len(output) > 3200:
+                    omitted = len(output) - 3200
+                    output = output[:3200] + f"\n[Output truncated; {omitted} characters omitted. Rerun this individual officecli command to fetch the rest if needed.]"
+                    truncated = True
+                sections.append(f"[{label}: {status}]\n{output or '(no output)'}")
+            summary = ("Verification bundle FAILED or INCOMPLETE; do not report it as passed."
+                       if failed else
+                       "Verification commands completed; inspect every result and compare the content with the user's requirements before reporting the document as verified.")
+            if truncated:
+                summary += " One or more command outputs were truncated; rerun the corresponding individual officecli command to fetch omitted content if needed."
+            return summary + "\n\n" + "\n\n".join(sections)
         r = subprocess.run([OFFICECLI, *map(str, a)], capture_output=True, text=True, timeout=120,
                            creationflags=CREATE_NO_WINDOW, stdin=subprocess.DEVNULL)
         out = (r.stdout or "") + (r.stderr or "")

@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub type Db = Arc<Mutex<Connection>>;
@@ -19,7 +20,8 @@ const SYSTEM_PROMPT: &str = include_str!("../system-prompt.md");
 struct Inner {
     stdin: Option<ChildStdin>,
     ready: bool,
-    queue: Vec<String>,
+    processing: bool,
+    queue: Vec<Value>,
     remembered: Vec<String>,
     pending: HashMap<String, Value>,
 }
@@ -30,6 +32,7 @@ pub struct Agent {
     child: Mutex<Option<Child>>,
     inner: Mutex<Inner>,
     auto_edit: Mutex<bool>,
+    stopping: AtomicBool,
 }
 
 pub type Agents = Arc<Mutex<HashMap<String, Arc<Agent>>>>;
@@ -38,6 +41,16 @@ fn write_line(inner: &mut Inner, v: &Value) {
     if let Some(s) = inner.stdin.as_mut() {
         let _ = writeln!(s, "{}", v);
         let _ = s.flush();
+    }
+}
+
+fn dispatch_next(inner: &mut Inner) {
+    // aionrs handles approvals/Stop while running a message, but drops additional
+    // Message commands. Serialize user turns and internal /context requests.
+    if inner.ready && !inner.processing && !inner.queue.is_empty() {
+        let message = inner.queue.remove(0);
+        inner.processing = true;
+        write_line(inner, &message);
     }
 }
 
@@ -52,7 +65,7 @@ fn mutation_path<'a>(category: &str, tool: &str, args: &'a Value) -> Option<&'a 
     if tool.to_lowercase().ends_with("officecli") {
         let argv = args.get("args")?.as_array()?;
         let command = argv.first()?.as_str()?.to_ascii_lowercase();
-        if !matches!(command.as_str(), "view" | "get" | "query" | "list" | "validate" | "info" | "help" | "inspect" | "read" | "page_count") {
+        if !matches!(command.as_str(), "view" | "get" | "query" | "list" | "validate" | "verify" | "info" | "help" | "inspect" | "read" | "page_count") {
             return argv.get(1)?.as_str();
         }
     }
@@ -84,6 +97,7 @@ mod revision_tests {
         let batch = json!({"arguments":{"args":["batch", "deck.pptx", "--input", ".build.json"]}});
         assert_eq!(mutation_path("mcp", "workbench__officecli", &batch), Some("deck.pptx"));
         assert!(mutation_path("mcp", "workbench__officecli", &json!({"args":["view","deck.pptx","html"]})).is_none());
+        assert!(mutation_path("mcp", "workbench__officecli", &json!({"args":["verify","report.docx"]})).is_none());
         assert!(mutation_path("exec", "ExecCommand", &json!({"command":"arbitrary script"})).is_none());
     }
 
@@ -111,14 +125,12 @@ impl Agent {
 
     pub fn send(&self, msg: Value) {
         let mut g = self.inner.lock().unwrap();
-        if g.ready {
-            write_line(&mut g, &msg);
-        } else {
-            g.queue.push(msg.to_string());
-        }
+        g.queue.push(msg);
+        dispatch_next(&mut g);
     }
 
     pub fn stop_turn(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         let mut g = self.inner.lock().unwrap();
         write_line(&mut g, &json!({"type": "stop"}));
     }
@@ -145,6 +157,7 @@ impl Agent {
 
     /// Close stdin (clean exit), give it a moment, then kill the tree.
     pub fn shutdown(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         {
             let mut g = self.inner.lock().unwrap();
             g.stdin = None;
@@ -168,29 +181,47 @@ impl Agent {
 
 const COMPACT_MARK: &str = "# managed by LocalWORK";
 
-/// aionrs assumes a 200k window; tell it the real one so it compacts before the model overflows.
-/// Autocompact fires at 80% of the window. A folder's own .aionrs.toml is never overwritten.
-fn write_compact_config(workspace: &std::path::Path) {
-    let window = strata::context_window();
-    let reserve = (window / 10).clamp(1024, 4096);
+/// Keep the model's real window in the project config while preserving unrelated settings.
+fn compact_config(old: &str, window: u64) -> Result<String, String> {
+    let mut config = old.parse::<toml_edit::DocumentMut>().map_err(|e| format!("Invalid .aionrs.toml: {e}"))?;
+    let reserve = (window / 10).clamp(1024, 4096).min(window / 4);
     let trigger = window * 8 / 10;
-    let buffer = window - reserve - trigger;
-    let text = format!(
-        "{COMPACT_MARK}
-[compact]
-context_window = {window}
-output_reserve = {reserve}
-autocompact_buffer = {buffer}
-emergency_buffer = {}
-",
-        (window / 20).min(1500)
-    );
-    let path = workspace.join(".aionrs.toml");
-    match std::fs::read_to_string(&path) {
-        Ok(old) if !old.starts_with(COMPACT_MARK) => {}
-        Ok(old) if old == text => {}
-        _ => { let _ = std::fs::write(&path, text); }
+    let buffer = window.saturating_sub(reserve).saturating_sub(trigger);
+    if config.get("compact").is_none() {
+        config["compact"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
+    let compact = config["compact"].as_table_like_mut().ok_or("The compact configuration must be a TOML table")?;
+    compact.insert("enabled", toml_edit::value(true));
+    for (key, value) in [("context_window", window), ("output_reserve", reserve), ("autocompact_buffer", buffer), ("autocompact_threshold_pct", 80), ("emergency_buffer", (window / 20).min(1500))] {
+        compact.insert(key, toml_edit::value(i64::try_from(value).map_err(|_| "Context limit is too large")?));
+    }
+    let text = config.to_string();
+    Ok(if old.is_empty() { format!("{COMPACT_MARK}\n{text}") } else { text })
+}
+
+fn write_compact_config(workspace: &std::path::Path) -> Result<(), String> {
+    let path = workspace.join(".aionrs.toml");
+    let old = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("Could not read context configuration {}: {e}", path.display())),
+    };
+    let text = compact_config(&old, strata::context_window())?;
+    if text != old {
+        std::fs::write(&path, text).map_err(|e| format!("Could not configure automatic context compaction {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// aionrs reports a projected percentage, not exact token counts (the counts use rounded k suffixes).
+fn context_percent(message: &str) -> Option<f64> {
+    if !message.starts_with("Context Usage") { return None; }
+    message.lines().find_map(|line| {
+        let (counts, rest) = line.trim().split_once(" tokens (")?;
+        if !counts.contains('/') { return None; }
+        let pct = rest.split('%').next()?.parse::<f64>().ok()?;
+        (pct.is_finite() && pct >= 0.0).then_some(pct)
+    })
 }
 
 pub fn get_or_start(
@@ -215,12 +246,12 @@ pub fn get_or_start(
         }
         (g.status.port, g.key.clone(), g.status.model.clone())
     };
-    write_compact_config(&workspace);
+    write_compact_config(&workspace)?;
     let vendor = paths::vendor_dir();
     let exe = vendor.join("aionrs.exe");
     let mut cmd = Command::new(&exe);
     cmd.args(["--json-stream", "--provider", "openai", "--base-url", &format!("http://127.0.0.1:{port}/v1")])
-        .args(["--api-key", &key, "--model", &model, "--max-turns", "30", "--no-color"])
+        .args(["--api-key", &key, "--model", &model, "--max-turns", "60", "--no-color"])
         // Without this aionrs asks for 20k output tokens, which cannot fit (or compact) in a 32k window.
         .args(["--max-tokens", &(strata::context_window() / 8).clamp(1024, 4096).to_string()])
         .args(["--system-prompt", &system_prompt(&db)])
@@ -251,12 +282,14 @@ pub fn get_or_start(
         workspace: workspace.clone(),
         child: Mutex::new(Some(child)),
         inner: Mutex::new(Inner { stdin: Some(stdin), ..Default::default() }),
-        auto_edit: Mutex::new(false),
+        auto_edit: Mutex::new(store::kv_get(&db.lock().unwrap(), "auto_edit").map(|v| v != "0").unwrap_or(true)),
+        stopping: AtomicBool::new(false),
     });
     agents.lock().unwrap().insert(conv.to_string(), agent.clone());
 
     let (a2, app2, db2, agents2) = (agent.clone(), app.clone(), db.clone(), agents.clone());
     std::thread::spawn(move || reader(a2, app2, db2, agents2, stdout, pid));
+    agent.send(json!({"type": "message", "msg_id": "ctx-initial", "content": "/context"}));
     Ok(agent)
 }
 
@@ -395,6 +428,8 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
+        // Do not approve buffered tools or forward stale UI events after Stop.
+        if agent.stopping.load(Ordering::SeqCst) { continue; }
         let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match ty {
             "ready" => {
@@ -408,25 +443,13 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     write_line(&mut g, &m);
                 } else {
                     g.ready = true;
-                    let q: Vec<String> = std::mem::take(&mut g.queue);
-                    for l in q {
-                        if let Some(s) = g.stdin.as_mut() {
-                            let _ = writeln!(s, "{l}");
-                            let _ = s.flush();
-                        }
-                    }
+                    dispatch_next(&mut g);
                 }
             }
             "mcp_ready" => {
                 let mut g = agent.inner.lock().unwrap();
                 g.ready = true;
-                let q: Vec<String> = std::mem::take(&mut g.queue);
-                for l in q {
-                    if let Some(s) = g.stdin.as_mut() {
-                        let _ = writeln!(s, "{l}");
-                        let _ = s.flush();
-                    }
-                }
+                dispatch_next(&mut g);
             }
             "text_delta" => text.push_str(ev.get("text").and_then(|t| t.as_str()).unwrap_or("")),
             "thinking" => thinking.push_str(ev.get("text").and_then(|t| t.as_str()).unwrap_or("")),
@@ -447,13 +470,16 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                             continue;
                         }
                         let mut g = agent.inner.lock().unwrap();
-                        write_line(&mut g, &json!({"type": "tool_approve", "call_id": call_id, "scope": "once"}));
+                        if !agent.stopping.load(Ordering::SeqCst) {
+                            write_line(&mut g, &json!({"type": "tool_approve", "call_id": call_id, "scope": "once"}));
+                        }
                     }
                     policy::Decision::Deny(why) => {
                         let mut g = agent.inner.lock().unwrap();
                         write_line(&mut g, &json!({"type": "tool_deny", "call_id": call_id, "reason": why}));
                     }
                     policy::Decision::Ask { class, reason, can_remember } => {
+                        if agent.stopping.load(Ordering::SeqCst) { continue; }
                         agent.inner.lock().unwrap().pending.insert(call_id.clone(), json!({"tool": name, "category": cat, "args": args}));
                         let _ = app.emit(
                             "approval-request",
@@ -492,19 +518,17 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                         agent.send(json!({"type": "message", "msg_id": "ctx-after-compact", "content": "/context"}));
                     }
                 } else if m.starts_with("Context Usage") {
-                    if let Some(pct) = m.lines().find_map(|l| {
-                        let a = l.find("tokens (")? + 8;
-                        l[a..].split('%').next()?.trim().parse::<f64>().ok()
-                    }) {
+                    if let Some(pct) = context_percent(m) {
                         let used = (pct / 100.0 * strata::context_window() as f64).round() as u64;
                         store::kv_set(&db.lock().unwrap(), &format!("ctx:{conv}"), &used.to_string());
+                        let _ = app.emit("agent-event", json!({"conv": conv, "ev": {"type": "context_usage", "used": used, "window": strata::context_window()}}));
                     }
                 }
             }
             "stream_end" | "error" => {
                 // stream_end usage adds up every request of a turn (and any compaction), so it overstates the
-                // window. After a real turn ask aionrs for its exact figure; /context makes no model call.
-                if ty == "stream_end" && ev.pointer("/usage/input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) > 0 {
+                // window. After a turn ask aionrs for its current projection; /context makes no model call.
+                if ty == "stream_end" && !ev["msg_id"].as_str().unwrap_or("").starts_with("ctx-") {
                     agent.send(json!({"type": "message", "msg_id": "ctx-refresh", "content": "/context"}));
                 }
                 let answered = ty == "stream_end" && !text.trim().is_empty();
@@ -516,14 +540,57 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     let c = db.lock().unwrap();
                     store::add_msg(&c, &conv, "error", &ev["error"]);
                 }
+                if ty == "stream_end" {
+                    let mut g = agent.inner.lock().unwrap();
+                    g.processing = false;
+                    dispatch_next(&mut g);
+                }
             }
             _ => {}
         }
-        let _ = app.emit("agent-event", json!({"conv": conv, "ev": ev}));
+        if !agent.stopping.load(Ordering::SeqCst) && !ev["msg_id"].as_str().unwrap_or("").starts_with("ctx-") {
+            let _ = app.emit("agent-event", json!({"conv": conv, "ev": ev}));
+        }
     }
     // Process ended (closed by us, crashed, or killed).
     flush_text(&db, &conv, &mut text, &mut thinking);
     supervisor::forget(&paths::data_dir(), pid);
-    agents.lock().unwrap().remove(&conv);
-    let _ = app.emit("agent-event", json!({"conv": conv, "ev": {"type": "agent_exit"}}));
+    let mut active = agents.lock().unwrap();
+    // A stopped process may finish draining after a replacement was started.
+    if active.get(&conv).is_none_or(|current| Arc::ptr_eq(current, &agent)) {
+        active.remove(&conv);
+        let _ = app.emit("agent-event", json!({"conv": conv, "ev": {"type": "agent_exit"}}));
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+    #[test]
+    fn context_uses_total_percentage_only() {
+        assert_eq!(context_percent("Context Usage\n  2.0k/32.8k tokens (6.0%)\n  Free space: 30.8k tokens (94.0%)"), Some(6.0));
+        assert_eq!(context_percent("Context Usage\n  Free space: 30.8k tokens (94.0%)"), None);
+        assert_eq!(context_percent("Context Usage\n  0/1 tokens (NaN%)"), None);
+    }
+    #[test]
+    fn compact_preserves_other_settings_and_is_idempotent() {
+        let old = "model = \"custom\"\n[compact]\nenabled = false\ncontext_window = 200000\ncustom_setting = 42\n[provider]\nname = \"openai\"\n";
+        let configured = compact_config(old, 4096).unwrap();
+        assert!(configured.contains("custom_setting = 42"));
+        assert!(configured.contains("[provider]\nname = \"openai\""));
+        assert!(configured.contains("autocompact_threshold_pct = 80"));
+        assert_eq!(configured.matches("context_window =").count(), 1);
+        assert_eq!(compact_config(&configured, 4096).unwrap(), configured);
+    }
+    #[test]
+    fn compact_supports_inline_and_quoted_tables_without_corrupting_config() {
+        for old in ["compact = { enabled = false, context_window = 200000, max_failures = 5 }\n", "[\"compact\"]\nmax_failures = 5\n"] {
+            let configured = compact_config(old, 32768).unwrap();
+            let parsed = configured.parse::<toml_edit::DocumentMut>().unwrap();
+            assert_eq!(parsed["compact"]["context_window"].as_integer(), Some(32768));
+            assert_eq!(parsed["compact"]["max_failures"].as_integer(), Some(5));
+            assert_eq!(compact_config(&configured, 32768).unwrap(), configured);
+        }
+        assert!(compact_config("[compact", 32768).is_err());
+    }
 }

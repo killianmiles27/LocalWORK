@@ -24,7 +24,22 @@ fn norm(p: &str) -> PathBuf {
     if s.starts_with("\\\\?\\") {
         s = s[4..].to_string();
     }
-    PathBuf::from(s)
+    let path = PathBuf::from(s);
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                match clean.file_name() {
+                    Some(name) if name != ".." => { clean.pop(); }
+                    Some(_) | None if !path.is_absolute() => clean.push(".."),
+                    _ => {}
+                }
+            }
+            other => clean.push(other.as_os_str()),
+        }
+    }
+    clean
 }
 
 fn inside(path: &Path, root: &Path) -> bool {
@@ -36,8 +51,8 @@ fn inside(path: &Path, root: &Path) -> bool {
 fn arg_path(args: &Value, workspace: &Path) -> Option<PathBuf> {
     for k in ["file_path", "path", "filePath", "output", "file"] {
         if let Some(s) = args.get(k).and_then(|v| v.as_str()) {
-            let p = norm(s);
-            return Some(if p.is_absolute() { p } else { workspace.join(p) });
+            let p = PathBuf::from(s.replace('/', "\\"));
+            return Some(if p.is_absolute() { norm(s) } else { norm(&workspace.join(p).to_string_lossy()) });
         }
     }
     None
@@ -53,7 +68,10 @@ pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_e
     let path = arg_path(args, workspace);
     if let Some(p) = &path {
         let l = p.to_string_lossy().to_lowercase();
-        if PROTECTED.iter().any(|x| l.starts_with(x)) || l.contains("\\appdata\\local\\workbench") {
+        if PROTECTED.iter().any(|x| l == *x || l.starts_with(&format!("{x}\\")))
+            || l.contains("\\appdata\\local\\workbench\\")
+            || l.ends_with("\\appdata\\local\\workbench")
+        {
             return Decision::Deny(format!("{} is a protected location", p.display()));
         }
     }
@@ -98,14 +116,18 @@ fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool) -> Decision {
         return Decision::Allow;
     }
     if auto_edit && !cmd.trim().is_empty() {
-        // "Edits allowed in folder": ordinary commands that stay inside the workspace, with no network,
-        // installs or process launching, run without asking.
+        // Automatic mode includes routine shell commands in the workspace.
+        // A shell wrapper alone does not make an otherwise ordinary command consequential.
         let risky = Regex::new(
-            r"(?i)(\b(curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm|start-process|start|pip|npm|npx|winget|choco|scoop|sc|net|netsh|schtasks|powershell|pwsh|cmd)\b|https?://|\\\\)",
+            r#"(?i)(\b(curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm|start-process|start|pip|npm|npx|winget|choco|scoop|sc|net|netsh|schtasks)\b|-(?:encodedcommand|enc)\b|https?://|(?:^|[\s"'=])\\\\)"#,
         )
         .unwrap();
-        let drive = Regex::new(r#"(?i)\b[a-z]:[\\/][^\s"']*"#).unwrap();
-        let escapes = drive.find_iter(cmd).any(|m| !inside(&norm(m.as_str()), workspace)) || cmd.contains("..\\") || cmd.contains("../");
+        // Consume quoted paths as a whole: a workspace can contain spaces.
+        let drive = Regex::new(r#"(?i)"([a-z]:[\\/][^"]*)"|'([a-z]:[\\/][^']*)'|([a-z]:[\\/][^\s"']*)"#).unwrap();
+        let escapes = drive.captures_iter(cmd).any(|c| {
+            let p = c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)).unwrap();
+            !inside(&norm(p.as_str()), workspace)
+        }) || cmd.contains("..\\") || cmd.contains("../");
         if !risky.is_match(cmd) && !escapes {
             return Decision::Allow;
         }
@@ -115,7 +137,7 @@ fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool) -> Decision {
 
 fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, outside: bool) -> Decision {
     let t = tool.to_lowercase();
-    let read_verbs = ["view", "get", "query", "list", "validate", "info", "help", "inspect", "read", "page_count"];
+    let read_verbs = ["view", "get", "query", "list", "validate", "verify", "info", "help", "inspect", "read", "page_count"];
     let first = args
         .get("args")
         .and_then(|a| {
@@ -130,7 +152,7 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         return Decision::Deny("Web access is turned off in Settings".into());
     }
     if t.contains("browser") {
-        return browser_decision(args);
+        return browser_decision(args, auto_edit);
     }
     if t.contains("ssh_exec") {
         return crate::sshpolicy::decide(args);
@@ -152,7 +174,7 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
 }
 
 /// Browser tool: looking is free; typing into sensitive fields, uploads and consequential clicks ask.
-fn browser_decision(args: &Value) -> Decision {
+fn browser_decision(args: &Value, auto_edit: bool) -> Decision {
     let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("").trim().to_lowercase();
     let rest = match args.get("args") {
         Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" "),
@@ -163,13 +185,87 @@ fn browser_decision(args: &Value) -> Decision {
     let label = args.get("label").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
     let full = format!("{cmd} {rest} {label}");
     let ask = |class, reason: &str| Decision::Ask { class, reason: reason.into(), can_remember: false };
-    let sensitive = Regex::new(r"(?i)(password|passwd|card|cvv|cvc|iban|ssn|security code|account number|routing)").unwrap();
-    let consequential = Regex::new(r"(?i)b(submit|buy|purchase|pay|order|checkout|delete|remove|send|confirm|post|publish|sign ?in|log ?in|transfer)b").unwrap();
+    let sensitive = Regex::new(r"(?i)(password|passwd|\b(card|cvv|cvc|iban|ssn|routing)\b|security[\s_-]*code|account[\s_-]*number)").unwrap();
+    let consequential = Regex::new(r"(?i)\b(submit|requestsubmit|buy|purchase|pay|order|checkout|delete|remove|send|confirm|post|publish|sign ?in|log ?in|transfer)\b").unwrap();
+    let form_action = (rest.contains("form") || rest.contains("[type=submit]"))
+        && Regex::new(r"(?i)\.\s*(click|dispatchevent)\s*\(").unwrap().is_match(&rest);
     match cmd.split_whitespace().next().unwrap_or("") {
         "upload" => ask(Class::Write, "Upload a file from your computer to a website"),
         "fill" | "type" if sensitive.is_match(&full) => ask(Class::Exec, "Enter a password or payment detail on a website"),
         "click" | "dblclick" | "press" if consequential.is_match(&full) => ask(Class::Exec, "Click a button that submits or changes something online"),
-        "eval" => ask(Class::Exec, "Run a script inside a web page"),
+        "eval" if sensitive.is_match(&rest) => ask(Class::Exec, "Run a script that may access password or payment details"),
+        "eval" if consequential.is_match(&rest) || form_action => ask(Class::Exec, "Run a script that may submit or change something online"),
+        "eval" if !auto_edit => ask(Class::Exec, "Run a script inside a web page"),
         _ => Decision::Allow,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn automatic_commands_accept_quoted_workspace_paths_with_spaces() {
+        let ws = Path::new(r"C:\Random\Working Folder\LocalWORK\draft");
+        for path in [r"C:\Random\Working Folder\LocalWORK\draft\figure.png", r"C:\\Random\\Working Folder\\LocalWORK\\draft\\figure.png"] {
+            let cmd = format!("Add-Type -AssemblyName System.Drawing; $p = \"{path}\"; [System.Drawing.Image]::FromFile($p)");
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Allow));
+        }
+        for cmd in [r#"[System.IO.File]::ReadAllText("C:\Random\Working Folder\Other\secret.txt")"#, r#"[System.IO.File]::ReadAllText("\\server\share\secret.txt")"#, "Remove-Item figure.png"] {
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Ask { .. }));
+        }
+        assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":"Add-Type -AssemblyName System.Drawing"}), ws, false, &[]), Decision::Ask { .. }));
+    }
+
+    #[test]
+    fn automatic_mode_allows_routine_shell_wrappers_and_keeps_consequential_checks() {
+        let ws = Path::new(r"C:\work");
+        for cmd in [r#"pwsh -Command "('one two' -split '\s+').Count""#, r#"powershell -NoProfile -Command "Get-FileHash figure.png""#, "cmd /c echo ready"] {
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Allow));
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, false, &[]), Decision::Ask { .. }));
+        }
+        for cmd in ["pwsh -Command Remove-Item figure.png", "cmd /c curl https://example.com", "powershell -enc AAAA", "pwsh -Command npm install package"] {
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Ask { .. }));
+        }
+    }
+
+    #[test]
+    fn automatic_mode_allows_routine_browser_eval_but_guards_submissions_and_credentials() {
+        let ws = Path::new(r"C:\work");
+        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":"document.title"}), ws, true, &[]), Decision::Allow));
+        // Eval labels describe intent, not a clicked control or executed code.
+        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":["() => document.querySelectorAll('.vzb-bc-bubbles circle').length"], "label":"Confirm Korea trail labels"}), ws, true, &[]), Decision::Allow));
+        for script in ["() => document.forms[0].requestSubmit()", "() => document.querySelector('form button').click()"] {
+            assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":[script]}), ws, true, &[]), Decision::Ask { .. }));
+        }
+        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":["() => document.querySelector('.vzb-play').click()"]}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":["() => Array.from(document.querySelectorAll('[class*=time]')).map(e => e.className)"]}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"fill", "label":"SSN"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":"document.title"}), ws, false, &[]), Decision::Ask { .. }));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":"document.querySelector('form').submit()"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"fill", "label":"password"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"press", "args":"Enter", "label":"Submit order"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"press", "args":"Enter", "label":"Next chart"}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"upload"}), ws, true, &[]), Decision::Ask { .. }));
+    }
+
+    #[test]
+    fn protected_paths_use_component_boundaries_and_resolve_parent_segments() {
+        let ws = Path::new(r"C:\work");
+        let exact = decide("write_file", "edit", &json!({"path":r"C:\Windows\System32\note.txt"}), ws, true, &[]);
+        assert!(matches!(exact, Decision::Deny(_)));
+        let boundary_neighbor = decide("write_file", "edit", &json!({"path":r"C:\Windows-old\note.txt"}), ws, true, &[]);
+        assert!(matches!(boundary_neighbor, Decision::Ask { .. }));
+        let workbench = decide("write_file", "edit", &json!({"path":r"C:\Users\User\AppData\Local\Workbench\profile.json"}), ws, true, &[]);
+        assert!(matches!(workbench, Decision::Deny(_)));
+        let workbench_neighbor = decide("write_file", "edit", &json!({"path":r"C:\Users\User\AppData\Local\Workbench-old\file.txt"}), ws, true, &[]);
+        assert!(matches!(workbench_neighbor, Decision::Ask { .. }));
+        let traversal = decide("write_file", "edit", &json!({"path":r"C:\work\..\Windows\System32\note.txt"}), ws, true, &[]);
+        assert!(matches!(traversal, Decision::Deny(_)));
+        let relative_traversal = decide("write_file", "edit", &json!({"path":r"..\outside.txt"}), ws, true, &[]);
+        assert!(matches!(relative_traversal, Decision::Ask { .. }));
+        let double_traversal = decide("write_file", "edit", &json!({"path":r"..\..\Windows\System32\note.txt"}), ws, true, &[]);
+        assert!(matches!(double_traversal, Decision::Deny(_)));
     }
 }
