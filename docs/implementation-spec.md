@@ -1,3 +1,5 @@
+> Historical design notes. These include proposals and earlier observations, not guarantees about the current app. Use [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md), [SETUP.md](SETUP.md), and [SECURITY.md](../SECURITY.md) for current behavior and boundaries.
+
 # Local Work-Style AI Desktop App — Implementation Specification
 
 Oct 15, 2026 · @Killian

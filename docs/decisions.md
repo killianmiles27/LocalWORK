@@ -1,3 +1,5 @@
+> Historical design notes. These include proposals and earlier observations, not guarantees about the current app. Use [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md), [SETUP.md](SETUP.md), and [SECURITY.md](../SECURITY.md) for current behavior and boundaries.
+
 # Decisions
 - Tauri 2 host, aionrs `--json-stream` per conversation, Strata as sole inference server (spec option D).
 - Job Object by self-assignment of the host (KILL_ON_JOB_CLOSE) instead of per-child process-wrap: simpler, still kills the whole tree if the host dies. `pids.json` cleans up stale trees at next start.

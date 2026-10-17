@@ -1,0 +1,95 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Frontend and Python dependencies
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE) { throw 'npm ci failed' }
+          python -m pip install -r workbench-mcp/requirements-web.txt
+          if ($LASTEXITCODE) { throw 'Python dependencies failed' }
+      - name: Pinned browser test runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory vendor/playwright -Force | Out-Null
+          Copy-Item scripts/vendor-browser/package*.json vendor/playwright
+          npm ci --prefix vendor/playwright --ignore-scripts
+          if ($LASTEXITCODE) { throw 'Browser dependencies failed' }
+          $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PWD 'vendor/browsers'
+          node vendor/playwright/node_modules/playwright-core/cli.js install chromium-headless-shell
+          if ($LASTEXITCODE) { throw 'Browser install failed' }
+      - name: Frontend and tool tests
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE) { throw 'Frontend build failed' }
+          npm run test:workspace
+          if ($LASTEXITCODE) { throw 'Sandbox tests failed' }
+          python -m unittest discover -s scripts/tests -p 'test_*.py'
+          if ($LASTEXITCODE) { throw 'Tool tests failed' }
+      - name: Rust tests
+        # Library tests do not bundle runtime EXEs or models.
+        env:
+          TAURI_CONFIG: '{"bundle":{"resources":[]}}'
+        shell: pwsh
+        run: |
+          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml
+          if ($LASTEXITCODE) { throw 'Rust tests failed' }
+      - name: Dependency audit
+        shell: pwsh
+        run: |
+          npm audit
+          if ($LASTEXITCODE) { throw 'Frontend dependency audit failed' }
+          npm audit --prefix scripts/vendor-browser
+          if ($LASTEXITCODE) { throw 'Browser dependency audit failed' }
+          python -m pip install pip-audit
+          if ($LASTEXITCODE) { throw 'Audit tool install failed' }
+          python -m pip_audit -r workbench-mcp/requirements-web.txt --no-deps --disable-pip
+          if ($LASTEXITCODE) { throw 'Python dependency audit failed' }
+      - name: Rust dependency audits
+        shell: pwsh
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          if ($LASTEXITCODE) { throw 'Rust audit tool install failed' }
+          cargo audit --file src-tauri/Cargo.lock
+          if ($LASTEXITCODE) { throw 'Host dependency audit failed' }
+          git clone --depth 1 --branch v0.2.11 https://github.com/iOfficeAI/aionrs.git "$env:RUNNER_TEMP/agent-audit"
+          if ($LASTEXITCODE) { throw 'Pinned agent checkout failed' }
+          $revision = git -C "$env:RUNNER_TEMP/agent-audit" rev-parse HEAD
+          if ($revision -ne '8e61a90329fa9f67c4fdf7e97fe02c24dba33f75') { throw 'Agent revision mismatch' }
+          git -C "$env:RUNNER_TEMP/agent-audit" apply "$env:GITHUB_WORKSPACE/patches/aionrs-localwork.patch"
+          if ($LASTEXITCODE) { throw 'Agent patch failed' }
+          cargo audit --file "$env:RUNNER_TEMP/agent-audit/Cargo.lock"
+          if ($LASTEXITCODE) { throw 'Agent dependency audit failed' }
+      - name: Redacted history secret scan
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'gitleaks.zip'
+          Invoke-WebRequest 'https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_windows_x64.zip' -OutFile $archive
+          if ((Get-FileHash $archive).Hash -ne 'CC47FDC0364964E2D346FBBCBE4CC87F34D490B2647508FB05930D0EC2FBFF07') { throw 'Scanner checksum mismatch' }
+          $scanner = Join-Path $env:RUNNER_TEMP 'gitleaks'
+          Expand-Archive $archive $scanner
+          & (Join-Path $scanner 'gitleaks.exe') git --redact --no-banner .
+          if ($LASTEXITCODE) { throw 'Secret scan failed' }

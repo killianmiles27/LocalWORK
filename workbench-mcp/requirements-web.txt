@@ -1,0 +1,17 @@
+# Exact direct and transitive versions tested in the Windows x64 vendor environment.
+# Keep transitive dependencies pinned because these packages are installed into a private target directory.
+beautifulsoup4==4.15.0
+certifi==2026.7.22
+click==8.5.0
+ddgs==9.16.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+lxml==6.1.3
+markdownify==1.2.3
+primp==2.0.1
+pypdf==6.20.1
+six==1.17.0
+soupsieve==3.0.3
+typing_extensions==4.16.0

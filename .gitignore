@@ -11,3 +11,24 @@ workbench-mcp/.cache/
 
 __pycache__/
 *.py[cod]
+
+# Local configuration, credentials and generated work never belong in Git.
+.env
+.env.*
+!.env.example
+*.key
+*.key.pub
+*.pfx
+*.p12
+*.pem
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+.aionrs/
+.browser/
+.aionrs.toml
+settings.json
+.audit-tools/
+.e2e-runs/
+.deployment-backups/

@@ -2,9 +2,9 @@
   "aionrs": {
     "version": "0.2.11",
     "source": "https://github.com/iOfficeAI/aionrs at 8e61a90329fa9f67c4fdf7e97fe02c24dba33f75; scripts/build-agent.ps1",
-    "sha256": "f97f7401af883f773bc05f181fd5eb67d8f1c2d4e46a12673914ecaba8a9e05b",
+    "sha256": "e31c9d7ac1ffe8ca27e6df50358fd40535ee2a99b5a2514b2118019170ffb91d",
     "patch": "patches/aionrs-localwork.patch",
-    "patch_sha256": "bac2cb004619d494efa94a4e0b2c4cf26ba97f0b3def0f80b26827a8a9f9ed0f"
+    "patch_sha256": "70d491003c5da8f9e4f0517960e1e2e8c5ac8a5ce7532dba4251b376edf8857f"
   },
   "officecli": {
     "version": "1.0.157",

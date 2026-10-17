@@ -1,9 +1,16 @@
 <# Copies a verified local build and its source resources to the existing local app.
    Keeps a recoverable backup; never touches app data, model files or Git. #>
 [CmdletBinding()]
-param([string]$Destination = 'C:\Random\LocalWORK')
+param([string]$Destination)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+if (-not $Destination) {
+    $Destination = Join-Path (Split-Path -Parent $repo) 'LocalWORK'
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        throw "No adjacent LocalWORK installation was found. Pass -Destination with the folder containing LocalWORK.exe."
+    }
+}
+if (-not (Test-Path -LiteralPath $Destination -PathType Container)) { throw "Install folder not found: $Destination" }
 $destinationRoot = (Resolve-Path -LiteralPath $Destination).Path
 $builtExe = Join-Path $repo 'src-tauri\target\release\localwork.exe'
 $installedExe = Join-Path $destinationRoot 'LocalWORK.exe'
@@ -27,7 +34,11 @@ $skillRoot = Join-Path $repo 'skills'
 $copies += Get-ChildItem -LiteralPath $skillRoot -Recurse -File | ForEach-Object {
     [pscustomobject]@{ Source = $_.FullName; Relative = Join-Path 'skills' $_.FullName.Substring($skillRoot.Length + 1) }
 }
-$copies += @('HANDOFF.md','NOTICE.md') | ForEach-Object { [pscustomobject]@{ Source = Join-Path $repo $_; Relative = $_ } }
+$copies += @('HANDOFF.md','NOTICE.md','LICENSE') | ForEach-Object { [pscustomobject]@{ Source = Join-Path $repo $_; Relative = $_ } }
+$noticeRoot = Join-Path $repo 'third-party'
+$copies += Get-ChildItem -LiteralPath $noticeRoot -Recurse -File | ForEach-Object {
+    [pscustomobject]@{ Source = $_.FullName; Relative = Join-Path 'third-party' $_.FullName.Substring($noticeRoot.Length + 1) }
+}
 $retiredFiles = @('skills\gapminder\SKILL.md')
 
 # Finish every backup before replacing any installed file.

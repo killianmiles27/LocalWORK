@@ -1,11 +1,36 @@
 use std::path::PathBuf;
 
-pub const DEFAULT_STRATA_ROOT: &str = r"C:\Random\Working Folder\LocalWORK\strata";
-pub const DEFAULT_MODEL_CONFIG: &str =
-    r"C:\Random\Working Folder\LocalWORK\benchmark\configs\selected-model.json";
+// A machine-specific path must never be baked into the distributable.
+pub fn default_strata_root() -> String {
+    std::env::var("LOCALWORK_STRATA_ROOT")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| {
+            let sibling = app_dir().join("strata");
+            sibling
+                .exists()
+                .then(|| sibling.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default()
+}
+
+pub fn default_model_config() -> String {
+    std::env::var("LOCALWORK_MODEL_CONFIG")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_default()
+}
 
 pub fn data_dir() -> PathBuf {
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| r"C:\Users\Public".into());
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|p| p.join("AppData").join("Local"))
+        })
+        .or_else(|| app_dir().canonicalize().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
     let d = PathBuf::from(base).join("Workbench");
     let _ = std::fs::create_dir_all(d.join("logs"));
     d

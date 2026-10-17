@@ -248,10 +248,14 @@ pub fn get_or_start(
     };
     write_compact_config(&workspace)?;
     let vendor = paths::vendor_dir();
+    if workbench_mcp(&vendor, conv).is_none() {
+        return Err("Workbench tools are missing. Choose a configured Strata folder in Settings and check that workbench-mcp/server.py is installed beside LocalWORK.".into());
+    }
     let exe = vendor.join("aionrs.exe");
     let mut cmd = Command::new(&exe);
     cmd.args(["--json-stream", "--provider", "openai", "--base-url", &format!("http://127.0.0.1:{port}/v1")])
-        .args(["--api-key", &key, "--model", &model, "--max-turns", "60", "--no-color"])
+        .env("API_KEY", &key)
+        .args(["--model", &model, "--max-turns", "60", "--no-color"])
         // Without this aionrs asks for 20k output tokens, which cannot fit (or compact) in a 32k window.
         .args(["--max-tokens", &(strata::context_window() / 8).clamp(1024, 4096).to_string()])
         .args(["--system-prompt", &system_prompt(&db)])
@@ -340,7 +344,7 @@ fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Option<Value> {
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
             .and_then(|v| v.get("strataRoot").and_then(|x| x.as_str().map(String::from)))
-            .unwrap_or_else(|| paths::DEFAULT_STRATA_ROOT.to_string()),
+            .unwrap_or_else(paths::default_strata_root),
     );
     let python = root.join(".venv").join("Scripts").join("python.exe");
     let script = paths::resource_dir("workbench-mcp").join("server.py");

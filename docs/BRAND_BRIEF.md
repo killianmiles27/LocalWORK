@@ -1,3 +1,5 @@
+> Historical design notes. These include proposals and earlier observations, not guarantees about the current app. Use [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md), [SETUP.md](SETUP.md), and [SECURITY.md](../SECURITY.md) for current behavior and boundaries.
+
 # Claude Design brief: full rebrand of the local AI desktop app (currently "LocalWORK")
 
 Start from scratch on identity; keep the interface style described below.

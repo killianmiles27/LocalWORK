@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
+import { writeFile } from 'node:fs/promises';
+const root = resolve(import.meta.dirname, '../..');
+const { chromium } = createRequire(resolve(root, 'vendor/playwright/node_modules/playwright-core/package.json'))('playwright-core');
+const [endpoint, work] = process.argv.slice(2);
+const browser = await chromium.connectOverCDP(endpoint);
+const page = browser.contexts()[0].pages().find(p => p.url().includes('tauri.localhost'));
+const invoke = (cmd, args) => page.evaluate(({cmd, args}) => window.__TAURI_INTERNALS__.invoke(cmd, args), {cmd, args});
+const results = [];
+try {
+  await invoke('set_setting', {key: 'wizard_done', value: '1'});
+  await page.reload();
+  const before = await invoke('hardware_check');
+  await assert.rejects(invoke('set_strata_root', {path: resolve(work, 'missing-strata')}));
+  assert.equal((await invoke('hardware_check')).strata_root, before.strata_root);
+  const invalid = resolve(work, 'invalid-model-setup.json');
+  await writeFile(invalid, '{not JSON');
+  await assert.rejects(invoke('set_model_config', {path: invalid}));
+  const config = resolve(work, 'selected-model-setup.json');
+  await writeFile(config, JSON.stringify({model_name: 'Portable fixture', args: ['--max-context', '16384']}));
+  await invoke('model_stop');
+  await invoke('set_model_config', {path: config});
+  await invoke('model_start');
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('model_status')).state === 'ready', undefined, {timeout: 20000});
+  assert.equal((await invoke('context_usage', {id: 'setup-fixture'})).window, 16384);
+  await page.getByRole('button', {name: 'Settings', exact: true}).click();
+  await page.getByRole('button', {name: 'Choose Strata folder', exact: true}).waitFor();
+  await page.getByRole('button', {name: 'Choose model configuration', exact: true}).waitFor();
+  const web = page.getByRole('checkbox', {name: 'Enable web search and browsing', exact: true});
+  await web.uncheck();
+  await page.waitForFunction(async () => await window.__TAURI_INTERNALS__.invoke('get_setting', {key: 'web_access'}) === 'off');
+  await web.check();
+  await page.waitForFunction(async () => await window.__TAURI_INTERNALS__.invoke('get_setting', {key: 'web_access'}) === 'on');
+  await page.getByRole('button', {name: 'Close', exact: true}).click();
+  results.push({Id: 'T-P1', Test: 'Portable model setup and web controls', Status: 'PASS', Detail: 'Invalid paths/config rejected, selected config controls context, setup buttons and web toggle work with isolated stub model'});
+} catch (error) {
+  results.push({Id: 'T-P1', Test: 'Portable model setup and web controls', Status: 'FAIL', Detail: String(error.stack ?? error)});
+  await page.screenshot({path: resolve(work, 'setup-failure.png')});
+} finally {
+  await invoke('model_stop').catch(() => {});
+  await invoke('set_model_config', {path: resolve(work, 'good.json')}).catch(() => {});
+  await invoke('set_web_access', {on: true}).catch(() => {});
+  await invoke('model_start').catch(() => {});
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('model_status')).state === 'ready', undefined, {timeout: 20000}).catch(() => {});
+  await writeFile(resolve(work, 'setup-results.json'), JSON.stringify(results, null, 2));
+  console.log(JSON.stringify(results));
+  await browser.close();
+}
+process.exitCode = results.some(r => r.Status === 'FAIL') ? 1 : 0;

@@ -1,8 +1,9 @@
 """Browser tool for the workbench MCP server: drives a headless, isolated Playwright browser.
 
 One named browser session per conversation, one persistent profile per project (workspace folder).
-Origin rules: loopback, link-local and private ranges are refused (checked here for navigation, and as
-blocked origins inside the browser for every request, including page sub-requests)."""
+Navigation URLs are DNS-checked for public addresses. Hostname patterns also block
+common private targets, but page subrequests are not a network security boundary.
+Use OS isolation for untrusted browsing or sensitive networks."""
 import hashlib, ipaddress, json, os, re, shlex, socket, subprocess, sys, tempfile, time
 from urllib.parse import urlparse
 

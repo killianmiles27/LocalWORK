@@ -1,0 +1,10 @@
+# Stable text bytes across Windows checkouts, patches and license provenance hashes.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.jpg binary
+*.woff2 binary
+*.exe binary
+
+# Unified diffs contain intentional single-space context lines.
+*.patch -whitespace

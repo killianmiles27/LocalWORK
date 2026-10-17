@@ -24,11 +24,19 @@ fn run(prog: &str, args: &[&str], dir: Option<&PathBuf>) -> Option<String> {
 }
 
 fn strata_root() -> PathBuf {
-    PathBuf::from(strata::setting("strataRoot", paths::DEFAULT_STRATA_ROOT))
+    PathBuf::from(strata::setting("strataRoot", &paths::default_strata_root()))
 }
 
 fn strata_ok(root: &PathBuf) -> bool {
     root.join(".venv").join("Scripts").join("python.exe").exists() && root.join("serve").join("server.py").exists()
+}
+
+fn model_config_ok(path: &str) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.get("args").and_then(Value::as_array).map(|_| ()))
+        .is_some()
 }
 
 #[tauri::command]
@@ -56,7 +64,7 @@ pub fn hardware_check() -> Value {
     json!({
         "ram_gib": ram, "disk_free_gib": free, "gpu": gpu,
         "strata_root": root.to_string_lossy(), "strata_found": strata_ok(&root),
-        "model_config_found": PathBuf::from(strata::setting("modelConfig", paths::DEFAULT_MODEL_CONFIG)).exists(),
+        "model_config_found": model_config_ok(&strata::setting("modelConfig", &paths::default_model_config())),
     })
 }
 
@@ -65,17 +73,38 @@ pub fn hardware_check() -> Value {
 pub fn set_strata_root(path: String) -> Result<Value, String> {
     let p = PathBuf::from(&path);
     if !strata_ok(&p) {
-        return Err("That folder does not look like a set-up Strata (no .venv or serve\\server.py).".into());
+        return Err("That folder is not a ready Strata installation. Choose the folder containing serve\\server.py and .venv\\Scripts\\python.exe. Install Strata and run SETUP.bat first if needed.".into());
     }
-    write_setting("strataRoot", &path);
+    write_setting("strataRoot", &path)?;
     Ok(json!({"ok": true}))
 }
 
-fn write_setting(key: &str, value: &str) {
+#[tauri::command]
+pub fn set_model_config(path: String) -> Result<Value, String> {
+    let config = PathBuf::from(&path);
+    let text = std::fs::read_to_string(&config)
+        .map_err(|e| format!("Could not read model configuration {}: {e}", config.display()))?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("Model configuration is not valid JSON: {e}"))?;
+    if !value.get("args").and_then(Value::as_array).is_some() {
+        return Err("This does not look like a Strata model configuration: it needs an 'args' array.".into());
+    }
+    write_setting("modelConfig", &path)?;
+    Ok(json!({"ok": true}))
+}
+
+fn write_setting(key: &str, value: &str) -> Result<(), String> {
     let f = paths::data_dir().join("settings.json");
-    let mut v: Value = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}));
+    let mut v: Value = match std::fs::read_to_string(&f) {
+        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("Could not update settings because {} is invalid JSON: {e}", f.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(e) => return Err(format!("Could not read settings {}: {e}", f.display())),
+    };
+    if !v.is_object() { return Err("Settings must be a JSON object; the existing file was preserved.".into()); }
     v[key] = json!(value);
-    let _ = std::fs::write(f, serde_json::to_string_pretty(&v).unwrap_or_default());
+    let serialized = serde_json::to_vec_pretty(&v).map_err(|e| format!("Could not encode settings: {e}"))?;
+    std::fs::write(&f, serialized).map_err(|e| format!("Could not save settings {}: {e}", f.display()))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -98,10 +127,18 @@ fn git(root: &PathBuf, args: &[&str]) -> Option<String> {
 #[tauri::command]
 pub fn strata_update_check() -> Result<Value, String> {
     let root = strata_root();
+    if !strata_ok(&root) {
+        return Err("Choose a valid Strata installation in Settings before checking for updates.".into());
+    }
     if !root.join(".git").exists() {
         return Ok(json!({"git": false, "message": "This Strata copy was not made with git, so it cannot fetch updates itself. Download the newest one from github.com/Niko1221/Strata and run UPDATE.bat in it."}));
     }
-    let _ = git(&root, &["fetch", "--quiet"]);
+    if git(&root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).is_none() {
+        return Ok(json!({"git": true, "message": "This Strata checkout has no upstream branch configured. Set its Git upstream or update it using the instructions from the Strata project."}));
+    }
+    if git(&root, &["fetch", "--quiet"]).is_none() {
+        return Err("Could not fetch Strata updates. Check Git installation and network access, then try again.".into());
+    }
     let head = git(&root, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
     let behind: u32 = git(&root, &["rev-list", "--count", "HEAD..@{u}"]).and_then(|x| x.parse().ok()).unwrap_or(0);
     let log = if behind > 0 { git(&root, &["log", "--format=%s", "-n", "8", "HEAD..@{u}"]).unwrap_or_default() } else { String::new() };
@@ -111,13 +148,16 @@ pub fn strata_update_check() -> Result<Value, String> {
 /// Step 2 (user confirmed): stop the model, run UPDATE.bat hidden, restart, and check that it still answers.
 #[tauri::command]
 pub async fn strata_update_apply(app: AppHandle) -> Result<Value, String> {
+    let root = strata_root();
+    if !strata_ok(&root) || !root.join("UPDATE.bat").is_file() {
+        return Err(format!("A valid Strata installation with UPDATE.bat is required. Checked: {}", root.display()));
+    }
     let st = app.state::<App>();
     let ags: Vec<_> = st.agents.lock().unwrap().values().cloned().collect();
     for a in ags {
         a.shutdown();
     }
     strata::stop(Some(&app), &st.strata);
-    let root = strata_root();
     let before = git(&root, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
     let log = paths::data_dir().join("logs").join("strata-update.log");
     let r = tokio_free_run(root.clone(), log.clone());

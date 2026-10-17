@@ -64,20 +64,27 @@ pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
             return Ok(());
         }
     }
-    let root = PathBuf::from(setting("strataRoot", paths::DEFAULT_STRATA_ROOT));
-    let cfg = setting("modelConfig", paths::DEFAULT_MODEL_CONFIG);
+    let root = PathBuf::from(setting("strataRoot", &paths::default_strata_root()));
+    let cfg = setting("modelConfig", &paths::default_model_config());
     let python = root.join(".venv").join("Scripts").join("python.exe");
     let server = root.join("serve").join("server.py");
     if !python.exists() || !server.exists() || !PathBuf::from(&cfg).exists() {
-        let m = format!("Strata files not found under {}", root.display());
+        let m = if !python.is_file() || !server.is_file() {
+            format!("Strata is not configured. In Settings, choose its folder (the one containing serve\\server.py and .venv\\Scripts\\python.exe). Install Strata and run SETUP.bat first if needed. Checked: {}", root.display())
+        } else {
+            format!("No model configuration was found at {}. In Settings, choose a Strata model JSON file.", cfg)
+        };
         set(app, s, "error", &m);
         return Err(m);
     }
-    let model_name = std::fs::read_to_string(&cfg)
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("model_name").and_then(|x| x.as_str().map(String::from)))
-        .unwrap_or_else(|| "strata".into());
+    let config_text = std::fs::read_to_string(&cfg).map_err(|e| format!("Could not read Strata model configuration {cfg}: {e}"))?;
+    let config: serde_json::Value = serde_json::from_str(&config_text).map_err(|e| format!("Invalid Strata model configuration {cfg}: {e}"))?;
+    if !config.get("args").and_then(serde_json::Value::as_array).is_some() {
+        let m = format!("Invalid Strata model configuration {cfg}: expected an 'args' array. Choose a config created for Strata.");
+        set(app, s, "error", &m);
+        return Err(m);
+    }
+    let model_name = config.get("model_name").and_then(|x| x.as_str()).unwrap_or("strata").to_string();
 
     let port = http::free_port();
     let key: String = rand::thread_rng().sample_iter(&rand::distributions::Alphanumeric).take(40).map(char::from).collect();
@@ -200,7 +207,7 @@ pub fn stop(app: Option<&AppHandle>, s: &Shared) {
 /// Model + machine details for the Settings panel. The API key stays on this side; only data goes out.
 /// Context window of the configured model (its `--max-context`), 32768 if the config does not say.
 pub fn context_window() -> u64 {
-    let cfg = setting("modelConfig", paths::DEFAULT_MODEL_CONFIG);
+    let cfg = setting("modelConfig", &paths::default_model_config());
     std::fs::read_to_string(&cfg).ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| v.get("args").and_then(|a| a.as_array()).cloned())
@@ -218,7 +225,7 @@ pub fn info(s: &Shared) -> serde_json::Value {
         let g = s.lock().unwrap();
         (g.status.port, g.key.clone(), g.status.model.clone())
     };
-    let cfg = setting("modelConfig", paths::DEFAULT_MODEL_CONFIG);
+    let cfg = setting("modelConfig", &paths::default_model_config());
     let cfgv: Value = std::fs::read_to_string(&cfg).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
     let args: Vec<String> = cfgv
         .get("args")

@@ -31,6 +31,7 @@
     }
   },
   "bundle": {
+    "licenseFile": "../LICENSE",
     "active": true,
     "targets": [
       "nsis"
@@ -43,6 +44,9 @@
       "icons/icon.png"
     ],
     "resources": {
+      "../LICENSE": "LICENSE",
+      "../NOTICE.md": "NOTICE.md",
+      "../third-party/": "third-party/",
       "../vendor/aionrs.exe": "vendor/aionrs.exe",
       "../vendor/officecli.exe": "vendor/officecli.exe",
       "../vendor/manifest.json": "vendor/manifest.json",

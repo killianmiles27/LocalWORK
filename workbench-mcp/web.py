@@ -39,17 +39,15 @@ def _to_markdown(html, base):
 
 
 def web_fetch(url, max_chars=12000):
-    if not re.match(r"^https?://", url):
-        raise ValueError("url must start with http:// or https://")
-    max_chars = int(max_chars)
+    from public_web import resolve_public, fetch_public
+    resolve_public(url)  # Do not expose a formerly cached private-network page.
+    max_chars = max(1, min(int(max_chars), 40000))
     c = _db()
     row = c.execute("select fetched,title,body from pages where url=?", (url,)).fetchone()
     if row and time.time() - row[0] < TTL:
         title, body, note = row[1], row[2], "cached"
     else:
-        import httpx
-        r = httpx.get(url, follow_redirects=True, timeout=25,
-                      headers={"User-Agent": "Mozilla/5.0 (LocalWORK research assistant)"})
+        r = fetch_public(url)
         r.raise_for_status()
         ctype = r.headers.get("content-type", "")
         if "pdf" in ctype or url.lower().endswith(".pdf"):

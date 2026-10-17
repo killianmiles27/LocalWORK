@@ -1,5 +1,26 @@
 # Notices
 
+LocalWORK
+Copyright 2026 LocalWORK contributors
+
+LocalWORK's original code is licensed under Apache-2.0; see LICENSE. This does
+not relicense third-party components or model weights. Full collected dependency
+license texts and an inventory are under third-party/. Missing entries must be
+resolved before distributing an installer.
+
+The bundled aionrs agent is Apache-2.0, copyright 2026 iOfficeAI. LocalWORK modifies
+its compaction prompt, summary limit/truncation handling, related tests, and
+networking dependency lockfile. patches/aionrs-localwork.patch records the changes
+against the exact source revision in vendor/manifest.json. Its upstream license
+is retained in third-party/aionrs-LICENSE.txt. OfficeCLI's upstream license is
+retained in third-party/officecli-LICENSE.txt.
+
+Voice transcription uses whisper.cpp (MIT) and a quantized OpenAI Whisper small
+model (MIT). OpenAI's model-weight license is retained in
+third-party/upstream-cache/whisper-model-LICENSE.txt; model file hashes are in
+vendor/manifest.json. These are distinct from the separately installed Strata
+model, whose weights and license are not bundled by LocalWORK.
+
 The interface follows common chat-app conventions (sidebar of recents, centered message column,
 rounded composer, collapsible tool calls).
 

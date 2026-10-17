@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
 
 type Info = { cpu?: { name: string; load: number; server_ram_gib: number | null }; model: string; quant: string; file: string; context: string | null; kv: string | null; status: any; live: any };
@@ -78,6 +79,8 @@ function SshHosts() {
 export default function Settings({ status, onClose, showTps, onShowTps }: { status: St; onClose: () => void; showTps: boolean; onShowTps: (on: boolean) => void }) {
   const [info, setInfo] = useState<Info | null>(null);
   const [dir, setDir] = useState("");
+  const [web, setWeb] = useState<boolean | null>(null);
+  const [webBusy, setWebBusy] = useState(false);
   const [mem, setMem] = useState<{ id: number; text: string }[]>([]);
   const loadMem = () => invoke<{ id: number; text: string }[]>("memories_list").then(setMem).catch(() => {});
 
@@ -87,6 +90,7 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
     pull();
     loadMem();
     invoke<string>("data_dir").then(setDir).catch(() => {});
+    invoke<string | null>("get_setting", { key: "web_access" }).then(value => setWeb(value !== "off")).catch(() => {});
     const t = setInterval(pull, 2000);
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", esc);
@@ -140,7 +144,7 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
           </section>
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Memory</h3>
-            {mem.length === 0 && <div className="text-sm text-muted py-1">Nothing saved yet. Tell the assistant "remember that ..." and it will show up here.</div>}
+            <div className="text-sm text-muted py-1">Cross-chat memory is disabled. Any saved legacy entries can be removed below.</div>
             <ul className="max-h-40 overflow-auto">
               {mem.map((m) => (
                 <li key={m.id} className="flex items-start gap-2 py-1 text-sm">
@@ -151,17 +155,51 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
             </ul>
           </section>
           <StrataUpdate />
+          <ModelSetup />
+          <section>
+            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Web tools</h3>
+            <label className="flex items-center justify-between gap-4 py-2 text-sm">Enable web search and browsing<input type="checkbox" disabled={web === null || webBusy} checked={web ?? false} onChange={async event => { const on = event.target.checked; const previous = web; setWeb(on); setWebBusy(true); try { await invoke("set_web_access", { on }); } catch (error) { setWeb(previous); window.alert(String(error)); } finally { setWebBusy(false); } }} /></label>
+            <p className="text-xs text-muted">Searches and page requests contact external services. This setting does not block networking from commands, updates or SSH.</p>
+          </section>
           <SshHosts />
           <Rollback />
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">App</h3>
             <Row k="Data folder" v={dir || "–"} />
-            <Row k="Everything runs" v="on this computer, offline" />
+            <Row k="Model inference" v="On this computer" />
+            <p className="text-xs text-muted">Web tools, updates and SSH use the network. Chats, browser profiles and generated files are stored locally.</p>
           </section>
         </div>
       </div>
     </div>
   );
+}
+
+function ModelSetup() {
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function choose(config: boolean) {
+    setMessage(""); setBusy(true);
+    try {
+      const path = await open(config
+        ? { title: "Choose your Strata model configuration", filters: [{ name: "JSON", extensions: ["json"] }] }
+        : { title: "Choose your Strata installation", directory: true });
+      if (typeof path === "string") {
+        await invoke(config ? "set_model_config" : "set_strata_root", { path });
+        setMessage("Saved. Stop and start the model to use this configuration.");
+      }
+    } catch (error) { setMessage(String(error)); }
+    finally { setBusy(false); }
+  }
+  return <section>
+    <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Model setup</h3>
+    <div className="flex flex-wrap gap-2">
+      <button disabled={busy} onClick={() => choose(false)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose Strata folder</button>
+      <button disabled={busy} onClick={() => choose(true)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose model configuration</button>
+    </div>
+    <p className="text-xs text-muted mt-2">Use a trusted Strata configuration. It selects the executable, model files and launch arguments.</p>
+    {message && <p role="status" className="text-sm mt-2 break-all">{message}</p>}
+  </section>;
 }
 
 function Rollback() {

@@ -1,47 +1,57 @@
-# Building, signing and releasing the installer
+# Building a release
 
-## One-time: signing key
-Updates are verified with a minisign key pair. The public key is embedded in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`); the private key never goes in the repo.
+Source publication and binary distribution are separate checks. Keep the repository private until its current diff/history has been reviewed; do not publish a binary while its license inventory has unresolved items. See PUBLIC_READINESS.md.
 
-```powershell
-npm run tauri -- signer generate -w "$env:USERPROFILE\.tauri\localwork.key" -p ""   # or pass a real password
-```
-Back the private key up somewhere safe: if it is lost, installed copies can never be updated (users must reinstall). If you generate a new pair, paste the new `.key.pub` contents (base64, one line) into `pubkey`.
+## Prepare
 
-For CI, store the key as the GitHub secrets `TAURI_SIGNING_PRIVATE_KEY` (file contents) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+1. Follow SETUP.md and verify the pinned runtime tools and patched agent. Commit source, lockfiles, notices and hashes together; executables stay out of Git.
+2. Run the checks in CONTRIBUTING.md, plus the real-agent context protocol and Windows CDP acceptance suite. Test the installer on a separate Windows user profile or clean VM. Do not infer clean-machine support from an already configured development PC.
+3. Run `python scripts/collect-notices.py --agent-source ../.agent-build/release-agent --strict`, pointing at the exact patched checkout used to build your agent. Use `build-agent.ps1 -SourceDirectory` to choose that checkout location. Keep installed frontend/browser/Python dependencies and Cargo metadata available. Review all missing components. Include their full copyright/license texts and upstream notices before distributing them. The generated inventory is evidence, not legal clearance.
+4. Recheck the licenses for the exact model and other assets if you distribute any. LocalWORK does not bundle the Strata model weights.
+
+## Version and signatures
+
+Update package.json, package-lock.json, src-tauri/Cargo.toml, Cargo.lock and tauri.conf.json consistently. Release tags use v followed by the version.
+
+The Tauri updater key is separate from a Windows Authenticode certificate. Keep the private signing key outside the repository and back it up securely. Generate it with `npm run tauri -- signer generate`; use the command's password prompt rather than putting a password into shell history. Store its public key in tauri.conf.json. Forks must replace both the key and the update endpoint before distributing their builds.
+
+Use TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD only in a trusted release environment. For GitHub builds, keep them in repository secrets, never files or workflow text. Do not expose secrets to pull-request workflows. The checked-in CI does not publish releases or use signing keys.
 
 ## Build
-Needs `vendor/aionrs.exe`, `vendor/officecli.exe`, `vendor/manifest.json` (see NOTICE.md / `scripts/`).
+
+With dependencies and notices prepared, set the signing environment variables in your trusted release environment and run:
 
 ```powershell
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "$env:USERPROFILE\.tauri\localwork.key" -Raw
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+npm ci
 npm run tauri -- build
 ```
-Output in `src-tauri/target/release/bundle/nsis/`: `LocalWORK_<ver>_x64-setup.exe` and its `.sig`.
 
-## Release (GitHub)
-1. Bump `version` in `tauri.conf.json` and `Cargo.toml`.
-2. Create a GitHub Release `v<ver>` and upload the setup `.exe` and `.sig`.
-3. Upload `latest.json` (the app reads `releases/latest/download/latest.json`):
+Unsigned local development uses `npm run tauri -- build --no-bundle` and does not publish an installer. The installer and its updater signature are produced under src-tauri/target/release/bundle/nsis. Authenticode signing, if used, is a separate distribution step.
+
+The supported updater download is a signed Windows installer EXE. ZIP updater extraction is disabled, removing an unused vulnerable dependency. Do not publish ZIP update artifacts or enable that feature without reviewing its dependency advisories.
+
+## Publish deliberately
+
+After reviewing and testing the actual release artifacts, create a GitHub release for the matching tag. Attach the installer, its signature, and latest.json. No script here automatically makes the repository public or publishes a release.
+
 ```json
 {
-  "version": "<ver>",
-  "notes": "...",
-  "pub_date": "2026-01-01T00:00:00Z",
+  "version": "0.1.0",
+  "notes": "Describe this release's changes and known limitations.",
+  "pub_date": "2026-10-17T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "<contents of the .sig file>",
-      "url": "https://github.com/killianmiles27/LocalWORK/releases/download/v<ver>/LocalWORK_<ver>_x64-setup.exe"
+      "signature": "CONTENTS OF THE GENERATED SIGNATURE FILE",
+      "url": "https://github.com/OWNER/REPOSITORY/releases/download/v0.1.0/INSTALLER.exe"
     }
   }
 }
 ```
-The updater runs the NSIS installer in passive mode; user data in `%LOCALAPPDATA%\Workbench` is untouched. Before 1.0 the Windows installer is unsigned (SmartScreen warning); Authenticode signing is separate from the updater key above.
 
-## Acceptance tests
-```powershell
-powershell -File scripts\e2e\run-all.ps1 -Installer <setup.exe>   # installs, runs T-L1..T-L6, T-S3/S5/S6, updater check, uninstall (data kept)
-powershell -File scripts\e2e\run-all.ps1 -Exe <localwork.exe> -Only T-L1,T-L2 -Iterations 3
-```
-Uses a stub Strata and an isolated data dir by default; `-RealStrata` uses the real one. T-S1, T-S2, T-S4 and T-L7 need a live model or UI and are reported as SKIP.
+Use the real version, UTC publication time, repository URL, installer filename and signature. Check that the update feed, artifact URL and signature work on a disposable installation before announcing the release. Never remove signature checks to make an update install.
+
+## Retained data and rollback
+
+The per-user installer stores program files separately from %LOCALAPPDATA%/Workbench. Uninstall normally retains app data unless its deletion is selected. Project deliverables, Strata and model weights are external and must not be removed by uninstall.
+
+The current in-app rollback saves executables and database backups; it does not restore a complete old resource tree. It is not a guarantee that an old executable works with newer runtime files. Keep full installer backups and test recovery before promising rollback compatibility.

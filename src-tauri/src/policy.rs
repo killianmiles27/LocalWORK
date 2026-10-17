@@ -48,14 +48,71 @@ fn inside(path: &Path, root: &Path) -> bool {
     a == b || a.starts_with(&format!("{b}\\"))
 }
 
-fn arg_path(args: &Value, workspace: &Path) -> Option<PathBuf> {
+fn resolve_arg_path(s: &str, workspace: &Path) -> PathBuf {
+    let p = PathBuf::from(s.replace('/', "\\"));
+    if p.is_absolute() { norm(s) } else { norm(&workspace.join(p).to_string_lossy()) }
+}
+
+fn officecli_paths(args: &Value, workspace: &Path) -> (Vec<PathBuf>, bool) {
+    let Some(argv) = args.get("args").and_then(Value::as_array) else { return (Vec::new(), false) };
+    let verb = argv.first().and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+    if matches!(verb.as_str(), "help" | "config" | "version" | "--help" | "--version" | "-h" | "-v")
+        || argv.iter().any(|a| matches!(a.as_str(), Some("--help" | "-h" | "--version" | "-v")))
+    { return (Vec::new(), false); }
+    let mut paths = Vec::new();
+    let mut uncertain_path_option = false;
+    let mut i = 1;
+    while i < argv.len() {
+        let Some(s) = argv[i].as_str() else { i += 1; continue };
+        let lower = s.to_ascii_lowercase();
+        if matches!(lower.as_str(), "-o" | "--out" | "--output" | "--input" | "--input-file" | "--output-file" | "--output-path" | "--output-dir") {
+            if let Some(value) = argv.get(i + 1).and_then(Value::as_str) {
+                paths.push(resolve_arg_path(value, workspace));
+                i += 2;
+                continue;
+            }
+            uncertain_path_option = true;
+        } else if ["--out=", "--output=", "--input=", "--input-file=", "--output-file=", "--output-path=", "--output-dir="]
+            .iter().any(|prefix| lower.starts_with(prefix))
+        {
+            if let Some((_, value)) = s.split_once('=') { paths.push(resolve_arg_path(value, workspace)); }
+        } else if s.starts_with('-') && ["out", "output", "input", "file", "path"].iter().any(|part| lower.contains(part)) {
+            uncertain_path_option = true;
+        } else if !s.starts_with('-') && ((i == 1) || (verb == "merge" && i == 2) || (verb == "import" && i == 3)) {
+            paths.push(resolve_arg_path(s, workspace));
+        }
+        i += 1;
+    }
+    (paths, uncertain_path_option)
+}
+
+fn arg_paths(tool: &str, args: &Value, workspace: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
     for k in ["file_path", "path", "filePath", "output", "file"] {
         if let Some(s) = args.get(k).and_then(|v| v.as_str()) {
-            let p = PathBuf::from(s.replace('/', "\\"));
-            return Some(if p.is_absolute() { norm(s) } else { norm(&workspace.join(p).to_string_lossy()) });
+            paths.push(resolve_arg_path(s, workspace));
+            if !tool.to_ascii_lowercase().contains("officecli") {
+                return paths;
+            }
         }
     }
-    None
+    if tool.to_ascii_lowercase().contains("officecli") {
+        paths.extend(officecli_paths(args, workspace).0);
+    }
+    paths
+}
+
+fn officecli_uncertain_path_option(tool: &str, args: &Value) -> bool {
+    tool.to_ascii_lowercase().contains("officecli") && officecli_paths(args, Path::new(".")).1
+}
+
+fn officecli_writes_output(tool: &str, args: &Value) -> bool {
+    if !tool.to_ascii_lowercase().contains("officecli") { return false; }
+    let Some(argv) = args.get("args").and_then(Value::as_array) else { return false };
+    let verb = argv.first().and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+    verb == "merge" || (verb == "view" && argv.iter().filter_map(Value::as_str).any(|s| {
+        matches!(s.to_ascii_lowercase().as_str(), "-o" | "--out" | "--output") || ["--out=", "--output="].iter().any(|p| s.to_ascii_lowercase().starts_with(p))
+    }))
 }
 
 const PROTECTED: &[&str] = &["c:\\windows", "c:\\program files", "c:\\programdata"];
@@ -65,8 +122,8 @@ pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_e
         return Decision::Deny("Sub-agents are disabled in this app".into());
     }
     let workspace = &norm(&workspace.to_string_lossy());
-    let path = arg_path(args, workspace);
-    if let Some(p) = &path {
+    let paths = arg_paths(tool, args, workspace);
+    for p in &paths {
         let l = p.to_string_lossy().to_lowercase();
         if PROTECTED.iter().any(|x| l == *x || l.starts_with(&format!("{x}\\")))
             || l.contains("\\appdata\\local\\workbench\\")
@@ -75,7 +132,7 @@ pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_e
             return Decision::Deny(format!("{} is a protected location", p.display()));
         }
     }
-    let outside = path.as_ref().map(|p| !inside(p, workspace)).unwrap_or(false);
+    let outside = paths.iter().any(|p| !inside(p, workspace));
     let remembered_hit = remembered.iter().any(|t| t == tool);
     match category {
         "info" => {
@@ -95,11 +152,14 @@ pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_e
             }
         }
         "exec" => exec_decision(args, workspace, auto_edit),
-        _ => mcp_decision(tool, args, auto_edit, remembered_hit, outside),
+        _ => mcp_decision(tool, args, auto_edit, remembered_hit, outside, !paths.is_empty()),
     }
 }
 
 fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool) -> Decision {
+    if args.get("shell").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty()) {
+        return Decision::Ask { class: Class::Exec, reason: "Run a command with an explicitly selected shell".into(), can_remember: false };
+    }
     let cmd = args.get("command").or_else(|| args.get("cmd")).and_then(|v| v.as_str()).unwrap_or("");
     let destructive = Regex::new(
         r"(?i)(\brm\s+-[a-z]*[rf]|\bdel\b.*(/s|/q)|\brmdir\b|remove-item|\bformat\b\s+[a-z]:|\bshutdown\b|reg\s+delete|git\s+(push\s+.*--force|reset\s+--hard|clean\s+-[a-z]*f)|\bdiskpart\b|\bcipher\s+/w|\|\s*(sh|bash|iex)\b|invoke-expression|\bmkfs\b|\btaskkill\b)",
@@ -109,10 +169,17 @@ fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool) -> Decision {
         return Decision::Ask { class: Class::Destructive, reason: "This command can delete or overwrite data".into(), can_remember: false };
     }
     let readonly = Regex::new(
-        r"(?i)^\s*(dir|ls|type|cat|echo|where|whoami|hostname|pwd|get-childitem|get-content|get-item|get-location|select-string|test-path|git\s+(status|log|diff|branch)|python\s+--version|node\s+--version)\b[^|&;<>]*$",
+        r"(?i)^\s*(dir|ls|type|cat|echo|where|whoami|hostname|pwd|get-childitem|get-content|get-item|get-location|select-string|test-path|python\s+--version|node\s+--version)\b[^|&;<>]*$",
     )
     .unwrap();
-    if readonly.is_match(cmd) {
+    // Do not parse shell programs here: only literal single commands use this fast path.
+    let shell_syntax = Regex::new(r#"(?s)[\r\n;&|<>`$%(){}\[\]]"#).unwrap();
+    let unsafe_git_diff_output = Regex::new(r"(?i)^\s*git\s+diff\b.*(?:--output(?:=|\s)|(?:^|\s)-o(?:\s|$))").unwrap();
+    let safe_git_branch = Regex::new(r"(?i)^\s*git\s+branch\s*(?:(?:--all|-a|--remotes|-r|--list)\s*)*$").unwrap();
+    let safe_git_log = Regex::new(r"(?i)^\s*git\s+log\s*$").unwrap();
+    let safe_git_diff = Regex::new(r"(?i)^\s*git\s+diff\s*$").unwrap();
+    let safe_git_status = Regex::new(r"(?i)^\s*git\s+status(?:\s+(?:--short|-s|--branch|--porcelain(?:=v[12])?))*\s*$").unwrap();
+    if (readonly.is_match(cmd) || safe_git_branch.is_match(cmd) || safe_git_log.is_match(cmd) || safe_git_diff.is_match(cmd) || safe_git_status.is_match(cmd)) && !shell_syntax.is_match(cmd) && !unsafe_git_diff_output.is_match(cmd) {
         return Decision::Allow;
     }
     if auto_edit && !cmd.trim().is_empty() {
@@ -135,7 +202,7 @@ fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool) -> Decision {
     Decision::Ask { class: Class::Exec, reason: "Run a command on your computer".into(), can_remember: false }
 }
 
-fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, outside: bool) -> Decision {
+fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, outside: bool, has_path: bool) -> Decision {
     let t = tool.to_lowercase();
     let read_verbs = ["view", "get", "query", "list", "validate", "verify", "info", "help", "inspect", "read", "page_count"];
     let first = args
@@ -159,6 +226,25 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
     }
     if t.ends_with("assemble_document") || (t.ends_with("show_document") && !outside) {
         return Decision::Allow;
+    }
+    if t.contains("officecli") {
+        let writes_output = officecli_writes_output(tool, args);
+        let is_read = read_verbs.iter().any(|v| first == *v) && !writes_output;
+        let fileless = matches!(first.as_str(), "help" | "version" | "--help" | "--version" | "-h" | "-v")
+            || args.get("args").and_then(Value::as_array).is_some_and(|a| a.iter().any(|v| matches!(v.as_str(), Some("--help" | "-h" | "--version" | "-v"))));
+        if outside {
+            return Decision::Ask { class: if is_read { Class::Read } else { Class::Write }, reason: if is_read { "Read outside the workspace" } else { "Document change outside the workspace" }.into(), can_remember: false };
+        }
+        if officecli_uncertain_path_option(tool, args) {
+            return Decision::Ask { class: Class::Write, reason: "OfficeCLI command uses an unrecognized path option".into(), can_remember: false };
+        }
+        if !fileless && !has_path {
+            return Decision::Ask { class: if is_read { Class::Read } else { Class::Write }, reason: "OfficeCLI command has no validated workspace file target".into(), can_remember: false };
+        }
+        if is_read || fileless {
+            return Decision::Allow;
+        }
+        return if auto_edit || remembered { Decision::Allow } else { Decision::Ask { class: Class::Write, reason: "Create or change an Office document".into(), can_remember: true } };
     }
     if t.contains("workspace_info") || t.contains("load_skill") || t.contains("read_attachment") || t.contains("show_chart") || t.contains("show_table") || t.contains("show_diagram") || t.contains("publish_artifact") || t.contains("update_plan") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
         return Decision::Allow;
@@ -216,6 +302,47 @@ mod tests {
             assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Ask { .. }));
         }
         assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":"Add-Type -AssemblyName System.Drawing"}), ws, false, &[]), Decision::Ask { .. }));
+    }
+
+    #[test]
+    fn readonly_fast_paths_fail_closed_for_shell_programs_and_mutating_flags() {
+        let ws = Path::new(r"C:\work");
+        for cmd in [r"echo $([IO.File]::WriteAllText('outside.txt','changed'))", "echo (Set-Content outside.txt changed)", "echo %COMSPEC%", "echo ready; Remove-Item x", "echo ready\nRemove-Item x", "git branch -D main", "git branch --delete main", "git branch feature", "git diff --output=outside.txt", "git diff -o outside.txt", "git log --output=outside.txt"] {
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, false, &[]), Decision::Ask { .. }), "{cmd}");
+        }
+        assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":"git branch --all"}), ws, false, &[]), Decision::Allow));
+        assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":"echo harmless", "shell":"C:\\Temp\\untrusted.exe"}), ws, true, &[]), Decision::Ask { .. }));
+    }
+
+    #[test]
+    fn officecli_positional_paths_are_checked_for_reads_and_batch_changes() {
+        let ws = Path::new(r"C:\work");
+        for args in [json!({"args":["verify", r"C:\other\report.docx"]}), json!({"args":["view", r"C:\other\report.docx", "text"]})] {
+            assert!(matches!(decide("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Ask { class: Class::Read, .. }));
+        }
+        assert!(matches!(decide("workbench__officecli", "tool", &json!({"args":["batch", r"C:\other\report.docx", "--input", "ops.json"]}), ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
+        for verb in ["add", "set", "remove"] {
+            let args = json!({"args":[verb, r"C:\other\report.docx", "--text", "x"]});
+            assert!(matches!(decide("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
+        }
+        for args in [json!({"args":["set", "report.docx", "/body/p[1]", "text"]}), json!({"args":["add", "deck.pptx", "/slide[1]", "text"]})] {
+            assert!(matches!(decide("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Allow));
+        }
+        assert!(matches!(decide("workbench__officecli", "tool", &json!({"args":["add"]}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(decide("workbench__officecli", "tool", &json!({"args":["verify", r"C:\Users\User\AppData\Local\Workbench\profile.json"]}), ws, true, &[]), Decision::Deny(_)));
+        assert!(matches!(decide("workbench__officecli", "tool", &json!({"args":["verify", "draft.docx"]}), ws, true, &[]), Decision::Allow));
+        let view_output = json!({"args":["view", "inside.docx", "html", "--out", r"C:\other\preview.html"]});
+        assert!(matches!(decide("workbench__officecli", "tool", &view_output, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
+        let hidden_outside = json!({"path":"inside.docx", "args":["view", r"C:\other\secret.docx", "text"]});
+        assert!(matches!(decide("workbench__officecli", "tool", &hidden_outside, ws, true, &[]), Decision::Ask { class: Class::Read, .. }));
+        let merge_output = json!({"args":["merge", "template.docx", r"C:\other\merged.docx"]});
+        assert!(matches!(decide("workbench__officecli", "tool", &merge_output, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
+        let view_inside_output = json!({"args":["view", "inside.docx", "html", "--out", "preview.html"]});
+        assert!(matches!(decide("workbench__officecli", "tool", &view_inside_output, ws, false, &[]), Decision::Ask { class: Class::Write, .. }));
+        let help = json!({"args":["merge", "--help"]});
+        assert!(matches!(decide("workbench__officecli", "tool", &help, ws, false, &[]), Decision::Allow));
+        let config = json!({"args":["config", "autoUpdate", "true"]});
+        assert!(matches!(decide("workbench__officecli", "tool", &config, ws, true, &[]), Decision::Ask { .. }));
     }
 
     #[test]

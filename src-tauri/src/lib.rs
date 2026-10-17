@@ -327,7 +327,7 @@ pub fn run() {
             documents::documents_list, documents::document_preview, documents::document_open,
             documents::document_revisions, documents::document_export,
             documents::document_save_visual,
-            setup::hardware_check, setup::set_strata_root, setup::set_web_access, setup::strata_update_check, setup::strata_update_apply,
+            setup::hardware_check, setup::set_strata_root, setup::set_model_config, setup::set_web_access, setup::strata_update_check, setup::strata_update_apply,
             rollback::rollback_list,
             rollback::rollback_to,
             model_status,
