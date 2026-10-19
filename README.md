@@ -9,6 +9,7 @@ LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference (or [P
 ## What it does
 
 - Chats tied to a working folder, with file attachments and saved conversation history.
+- A searchable chat sidebar grouped by date, with pin and rename. You can edit an earlier message or regenerate the last reply, and keyboard shortcuts cover the common actions.
 - Word, Excel, and PowerPoint creation through OfficeCLI, with document previews and revision history.
 - Web search, page reading, browser interaction, and screenshots.
 - Tables, charts, diagrams, and small interactive HTML documents.

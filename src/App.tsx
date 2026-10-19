@@ -6,8 +6,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Md from "./Md";
 import PlanDock, { latestPlan } from "./PlanDock";
-import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Download, FolderOpen, MessageSquare, Mic, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Copy, Download, FolderOpen, Mic, Pencil, RotateCcw, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
+import ChatList, { type Conv } from "./ChatList";
 import Wizard from "./Wizard";
 import { useVoice } from "./voice";
 import { richFor } from "./Rich";
@@ -21,7 +22,6 @@ import QuestionCard, { AskedLine, isAsk, openQuestion } from "./Question";
 import Logo from "./Logo";
 import FirstTokenCountdown, { ttftEstimate, ttftRecord } from "./FirstToken";
 
-type Conv = { id: string; title: string; workspace: string; updated: number };
 type Msg = { id: number; role: string; body: any; ts: number };
 const CACHED_CHATS = 3;
 type Status = { state: string; detail: string; port: number; model: string };
@@ -58,6 +58,10 @@ export default function App() {
   const [files, setFiles] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // The user message being edited in place, and how many chats blocked a window close.
+  const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
+  const [closeBlocked, setCloseBlocked] = useState(0);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceRefresh, setWorkspaceRefresh] = useState(0);
   const [activity, setActivity] = useState<Activity | undefined>();
@@ -136,6 +140,7 @@ export default function App() {
     invoke<Status>("model_status").then(setStatus).catch(() => {});
     const subs = [
       listen<Status>("model-status", (e) => setStatus(e.payload)),
+      listen<number>("close-blocked", (e) => setCloseBlocked(e.payload)),
       listen<Approval>("approval-request", (e) => setApprovals((a) => [...a, e.payload])),
       listen<{ conv: string; ev: any }>("agent-event", (e) => {
         const { conv, ev } = e.payload;
@@ -176,6 +181,7 @@ export default function App() {
     setQueue([]);
     setLive({ text: "", thinking: "", busy: false });
     setMsgs((cur && chatCache.current.get(cur)) || []);
+    setEditing(null);
     setErr("");
     setWorkspaceRequest(undefined);
     setCtx((c) => ({ ...c, used: null }));
@@ -365,6 +371,47 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     setQueue(rest);
     send(next.text, next.files);
   }, [live.busy, queue, status.state]);
+  // Edit and regenerate: cut the chat (and the agent's memory of it) back to before user message `m`, then
+  // send `text`, or the original message again. Files the agent changed stay as they are.
+  async function rewindTo(m: Msg, text?: string) {
+    const id = curRef.current;
+    if (!id || live.busy || !modelReady) return;
+    setErr("");
+    try {
+      const original = await invoke<string>("conversation_rewind", { id, msgId: m.id });
+      if (curRef.current !== id) return;
+      const kept = (chatCache.current.get(id) ?? msgs).filter(x => x.id < m.id);
+      chatCache.current.set(id, kept); setMsgs(kept); setEditing(null);
+      setCtx((c) => ({ ...c, used: null }));
+      await send(text ?? original, []);
+    } catch (e) { setErr(String(e)); }
+  }
+  async function deleteChat(id: string) {
+    if (!window.confirm("Delete this chat?")) return;
+    await invoke("delete_conversation", { id }).catch(e => setErr(String(e)));
+    chatCache.current.delete(id);
+    if (curRef.current === id) selectConversation(null);
+    refreshConvs();
+  }
+  const keys = useRef<(e: KeyboardEvent) => void>(() => {});
+  keys.current = (e: KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod || e.altKey || e.shiftKey) return;
+    const k = e.key.toLowerCase();
+    if (k === "n") { e.preventDefault(); newConv(); }
+    else if (k === "k") {
+      e.preventDefault();
+      if (!sidebarPref) toggleSidebar();
+      requestAnimationFrame(() => { searchRef.current?.focus(); searchRef.current?.select(); });
+    }
+    else if (k === "b") { e.preventDefault(); toggleSidebar(); }
+    else if (k === ",") { e.preventDefault(); setShowSettings(true); }
+  };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => keys.current(e);
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, []);
   function answer(a: Approval, allow: boolean, remember: boolean) {
     invoke("agent_answer", { id: a.conv, callId: a.call_id, allow, remember });
     setApprovals((x) => x.filter((y) => y.call_id !== a.call_id));
@@ -401,6 +448,9 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     if (typeof path === "string") { openDocument(path); setWorkspaceRefresh(n => n + 1); }
   }, [msgs, cur]);
 
+  const blocks = group(msgs);
+  const lastUser = [...msgs].reverse().find(m => m.role === "user");
+  const canRewind = !!cur && !live.busy && modelReady;
   const sidebarOpen = sidebarPref && winW >= (workspaceOpen && cur ? 1280 : 760);
 
   return (
@@ -416,51 +466,29 @@ Attached (read with read_attachment): ${attached.join(", ")}`
         <div className="w-[240px] flex flex-col h-full">
         <div className="px-4 pt-3 pb-0.5 flex items-center gap-2 text-sm font-semibold tracking-tight select-none"><Logo size={18} />LocalWORK</div>
         <div className="p-2 flex items-center gap-1">
-          <button onClick={newConv} disabled={live.busy}
+          <button onClick={newConv} disabled={live.busy} title="New chat (Ctrl+N)"
             className="flex-1 flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium hover:bg-panel-2 transition-colors">
             <SquarePen size={16} className="text-muted" />
             New chat
           </button>
-          <button onClick={toggleSidebar} title="Collapse chats" aria-label="Collapse chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel-2 hover:text-ink transition-colors"><PanelLeftClose size={16} /></button>
+          <button onClick={toggleSidebar} title="Collapse chats (Ctrl+B)" aria-label="Collapse chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel-2 hover:text-ink transition-colors"><PanelLeftClose size={16} /></button>
         </div>
-        <div className="px-4 pt-1 pb-1 text-xs font-medium text-muted">Recents</div>
-        <div className="flex-1 overflow-auto px-2 pb-2">
-          {convs.length === 0 && <div className="px-3 py-2 text-sm text-muted">No chats yet</div>}
-          {convs.map((c, i) => (
-            <div key={c.id} onClick={() => selectConversation(c.id)} title={c.workspace} aria-current={c.id === cur} style={{ "--i": Math.min(i, 14) } as React.CSSProperties}
-              className={"chat-row group flex items-center gap-2 rounded-lg px-3 py-1.5 cursor-pointer " + (c.id === cur ? "bg-panel-2" : "hover:bg-panel-2/60")}>
-              <MessageSquare size={14} className="shrink-0 text-muted" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate">{c.title}</div>
-              </div>
-              <button title="Export as Markdown" aria-label="Export as Markdown" className="hidden group-hover:block text-muted hover:text-ink"
-                onClick={(e) => { e.stopPropagation(); exportChat(c.id); }}><Download size={14} /></button>
-              <button title="Delete" className="hidden group-hover:block text-muted hover:text-red-600"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  if (!window.confirm("Delete this chat?")) return;
-                  await invoke("delete_conversation", { id: c.id });
-                  chatCache.current.delete(c.id);
-                  if (cur === c.id) selectConversation(null);
-                  refreshConvs();
-                }}><Trash2 size={14} /></button>
-            </div>
-          ))}
-        </div>
+        <ChatList convs={convs} cur={cur} searchRef={searchRef} onSelect={selectConversation} onExport={exportChat}
+          onDelete={deleteChat} onChanged={refreshConvs} onError={setErr} />
         <div className="px-3 py-3 flex items-center gap-3 text-sm" title={status.detail || label}>
           <span className="grid place-items-center w-8 h-8 rounded-full bg-panel-2 shrink-0 relative">
             <span className="font-medium">L</span><span className={"absolute bottom-0 right-0 w-2.5 h-2.5 border-2 border-panel rounded-full " + dotCls} />
           </span>
           <div className="min-w-0 flex-1"><div className="truncate" title={status.model}>{status.model || "Local model"}</div><div className="text-xs text-muted">{label.replace("Model ", "")}</div></div>
           {(status.state === "stopped" || status.state === "error") && <button title="Start model" className="text-xs text-accent" onClick={() => invoke("model_start").catch(e => setErr(String(e)))}>Retry</button>}
-          <button title="Settings" className="p-1 text-muted hover:text-ink" onClick={() => setShowSettings(true)}><Gear size={17} /></button>
+          <button title="Settings (Ctrl+,)" aria-label="Settings" className="p-1 text-muted hover:text-ink" onClick={() => setShowSettings(true)}><Gear size={17} /></button>
         </div>
         </div>
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0">
         <header data-tauri-drag-region className={"flex items-center gap-2 pl-3 h-11 text-sm shrink-0 " + (workspaceOpen && cur ? "pr-4" : "pr-36")} >
-          {!sidebarOpen && <button onClick={toggleSidebar} title="Show chats" aria-label="Show chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink transition-colors shrink-0"><PanelLeftOpen size={16} /></button>}
+          {!sidebarOpen && <button onClick={toggleSidebar} title="Show chats (Ctrl+B)" aria-label="Show chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink transition-colors shrink-0"><PanelLeftOpen size={16} /></button>}
           <span className="truncate text-muted pointer-events-none">{curConv?.title}</span>
           {cur && <button onClick={() => exportChat(cur)} title="Export as Markdown" aria-label="Export as Markdown" className="ml-auto shrink-0 grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink"><Download size={16} /></button>}
           {(offline.global || offline.chat) && <span title={offline.global ? "Offline mode is on in Settings" : "This chat is kept offline"} className="shrink-0 rounded-full border border-line px-2 py-0.5 text-xs text-muted">Offline</span>}
@@ -478,9 +506,15 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                   </div>
                 )}
                 {msgs.length === 0 && !live.busy && <h1 className="flex items-center justify-center gap-3 text-2xl tracking-tight"><Logo size={30} />What should we work on?</h1>}
-                {group(msgs).map((g) => g.kind === "tools"
+                {blocks.map((g, i) => g.kind === "tools"
                   ? <ToolGroup key={g.items[0].id} items={g.items} />
-                  : <Row key={g.m.id} m={g.m} actions={{ onDocument: openDocument, onVisual: () => openVisual(String(g.m.id)), onDraft: draft }} />)}
+                  : editing?.id === g.m.id
+                    ? <EditBox key={g.m.id} text={editing.text} canSave={canRewind} onChange={t => setEditing({ id: g.m.id, text: t })}
+                        onCancel={() => setEditing(null)} onSave={() => rewindTo(g.m, editing.text)} />
+                    : <Row key={g.m.id} m={g.m} actions={{ onDocument: openDocument, onVisual: () => openVisual(String(g.m.id)), onDraft: draft }}
+                        canAct={canRewind}
+                        onEdit={g.m.role === "user" ? () => setEditing({ id: g.m.id, text: text(g.m.body?.text) }) : undefined}
+                        onRegenerate={i === blocks.length - 1 && g.m.role === "assistant" && lastUser ? () => rewindTo(lastUser) : undefined} />)}
                 {live.thinking && <div className="text-xs text-muted italic whitespace-pre-wrap max-h-24 overflow-auto">{live.thinking}</div>}
                 {live.text && <Assistant>{live.text}</Assistant>}
                 {live.busy && !live.text && !live.thinking && mine.length === 0 && firstWait?.conv === cur && <FirstTokenCountdown start={firstWait.t0} estimate={firstWait.est} />}
@@ -530,7 +564,10 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                     </div>
                   )}
                   <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)} onPaste={onPaste} rows={1}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
+                      else if (e.key === "ArrowUp" && !input && !files.length && canRewind && lastUser) { e.preventDefault(); setEditing({ id: lastUser.id, text: text(lastUser.body?.text) }); }
+                    }}
                     placeholder={live.busy ? "Type to queue a message…" : "Ask for something…"} aria-label="Message"
                     className="w-full min-h-16 resize-none bg-transparent px-4 pt-4 pb-2 outline-none placeholder:text-muted" />
                   <div className="flex items-center justify-between gap-2 px-3 pb-2">
@@ -579,6 +616,20 @@ Attached (read with read_attachment): ${attached.join(", ")}`
       </main>
     {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} browserTick={browserTick} activity={activity} canSend={modelReady} onSend={t => send(t)} onUserEdit={p => userEdits.current.add(p)} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
       </div>
+    {closeBlocked > 0 && (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-black/30" onClick={() => setCloseBlocked(0)}>
+        <div role="alertdialog" aria-labelledby="close-title" onClick={e => e.stopPropagation()}
+          onKeyDown={e => { if (e.key === "Escape") setCloseBlocked(0); }}
+          className="w-[22rem] rounded-xl border border-line bg-panel p-5 shadow-lg">
+          <div id="close-title" className="font-medium">{closeBlocked > 1 ? `${closeBlocked} tasks are still running.` : "A task is still running."} Quitting stops it.</div>
+          <p className="mt-1 text-sm text-muted">Anything it has already written stays saved.</p>
+          <div className="mt-4 flex justify-end gap-2 text-sm">
+            <button autoFocus onClick={() => setCloseBlocked(0)} className="rounded-lg border border-line px-3 py-1.5 hover:bg-panel-2">Keep working</button>
+            <button onClick={() => invoke("quit_anyway")} className="rounded-lg bg-red-600 text-white px-3 py-1.5 hover:bg-red-700">Quit anyway</button>
+          </div>
+        </div>
+      </div>
+    )}
     {wizard && <Wizard onDone={() => setWizard(false)} />}
     {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} onClose={() => setShowSettings(false)} />}
     </div>
@@ -705,15 +756,31 @@ function Assistant({ children }: { children: string }) {
   );
 }
 
-function Row({ m, actions }: { m: Msg; actions?: RichActions }) {
+type RowProps = { m: Msg; actions?: RichActions; canAct?: boolean; onEdit?: () => void; onRegenerate?: () => void };
+
+function Row({ m, actions, canAct, onEdit, onRegenerate }: RowProps) {
   const b = m.body ?? {};
   if (m.role === "user")
     return (
-      <div className="flex justify-end">
+      <div className="group relative flex justify-end">
         <div className="max-w-[80%] user-text rounded-2xl bg-panel-2 px-4 py-2.5 whitespace-pre-wrap break-words">{text(b.text)}</div>
+        {/* Hover actions sit in the gap below the message, so they add no height. */}
+        <div className="absolute right-0 top-full z-10 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+          <CopyButton text={text(b.text)} />
+          {onEdit && <ActionButton label="Edit" disabled={!canAct} onClick={onEdit}><Pencil size={13} /></ActionButton>}
+        </div>
       </div>
     );
-  if (m.role === "assistant") return <Assistant>{text(b.text)}</Assistant>;
+  if (m.role === "assistant")
+    return (
+      <div className="group relative">
+        <Assistant>{text(b.text)}</Assistant>
+        <div className={"absolute left-0 top-full -mt-3 z-10 flex items-center gap-0.5 " + (onRegenerate ? "" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100")}>
+          <CopyButton text={text(b.text)} />
+          {onRegenerate && <ActionButton label="Regenerate" disabled={!canAct} onClick={onRegenerate}><RotateCcw size={13} /></ActionButton>}
+        </div>
+      </div>
+    );
   if (m.role === "notice")
     return <div className="text-center text-xs text-muted">{text(b.text)}</div>;
   if (m.role === "error")
@@ -738,6 +805,46 @@ function Row({ m, actions }: { m: Msg; actions?: RichActions }) {
     );
   }
   return null;
+}
+
+function ActionButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button title={label} aria-label={label} disabled={disabled} onClick={onClick}
+      className="grid place-items-center w-6 h-6 rounded-md text-muted hover:bg-panel hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent">{children}</button>
+  );
+}
+
+function CopyButton({ text: value }: { text: string }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => { if (!done) return; const t = setTimeout(() => setDone(false), 1200); return () => clearTimeout(t); }, [done]);
+  return (
+    <ActionButton label={done ? "Copied" : "Copy"} onClick={() => navigator.clipboard.writeText(value).then(() => setDone(true)).catch(() => {})}>
+      {done ? <Check size={13} className="text-accent" /> : <Copy size={13} />}
+    </ActionButton>
+  );
+}
+
+function EditBox({ text: value, canSave, onChange, onCancel, onSave }: { text: string; canSave: boolean; onChange: (t: string) => void; onCancel: () => void; onSave: () => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { const t = ref.current; if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }, []);
+  useEffect(() => { const t = ref.current; if (t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 320) + "px"; } }, [value]);
+  const ok = canSave && !!value.trim();
+  return (
+    <div className="ml-auto w-full max-w-[80%] rounded-2xl border border-accent bg-card p-3">
+      <textarea ref={ref} value={value} onChange={e => onChange(e.target.value)} aria-label="Edit message" rows={1}
+        onKeyDown={e => {
+          if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+          else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (ok) onSave(); }
+        }}
+        className="w-full resize-none bg-transparent outline-none" />
+      <div className="mt-2 flex items-center gap-2">
+        <span className="flex-1 text-xs text-muted">Later messages will be removed. File changes stay as they are.</span>
+        <button onClick={onCancel} className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-panel">Cancel</button>
+        <button onClick={onSave} disabled={!ok} title={canSave ? "Send the edited message" : "Wait for the reply to finish"}
+          className="rounded-lg bg-accent text-accent-fg px-2.5 py-1 text-xs disabled:opacity-40 hover:bg-accent-dark">Send</button>
+      </div>
+    </div>
+  );
 }
 
 function ApprovalCard({ a, answer }: { a: Approval; answer: (a: Approval, allow: boolean, remember: boolean) => void }) {

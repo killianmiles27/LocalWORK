@@ -7,6 +7,7 @@ mod paths;
 mod plugins;
 mod pluginstore;
 mod policy;
+mod rewind;
 mod rollback;
 mod runconfig;
 mod setup;
@@ -23,7 +24,11 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Manager, RunEvent, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set once the user chose "Quit anyway" while a task was running.
+static QUIT_CONFIRMED: AtomicBool = AtomicBool::new(false);
 
 pub struct App {
     pub db: agent::Db,
@@ -254,6 +259,50 @@ fn delete_conversation(s: State<App>, id: String) {
 }
 
 #[tauri::command(async)]
+fn conversation_rename(s: State<App>, id: String, title: String) -> Result<(), String> {
+    let t: String = title.trim().chars().take(120).collect();
+    if t.is_empty() {
+        return Err("A chat needs a name".into());
+    }
+    let c = s.db.lock().unwrap();
+    store::rename(&c, &id, &t);
+    // A name the user chose is never replaced by the automatic one.
+    store::kv_set(&c, &format!("titled:{id}"), "1");
+    Ok(())
+}
+
+#[tauri::command(async)]
+fn conversation_pin(s: State<App>, id: String, on: bool) {
+    store::set_pinned(&s.db.lock().unwrap(), &id, on);
+}
+
+#[tauri::command(async)]
+fn search_conversations(s: State<App>, q: String) -> Vec<String> {
+    store::search(&s.db.lock().unwrap(), &q)
+}
+
+/// Edit and regenerate: cuts the chat back to before user message `msg_id` and returns its text for resending.
+#[tauri::command(async)]
+fn conversation_rewind(s: State<App>, id: String, msg_id: i64) -> Result<String, String> {
+    let running = s.agents.lock().unwrap().get(&id).cloned();
+    if let Some(a) = running {
+        if a.busy() {
+            return Err("Wait for the current reply to finish, or stop it first.".into());
+        }
+        // The agent rereads its session file on the next message.
+        s.agents.lock().unwrap().remove(&id);
+        a.retire();
+    }
+    rewind::rewind(&s.db.lock().unwrap(), &id, msg_id)
+}
+
+#[tauri::command]
+fn quit_anyway(app: AppHandle) {
+    QUIT_CONFIRMED.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
+
+#[tauri::command(async)]
 fn load_messages(s: State<App>, id: String, after: Option<i64>) -> Vec<Value> {
     store::messages(&s.db.lock().unwrap(), &id, after.unwrap_or(0))
 }
@@ -467,6 +516,19 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
+        .on_window_event(|window, event| {
+            // Closing while a task runs asks first (the UI shows "Keep working" / "Quit anyway").
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if QUIT_CONFIRMED.load(Ordering::SeqCst) {
+                    return;
+                }
+                let busy = window.state::<App>().agents.lock().unwrap().values().filter(|a| a.busy()).count();
+                if busy > 0 {
+                    api.prevent_close();
+                    let _ = window.emit("close-blocked", busy);
+                }
+            }
+        })
         .setup(move |app| {
             // Plugin setup runs during build, not when .plugin() is called.
             // Only the primary may reap processes or open shared app state.
@@ -513,6 +575,11 @@ pub fn run() {
             desktop::open_external,
             set_auto_edit,
             agent_send,
+            conversation_rename,
+            conversation_pin,
+            search_conversations,
+            conversation_rewind,
+            quit_anyway,
             agent_stop,
             agent_compact,
             context_usage,

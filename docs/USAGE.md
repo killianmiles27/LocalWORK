@@ -6,6 +6,28 @@ Choose a folder for the task using the folder control beside the composer. New c
 
 Keep task files together. For an existing document, work on a copy until you trust the result. Attach a file using the attachment button, drag and drop, or paste. State which file should change and what should stay the same.
 
+## Find and organise chats
+
+The sidebar groups chats into Pinned, Today, Yesterday, Previous 7 days, Previous 30 days and Older. Search chats at the top of the sidebar to match titles and message text. Hover over a chat to pin, rename, export or delete it. You can also double-click its title to rename it.
+
+## Edit a message or regenerate a reply
+
+Hover over one of your messages and choose Edit. In an empty composer, Up arrow edits your last message. Sending the edited text removes that message and everything after it, and the chat continues from there. Regenerate on the last reply asks the same question again. Files the assistant already changed are not undone. Both actions wait until the current reply has finished, so stop it first if needed. Very long chats that were summarized cannot go back past the summary.
+
+## Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| Ctrl+N | New chat |
+| Ctrl+K | Search chats |
+| Ctrl+B | Show or hide the sidebar |
+| Ctrl+, | Settings |
+| Up arrow (empty composer) | Edit your last message |
+| Enter / Shift+Enter | Send / new line |
+| Esc | Cancel an edit or clear the search |
+
+If you close the window while a task is still running, LocalWORK asks before quitting, because quitting stops the task.
+
 ## Give it a clear task
 
 Include the result you want, the input files, important limits, and how you will judge completion. For example:

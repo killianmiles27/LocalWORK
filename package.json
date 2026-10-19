@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test:workspace": "node --test scripts/tests/intelligent-ui.test.mjs",
+    "test:workspace": "node --test scripts/tests/intelligent-ui.test.mjs scripts/tests/chat-dates.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

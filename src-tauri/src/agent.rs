@@ -21,6 +21,8 @@ struct Inner {
     stdin: Option<ChildStdin>,
     ready: bool,
     processing: bool,
+    /// A user turn (not an internal /context request) is running.
+    user_turn: bool,
     queue: Vec<Value>,
     remembered: Vec<String>,
     pending: HashMap<String, Value>,
@@ -35,6 +37,8 @@ pub struct Agent {
     inner: Mutex<Inner>,
     auto_edit: Mutex<bool>,
     stopping: AtomicBool,
+    /// Closed on purpose to be restarted (edit and regenerate); its exit is not reported to the UI.
+    retired: AtomicBool,
 }
 
 pub type Agents = Arc<Mutex<HashMap<String, Arc<Agent>>>>;
@@ -52,7 +56,8 @@ fn dispatch_next(inner: &mut Inner) {
     if inner.ready && !inner.processing && !inner.queue.is_empty() {
         let message = inner.queue.remove(0);
         inner.processing = true;
-        if !message["msg_id"].as_str().unwrap_or("").starts_with("ctx-") { crate::stats::task_begin(); }
+        inner.user_turn = !message["msg_id"].as_str().unwrap_or("").starts_with("ctx-");
+        if inner.user_turn { crate::stats::task_begin(); }
         write_line(inner, &message);
     }
 }
@@ -132,6 +137,12 @@ impl Agent {
         dispatch_next(&mut g);
     }
 
+    /// True while a user turn is running or waiting in the queue.
+    pub fn busy(&self) -> bool {
+        let g = self.inner.lock().unwrap();
+        g.user_turn || g.queue.iter().any(|m| !m["msg_id"].as_str().unwrap_or("").starts_with("ctx-"))
+    }
+
     pub fn stop_turn(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         let mut g = self.inner.lock().unwrap();
@@ -156,6 +167,12 @@ impl Agent {
         } else {
             write_line(&mut self.inner.lock().unwrap(), &json!({"type": "tool_deny", "call_id": call_id, "reason": "The user declined this action."}));
         }
+    }
+
+    /// Shut down without telling the UI the chat ended; the next message starts a fresh process.
+    pub fn retire(&self) {
+        self.retired.store(true, Ordering::SeqCst);
+        self.shutdown();
     }
 
     /// Close stdin (clean exit), give it a moment, then kill the tree.
@@ -319,6 +336,7 @@ pub fn get_or_start(
         inner: Mutex::new(Inner { stdin: Some(stdin), ..Default::default() }),
         auto_edit: Mutex::new(store::kv_get(&db.lock().unwrap(), "auto_edit").map(|v| v != "0").unwrap_or(true)),
         stopping: AtomicBool::new(false),
+        retired: AtomicBool::new(false),
     });
     agents.lock().unwrap().insert(conv.to_string(), agent.clone());
 
@@ -604,6 +622,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 if ty == "stream_end" {
                     let mut g = agent.inner.lock().unwrap();
                     g.processing = false;
+                    g.user_turn = false;
                     dispatch_next(&mut g);
                 }
             }
@@ -620,7 +639,9 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
     // A stopped process may finish draining after a replacement was started.
     if active.get(&conv).is_none_or(|current| Arc::ptr_eq(current, &agent)) {
         active.remove(&conv);
-        let _ = app.emit("agent-event", json!({"conv": conv, "ev": {"type": "agent_exit"}}));
+        if !agent.retired.load(Ordering::SeqCst) {
+            let _ = app.emit("agent-event", json!({"conv": conv, "ev": {"type": "agent_exit"}}));
+        }
     }
 }
 

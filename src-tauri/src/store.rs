@@ -19,6 +19,8 @@ pub fn open(dir: &Path) -> rusqlite::Result<Connection> {
          CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts,rowid,text) VALUES('delete',old.id,old.text); END;
          CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);",
     )?;
+    // Added after the first release; fails harmlessly once the column exists.
+    let _ = c.execute("ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0", []);
     Ok(c)
 }
 
@@ -38,10 +40,10 @@ pub fn create_conv(c: &Connection, id: &str, workspace: &str) -> rusqlite::Resul
 }
 
 pub fn list_convs(c: &Connection) -> Vec<Value> {
-    let mut st = c.prepare("SELECT id,title,workspace,updated FROM conversations ORDER BY updated DESC").unwrap();
+    let mut st = c.prepare("SELECT id,title,workspace,updated,pinned FROM conversations ORDER BY pinned DESC, updated DESC").unwrap();
     st.query_map([], |r| {
         Ok(json!({"id": r.get::<_, String>(0)?, "title": r.get::<_, String>(1)?,
-                  "workspace": r.get::<_, String>(2)?, "updated": r.get::<_, i64>(3)?}))
+                  "workspace": r.get::<_, String>(2)?, "updated": r.get::<_, i64>(3)?, "pinned": r.get::<_, i64>(4)? != 0}))
     })
     .unwrap()
     .filter_map(|x| x.ok())
@@ -63,6 +65,45 @@ pub fn rename(c: &Connection, id: &str, title: &str) {
     let _ = c.execute("UPDATE conversations SET title=?2 WHERE id=?1", params![id, title]);
 }
 
+pub fn set_pinned(c: &Connection, id: &str, on: bool) {
+    let _ = c.execute("UPDATE conversations SET pinned=?2 WHERE id=?1", params![id, on as i64]);
+}
+
+/// Chats whose title or user/assistant text contains `q` (case-insensitive for ASCII), newest first.
+pub fn search(c: &Connection, q: &str) -> Vec<String> {
+    let q = q.trim();
+    if q.is_empty() {
+        return vec![];
+    }
+    let esc: String = q.chars().flat_map(|ch| if matches!(ch, '%' | '_' | '!') { vec!['!', ch] } else { vec![ch] }).collect();
+    let pat = format!("%{esc}%");
+    let Ok(mut st) = c.prepare(
+        "SELECT id FROM conversations WHERE title LIKE ?1 ESCAPE '!'
+            OR id IN (SELECT conv FROM messages WHERE role IN ('user','assistant') AND body LIKE ?1 ESCAPE '!')
+         ORDER BY pinned DESC, updated DESC LIMIT 200",
+    ) else { return vec![] };
+    st.query_map([pat], |r| r.get(0)).map(|it| it.filter_map(|x| x.ok()).collect()).unwrap_or_default()
+}
+
+pub fn message(c: &Connection, conv: &str, id: i64) -> Option<(String, Value)> {
+    c.query_row("SELECT role,body FROM messages WHERE conv=?1 AND id=?2", params![conv, id], |r| {
+        let body: String = r.get(1)?;
+        Ok((r.get(0)?, serde_json::from_str(&body).unwrap_or(Value::Null)))
+    })
+    .ok()
+}
+
+pub fn users_after(c: &Connection, conv: &str, id: i64) -> usize {
+    c.query_row("SELECT COUNT(*) FROM messages WHERE conv=?1 AND id>?2 AND role='user'", params![conv, id], |r| r.get::<_, i64>(0))
+        .unwrap_or(0) as usize
+}
+
+/// Removes message `id` and everything after it (edit and regenerate). Row ids are never reused.
+pub fn truncate_from(c: &Connection, conv: &str, id: i64) {
+    let _ = c.execute("DELETE FROM messages WHERE conv=?1 AND id>=?2", params![conv, id]);
+    let _ = c.execute("DELETE FROM kv WHERE k=?1", [format!("ctx:{conv}")]);
+}
+
 pub fn delete_conv(c: &Connection, id: &str) {
     let _ = c.execute("DELETE FROM messages WHERE conv=?1", [id]);
     let _ = c.execute("DELETE FROM conversations WHERE id=?1", [id]);
@@ -77,8 +118,8 @@ pub fn add_msg(c: &Connection, conv: &str, role: &str, body: &Value) {
     let _ = c.execute("UPDATE conversations SET updated=?2 WHERE id=?1", params![conv, now()]);
 }
 
-/// Messages are append-only (only deleting a whole chat removes rows), so `after` lets the UI fetch just
-/// the rows it has not seen yet.
+/// Rows are only ever appended, or cut from the end by `truncate_from` (the UI then drops its cache), so
+/// `after` lets the UI fetch just the rows it has not seen yet.
 pub fn messages(c: &Connection, conv: &str, after: i64) -> Vec<Value> {
     let mut st = c.prepare("SELECT id,role,body,ts FROM messages WHERE conv=?1 AND id>?2 ORDER BY id").unwrap();
     st.query_map(params![conv, after], |r| {
