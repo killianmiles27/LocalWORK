@@ -2,9 +2,9 @@
   "aionrs": {
     "version": "0.2.11",
     "source": "https://github.com/iOfficeAI/aionrs at 8e61a90329fa9f67c4fdf7e97fe02c24dba33f75; scripts/build-agent.ps1",
-    "sha256": "e31c9d7ac1ffe8ca27e6df50358fd40535ee2a99b5a2514b2118019170ffb91d",
+    "sha256": "a90075270e976f21739a57ae0a389dbc230fdcf081890c4339952eb7fc85d580",
     "patch": "patches/aionrs-localwork.patch",
-    "patch_sha256": "70d491003c5da8f9e4f0517960e1e2e8c5ac8a5ce7532dba4251b376edf8857f"
+    "patch_sha256": "a28bf9fbaf9c6e368bdd50eb72642be06065268bfb02a0081a2e908adc0ca8d6"
   },
   "officecli": {
     "version": "1.0.157",
@@ -34,5 +34,10 @@
     "file": "ggml-small-q5_1.bin",
     "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
     "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"
+  },
+  "thesysdev": {
+    "version": "03213439358bf3408ad61a46ec9e3230c5572e48",
+    "source": "https://github.com/thesysdev/open-intelligent-ui at 03213439358bf3408ad61a46ec9e3230c5572e48 (MIT, Copyright (c) 2026 Thesys Inc.); declarative component system re-implemented in src/ui-runtime.ts, no upstream files vendored",
+    "license": "MIT"
   }
 }

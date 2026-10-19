@@ -117,7 +117,21 @@ fn officecli_writes_output(tool: &str, args: &Value) -> bool {
 
 const PROTECTED: &[&str] = &["c:\\windows", "c:\\program files", "c:\\programdata"];
 
+/// Automatic mode runs without prompts. It still stops for three things that cannot be taken back:
+/// destructive shell commands, entering a password or payment detail on a website, and online purchases.
+/// Protected locations (Windows, Program Files, the app's own data) stay denied in every mode.
 pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String]) -> Decision {
+    match guarded(tool, category, args, workspace, auto_edit, remembered) {
+        Decision::Ask { class, reason, can_remember } if !auto_edit || class == Class::Destructive || reason.contains("password or payment") || reason.contains("purchase") => {
+            Decision::Ask { class, reason, can_remember }
+        }
+        Decision::Ask { .. } => Decision::Allow,
+        d => d,
+    }
+}
+
+/// The step-by-step policy that Ask mode shows to the user.
+fn guarded(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String]) -> Decision {
     if tool == "Spawn" {
         return Decision::Deny("Sub-agents are disabled in this app".into());
     }
@@ -246,7 +260,7 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         }
         return if auto_edit || remembered { Decision::Allow } else { Decision::Ask { class: Class::Write, reason: "Create or change an Office document".into(), can_remember: true } };
     }
-    if t.contains("workspace_info") || t.contains("load_skill") || t.contains("read_attachment") || t.contains("show_chart") || t.contains("show_table") || t.contains("show_diagram") || t.contains("publish_artifact") || t.contains("update_plan") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
+    if t.contains("workspace_info") || t.contains("load_skill") || t.contains("read_attachment") || t.contains("show_chart") || t.contains("show_table") || t.contains("show_diagram") || t.contains("publish_artifact") || t.contains("update_plan") || t.contains("ask_user") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
         return Decision::Allow;
     }
     if outside {
@@ -273,11 +287,13 @@ fn browser_decision(args: &Value, auto_edit: bool) -> Decision {
     let ask = |class, reason: &str| Decision::Ask { class, reason: reason.into(), can_remember: false };
     let sensitive = Regex::new(r"(?i)(password|passwd|\b(card|cvv|cvc|iban|ssn|routing)\b|security[\s_-]*code|account[\s_-]*number)").unwrap();
     let consequential = Regex::new(r"(?i)\b(submit|requestsubmit|buy|purchase|pay|order|checkout|delete|remove|send|confirm|post|publish|sign ?in|log ?in|transfer)\b").unwrap();
+    let purchase = Regex::new(r"(?i)\b(buy|purchase|pay|checkout|place ?order)\b").unwrap();
     let form_action = (rest.contains("form") || rest.contains("[type=submit]"))
         && Regex::new(r"(?i)\.\s*(click|dispatchevent)\s*\(").unwrap().is_match(&rest);
     match cmd.split_whitespace().next().unwrap_or("") {
         "upload" => ask(Class::Write, "Upload a file from your computer to a website"),
         "fill" | "type" if sensitive.is_match(&full) => ask(Class::Exec, "Enter a password or payment detail on a website"),
+        "click" | "dblclick" | "press" | "eval" if purchase.is_match(&full) => ask(Class::Exec, "Make a purchase or payment online"),
         "click" | "dblclick" | "press" if consequential.is_match(&full) => ask(Class::Exec, "Click a button that submits or changes something online"),
         "eval" if sensitive.is_match(&rest) => ask(Class::Exec, "Run a script that may access password or payment details"),
         "eval" if consequential.is_match(&rest) || form_action => ask(Class::Exec, "Run a script that may submit or change something online"),
@@ -293,106 +309,121 @@ mod tests {
 
     #[test]
     fn automatic_commands_accept_quoted_workspace_paths_with_spaces() {
-        let ws = Path::new(r"C:\Random\Working Folder\LocalWORK\draft");
-        for path in [r"C:\Random\Working Folder\LocalWORK\draft\figure.png", r"C:\\Random\\Working Folder\\LocalWORK\\draft\\figure.png"] {
+        let ws = Path::new(r"C:\Users\Me\Projects\draft");
+        for path in [r"C:\Users\Me\Projects\draft\figure.png", r"C:\\Users\\Me\\Projects\\draft\\figure.png"] {
             let cmd = format!("Add-Type -AssemblyName System.Drawing; $p = \"{path}\"; [System.Drawing.Image]::FromFile($p)");
-            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Allow));
+            assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Allow));
         }
-        for cmd in [r#"[System.IO.File]::ReadAllText("C:\Random\Working Folder\Other\secret.txt")"#, r#"[System.IO.File]::ReadAllText("\\server\share\secret.txt")"#, "Remove-Item figure.png"] {
-            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Ask { .. }));
+        for cmd in [r#"[System.IO.File]::ReadAllText("C:\Users\Me\Other\secret.txt")"#, r#"[System.IO.File]::ReadAllText("\\server\share\secret.txt")"#, "Remove-Item figure.png"] {
+            assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Ask { .. }));
         }
-        assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":"Add-Type -AssemblyName System.Drawing"}), ws, false, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":"Add-Type -AssemblyName System.Drawing"}), ws, false, &[]), Decision::Ask { .. }));
     }
 
     #[test]
     fn readonly_fast_paths_fail_closed_for_shell_programs_and_mutating_flags() {
         let ws = Path::new(r"C:\work");
         for cmd in [r"echo $([IO.File]::WriteAllText('outside.txt','changed'))", "echo (Set-Content outside.txt changed)", "echo %COMSPEC%", "echo ready; Remove-Item x", "echo ready\nRemove-Item x", "git branch -D main", "git branch --delete main", "git branch feature", "git diff --output=outside.txt", "git diff -o outside.txt", "git log --output=outside.txt"] {
-            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, false, &[]), Decision::Ask { .. }), "{cmd}");
+            assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":cmd}), ws, false, &[]), Decision::Ask { .. }), "{cmd}");
         }
-        assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":"git branch --all"}), ws, false, &[]), Decision::Allow));
-        assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":"echo harmless", "shell":"C:\\Temp\\untrusted.exe"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":"git branch --all"}), ws, false, &[]), Decision::Allow));
+        assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":"echo harmless", "shell":"C:\\Temp\\untrusted.exe"}), ws, true, &[]), Decision::Ask { .. }));
     }
 
     #[test]
     fn officecli_positional_paths_are_checked_for_reads_and_batch_changes() {
         let ws = Path::new(r"C:\work");
         for args in [json!({"args":["verify", r"C:\other\report.docx"]}), json!({"args":["view", r"C:\other\report.docx", "text"]})] {
-            assert!(matches!(decide("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Ask { class: Class::Read, .. }));
+            assert!(matches!(guarded("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Ask { class: Class::Read, .. }));
         }
-        assert!(matches!(decide("workbench__officecli", "tool", &json!({"args":["batch", r"C:\other\report.docx", "--input", "ops.json"]}), ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
+        assert!(matches!(guarded("workbench__officecli", "tool", &json!({"args":["batch", r"C:\other\report.docx", "--input", "ops.json"]}), ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
         for verb in ["add", "set", "remove"] {
             let args = json!({"args":[verb, r"C:\other\report.docx", "--text", "x"]});
-            assert!(matches!(decide("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
+            assert!(matches!(guarded("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
         }
         for args in [json!({"args":["set", "report.docx", "/body/p[1]", "text"]}), json!({"args":["add", "deck.pptx", "/slide[1]", "text"]})] {
-            assert!(matches!(decide("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Allow));
+            assert!(matches!(guarded("workbench__officecli", "tool", &args, ws, true, &[]), Decision::Allow));
         }
-        assert!(matches!(decide("workbench__officecli", "tool", &json!({"args":["add"]}), ws, true, &[]), Decision::Ask { .. }));
-        assert!(matches!(decide("workbench__officecli", "tool", &json!({"args":["verify", r"C:\Users\User\AppData\Local\Workbench\profile.json"]}), ws, true, &[]), Decision::Deny(_)));
-        assert!(matches!(decide("workbench__officecli", "tool", &json!({"args":["verify", "draft.docx"]}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(guarded("workbench__officecli", "tool", &json!({"args":["add"]}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("workbench__officecli", "tool", &json!({"args":["verify", r"C:\Users\User\AppData\Local\Workbench\profile.json"]}), ws, true, &[]), Decision::Deny(_)));
+        assert!(matches!(guarded("workbench__officecli", "tool", &json!({"args":["verify", "draft.docx"]}), ws, true, &[]), Decision::Allow));
         let view_output = json!({"args":["view", "inside.docx", "html", "--out", r"C:\other\preview.html"]});
-        assert!(matches!(decide("workbench__officecli", "tool", &view_output, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
+        assert!(matches!(guarded("workbench__officecli", "tool", &view_output, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
         let hidden_outside = json!({"path":"inside.docx", "args":["view", r"C:\other\secret.docx", "text"]});
-        assert!(matches!(decide("workbench__officecli", "tool", &hidden_outside, ws, true, &[]), Decision::Ask { class: Class::Read, .. }));
+        assert!(matches!(guarded("workbench__officecli", "tool", &hidden_outside, ws, true, &[]), Decision::Ask { class: Class::Read, .. }));
         let merge_output = json!({"args":["merge", "template.docx", r"C:\other\merged.docx"]});
-        assert!(matches!(decide("workbench__officecli", "tool", &merge_output, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
+        assert!(matches!(guarded("workbench__officecli", "tool", &merge_output, ws, true, &[]), Decision::Ask { class: Class::Write, .. }));
         let view_inside_output = json!({"args":["view", "inside.docx", "html", "--out", "preview.html"]});
-        assert!(matches!(decide("workbench__officecli", "tool", &view_inside_output, ws, false, &[]), Decision::Ask { class: Class::Write, .. }));
+        assert!(matches!(guarded("workbench__officecli", "tool", &view_inside_output, ws, false, &[]), Decision::Ask { class: Class::Write, .. }));
         let help = json!({"args":["merge", "--help"]});
-        assert!(matches!(decide("workbench__officecli", "tool", &help, ws, false, &[]), Decision::Allow));
+        assert!(matches!(guarded("workbench__officecli", "tool", &help, ws, false, &[]), Decision::Allow));
         let config = json!({"args":["config", "autoUpdate", "true"]});
-        assert!(matches!(decide("workbench__officecli", "tool", &config, ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("workbench__officecli", "tool", &config, ws, true, &[]), Decision::Ask { .. }));
     }
 
     #[test]
     fn automatic_mode_allows_routine_shell_wrappers_and_keeps_consequential_checks() {
         let ws = Path::new(r"C:\work");
         for cmd in [r#"pwsh -Command "('one two' -split '\s+').Count""#, r#"powershell -NoProfile -Command "Get-FileHash figure.png""#, "cmd /c echo ready"] {
-            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Allow));
-            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, false, &[]), Decision::Ask { .. }));
+            assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Allow));
+            assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":cmd}), ws, false, &[]), Decision::Ask { .. }));
         }
         for cmd in ["pwsh -Command Remove-Item figure.png", "cmd /c curl https://example.com", "powershell -enc AAAA", "pwsh -Command npm install package"] {
-            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Ask { .. }));
+            assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd":cmd}), ws, true, &[]), Decision::Ask { .. }));
         }
     }
 
     #[test]
     fn automatic_mode_allows_routine_browser_eval_but_guards_submissions_and_credentials() {
         let ws = Path::new(r"C:\work");
-        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":"document.title"}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"eval", "args":"document.title"}), ws, true, &[]), Decision::Allow));
         // Eval labels describe intent, not a clicked control or executed code.
-        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":["() => document.querySelectorAll('.vzb-bc-bubbles circle').length"], "label":"Confirm Korea trail labels"}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"eval", "args":["() => document.querySelectorAll('.vzb-bc-bubbles circle').length"], "label":"Confirm Korea trail labels"}), ws, true, &[]), Decision::Allow));
         for script in ["() => document.forms[0].requestSubmit()", "() => document.querySelector('form button').click()"] {
-            assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":[script]}), ws, true, &[]), Decision::Ask { .. }));
+            assert!(matches!(guarded("browser", "tool", &json!({"command":"eval", "args":[script]}), ws, true, &[]), Decision::Ask { .. }));
         }
-        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":["() => document.querySelector('.vzb-play').click()"]}), ws, true, &[]), Decision::Allow));
-        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":["() => Array.from(document.querySelectorAll('[class*=time]')).map(e => e.className)"]}), ws, true, &[]), Decision::Allow));
-        assert!(matches!(decide("browser", "tool", &json!({"command":"fill", "label":"SSN"}), ws, true, &[]), Decision::Ask { .. }));
-        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":"document.title"}), ws, false, &[]), Decision::Ask { .. }));
-        assert!(matches!(decide("browser", "tool", &json!({"command":"eval", "args":"document.querySelector('form').submit()"}), ws, true, &[]), Decision::Ask { .. }));
-        assert!(matches!(decide("browser", "tool", &json!({"command":"fill", "label":"password"}), ws, true, &[]), Decision::Ask { .. }));
-        assert!(matches!(decide("browser", "tool", &json!({"command":"press", "args":"Enter", "label":"Submit order"}), ws, true, &[]), Decision::Ask { .. }));
-        assert!(matches!(decide("browser", "tool", &json!({"command":"press", "args":"Enter", "label":"Next chart"}), ws, true, &[]), Decision::Allow));
-        assert!(matches!(decide("browser", "tool", &json!({"command":"upload"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"eval", "args":["() => document.querySelector('.vzb-play').click()"]}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"eval", "args":["() => Array.from(document.querySelectorAll('[class*=time]')).map(e => e.className)"]}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"fill", "label":"SSN"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"eval", "args":"document.title"}), ws, false, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"eval", "args":"document.querySelector('form').submit()"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"fill", "label":"password"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"press", "args":"Enter", "label":"Submit order"}), ws, true, &[]), Decision::Ask { .. }));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"press", "args":"Enter", "label":"Next chart"}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(guarded("browser", "tool", &json!({"command":"upload"}), ws, true, &[]), Decision::Ask { .. }));
     }
 
     #[test]
     fn protected_paths_use_component_boundaries_and_resolve_parent_segments() {
         let ws = Path::new(r"C:\work");
-        let exact = decide("write_file", "edit", &json!({"path":r"C:\Windows\System32\note.txt"}), ws, true, &[]);
+        let exact = guarded("write_file", "edit", &json!({"path":r"C:\Windows\System32\note.txt"}), ws, true, &[]);
         assert!(matches!(exact, Decision::Deny(_)));
-        let boundary_neighbor = decide("write_file", "edit", &json!({"path":r"C:\Windows-old\note.txt"}), ws, true, &[]);
+        let boundary_neighbor = guarded("write_file", "edit", &json!({"path":r"C:\Windows-old\note.txt"}), ws, true, &[]);
         assert!(matches!(boundary_neighbor, Decision::Ask { .. }));
-        let workbench = decide("write_file", "edit", &json!({"path":r"C:\Users\User\AppData\Local\Workbench\profile.json"}), ws, true, &[]);
+        let workbench = guarded("write_file", "edit", &json!({"path":r"C:\Users\User\AppData\Local\Workbench\profile.json"}), ws, true, &[]);
         assert!(matches!(workbench, Decision::Deny(_)));
-        let workbench_neighbor = decide("write_file", "edit", &json!({"path":r"C:\Users\User\AppData\Local\Workbench-old\file.txt"}), ws, true, &[]);
+        let workbench_neighbor = guarded("write_file", "edit", &json!({"path":r"C:\Users\User\AppData\Local\Workbench-old\file.txt"}), ws, true, &[]);
         assert!(matches!(workbench_neighbor, Decision::Ask { .. }));
-        let traversal = decide("write_file", "edit", &json!({"path":r"C:\work\..\Windows\System32\note.txt"}), ws, true, &[]);
+        let traversal = guarded("write_file", "edit", &json!({"path":r"C:\work\..\Windows\System32\note.txt"}), ws, true, &[]);
         assert!(matches!(traversal, Decision::Deny(_)));
-        let relative_traversal = decide("write_file", "edit", &json!({"path":r"..\outside.txt"}), ws, true, &[]);
+        let relative_traversal = guarded("write_file", "edit", &json!({"path":r"..\outside.txt"}), ws, true, &[]);
         assert!(matches!(relative_traversal, Decision::Ask { .. }));
-        let double_traversal = decide("write_file", "edit", &json!({"path":r"..\..\Windows\System32\note.txt"}), ws, true, &[]);
+        let double_traversal = guarded("write_file", "edit", &json!({"path":r"..\..\Windows\System32\note.txt"}), ws, true, &[]);
         assert!(matches!(double_traversal, Decision::Deny(_)));
+    }
+
+    #[test]
+    fn automatic_mode_only_stops_for_destructive_credentials_and_purchases() {
+        let ws = Path::new(r"C:\work");
+        let auto = |tool: &str, cat: &str, args: Value| decide(tool, cat, &args, ws, true, &[]);
+        assert!(matches!(auto("browser", "tool", json!({"command":"eval", "args":"document.querySelector('form').submit()"})), Decision::Allow));
+        assert!(matches!(auto("browser", "tool", json!({"command":"upload"})), Decision::Allow));
+        assert!(matches!(auto("ExecCommand", "exec", json!({"cmd":"npm install"})), Decision::Allow));
+        assert!(matches!(auto("read_file", "info", json!({"path":r"C:\other\notes.txt"})), Decision::Allow));
+        assert!(matches!(auto("ExecCommand", "exec", json!({"cmd":"Remove-Item -Recurse out"})), Decision::Ask { class: Class::Destructive, .. }));
+        assert!(matches!(auto("browser", "tool", json!({"command":"fill", "label":"password"})), Decision::Ask { .. }));
+        assert!(matches!(auto("browser", "tool", json!({"command":"click", "label":"Place order"})), Decision::Ask { .. }));
+        assert!(matches!(auto("write_file", "edit", json!({"path":r"C:\Windows\System32\x.txt"})), Decision::Deny(_)));
+        assert!(matches!(decide("browser", "tool", &json!({"command":"upload"}), ws, false, &[]), Decision::Ask { .. }));
     }
 }

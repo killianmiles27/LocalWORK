@@ -327,8 +327,182 @@ index 6c2b1d8..3762b49 100644
  [[package]]
  name = "zerofrom"
  version = "0.1.7"
+diff --git a/crates/aion-agent/src/commands/compact.rs b/crates/aion-agent/src/commands/compact.rs
+index 2a945c7..bec909e 100644
+--- a/crates/aion-agent/src/commands/compact.rs
++++ b/crates/aion-agent/src/commands/compact.rs
+@@ -2,6 +2,7 @@ use async_trait::async_trait;
+ 
+ use super::{CommandContext, CommandResult, SlashCommand};
+ use crate::compact::auto;
++use crate::context_usage::estimate_tool_definitions_tokens;
+ use aion_types::compact::{CompactMetadata, CompactTrigger};
+ use aion_types::message::ContentBlock;
+ 
+@@ -18,7 +19,7 @@ impl SlashCommand for CompactCommand {
+     }
+ 
+     async fn execute(&self, ctx: &mut CommandContext<'_>, _args: &str) -> anyhow::Result<CommandResult> {
+-        if ctx.messages.len() <= 2 {
++        if ctx.messages.len() <= 2 && !ctx.provider.native_compaction_enabled() {
+             ctx.output.emit_info("Context is already compact");
+             return Ok(CommandResult::Continue);
+         }
+@@ -28,15 +29,40 @@ impl SlashCommand for CompactCommand {
+ 
+         let pre_tokens = ctx.compact_state.last_input_tokens;
+ 
+-        match auto::autocompact(
++        let runtime_overhead = ctx
++            .prompt_usage
++            .total_tokens()
++            .saturating_add(ctx.dynamic_system_tokens)
++            .saturating_add(estimate_tool_definitions_tokens(ctx.context_tools));
++        match auto::autocompact_with_overhead(
+             ctx.provider.as_ref(),
+             ctx.messages,
+             ctx.model,
+             ctx.compact_config,
+             ctx.compact_state,
++            runtime_overhead,
+         )
+         .await
+         {
++            Ok(result)
++                if result.native
++                    && result.after_tokens.is_some_and(|tokens| {
++                        tokens.saturating_add(runtime_overhead) as usize
++                            >= ctx.compact_config.context_window.saturating_sub(
++                                ctx.compact_config
++                                    .output_reserve
++                                    .max(ctx.compact_config.emergency_buffer),
++                            )
++                    }) =>
++            {
++                ctx.output.emit_error(
++                    "Compact failed: native history still exceeds the request budget; original history retained",
++                );
++            }
++            Ok(result) if !result.compacted => {
++                ctx.output
++                    .emit_info("Context is already compact (native compaction retained history)");
++            }
+             Ok(result) => {
+                 let msgs_summarized = result.messages_summarized;
+                 *ctx.messages = result.messages;
+@@ -61,9 +87,14 @@ impl SlashCommand for CompactCommand {
+                 }
+ 
+                 ctx.output.emit_info(&format!(
+-                    "Context compacted: {}k → compact ({} messages summarized)",
++                    "Context compacted: {}k → compact ({} messages summarized; {})",
+                     pre_tokens / 1000,
+-                    msgs_summarized
++                    msgs_summarized,
++                    if result.native {
++                        "native Strata compaction"
++                    } else {
++                        "generic summary"
++                    }
+                 ));
+                 ctx.context_state.record_compact();
+                 return Ok(CommandResult::ContextChanged);
+diff --git a/crates/aion-agent/src/commands/compact_test.rs b/crates/aion-agent/src/commands/compact_test.rs
+index b2679b4..17b6d20 100644
+--- a/crates/aion-agent/src/commands/compact_test.rs
++++ b/crates/aion-agent/src/commands/compact_test.rs
+@@ -162,4 +162,89 @@ mod tests {
+         assert_eq!(ctx.context_state.compact_count, 1);
+         assert_eq!(ctx.messages.len(), 2);
+     }
++    struct NativeProvider {
++        compacted: bool,
++        fail: bool,
++    }
++    #[async_trait::async_trait]
++    impl LlmProvider for NativeProvider {
++        fn native_compaction_enabled(&self) -> bool {
++            true
++        }
++        async fn stream(&self, _: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError> {
++            panic!("manual native compaction must not call generic stream")
++        }
++        async fn compact(
++            &self,
++            request: &aion_types::compact::NativeCompactRequest,
++        ) -> Result<Option<aion_types::compact::NativeCompactResult>, ProviderError> {
++            if self.fail {
++                return Err(ProviderError::Parse("truncated response".into()));
++            }
++            let mut messages = request.messages.clone();
++            if self.compacted {
++                messages.remove(0);
++            }
++            Ok(Some(aion_types::compact::NativeCompactResult {
++                messages,
++                compacted: self.compacted,
++                before_tokens: 50000,
++                after_tokens: 1000,
++                messages_summarized: usize::from(self.compacted),
++            }))
++        }
++    }
++    #[tokio::test]
++    async fn manual_native_reuses_canonical_tail_and_noop_or_failure_retains_history() {
++        for (compacted, fail) in [(true, false), (false, false), (false, true)] {
++            let registry = CommandRegistry::new();
++            let output = NullSink;
++            let mut messages: Vec<Message> = (0..6)
++                .map(|index| {
++                    let mut message = Message::new(
++                        if index % 2 == 0 { Role::User } else { Role::Assistant },
++                        vec![ContentBlock::Text {
++                            text: format!("history-{index}"),
++                        }],
++                    );
++                    message.turn_id = Some(format!("turn-{index}"));
++                    message
++                })
++                .collect();
++            let original = serde_json::to_value(&messages).unwrap();
++            let tail = messages.last().unwrap().turn_id.clone();
++            let mut state = CompactState::new();
++            let mut context_state = ContextState::default();
++            let prompt_usage = PromptUsage::default();
++            let config = aion_config::compact::CompactConfig::default();
++            let mut ctx = CommandContext {
++                messages: &mut messages,
++                compact_state: &mut state,
++                compact_config: &config,
++                provider: Arc::new(NativeProvider { compacted, fail }),
++                model: "swift",
++                output: &output,
++                registry: &registry,
++                context_state: &mut context_state,
++                prompt_usage: &prompt_usage,
++                context_tools: &[],
++                dynamic_system_tokens: 0,
++            };
++            let result = CompactCommand.execute(&mut ctx, "").await.unwrap();
++            assert_eq!(ctx.messages.last().unwrap().turn_id, tail);
++            if compacted && !fail {
++                assert_eq!(result, CommandResult::ContextChanged);
++                assert_eq!(
++                    ctx.messages.len(),
++                    5,
++                    "must keep full canonical history instead of summary-only"
++                );
++                assert_eq!(ctx.context_state.compact_count, 1);
++            } else {
++                assert_eq!(result, CommandResult::Continue);
++                assert_eq!(ctx.context_state.compact_count, 0);
++                assert_eq!(serde_json::to_value(&ctx.messages).unwrap(), original);
++            }
++        }
++    }
+ }
 diff --git a/crates/aion-agent/src/compact/auto.rs b/crates/aion-agent/src/compact/auto.rs
-index c222326..2a5a0c7 100644
+index c222326..0e4ce4b 100644
 --- a/crates/aion-agent/src/compact/auto.rs
 +++ b/crates/aion-agent/src/compact/auto.rs
 @@ -1,3 +1,4 @@
@@ -336,16 +510,40 @@ index c222326..2a5a0c7 100644
  //! Autocompact: context-threshold-triggered LLM summarization.
  //!
  //! When the best-known context size exceeds the configured threshold, this module
-@@ -9,7 +10,7 @@ use aion_config::compact::CompactConfig;
+@@ -7,9 +8,9 @@
+ 
+ use aion_config::compact::CompactConfig;
  use aion_providers::{LlmProvider, ProviderError};
- use aion_types::compact::{CompactMetadata, CompactTrigger};
+-use aion_types::compact::{CompactMetadata, CompactTrigger};
++use aion_types::compact::{CompactMetadata, CompactTrigger, NativeCompactRequest};
  use aion_types::llm::{LlmEvent, LlmRequest, ThinkingConfig};
 -use aion_types::message::{ContentBlock, Message, Role, TokenUsage};
 +use aion_types::message::{ContentBlock, Message, Role, StopReason, TokenUsage};
  use tokio::sync::mpsc;
  
  use super::prompt::{
-@@ -47,6 +48,8 @@ pub enum CompactError {
+@@ -30,12 +31,19 @@ pub const BOUNDARY_PREFIX: &str = "[Conversation compacted]";
+ #[derive(Debug, Clone)]
+ pub struct CompactResult {
+     /// Post-compact messages that replace the original conversation.
+-    /// Contains a boundary marker and a summary message.
++    /// Native results retain the canonical recent turns; generic results use
++    /// a boundary marker and a summary message.
+     pub messages: Vec<Message>,
+     /// How many original messages were summarized.
+     pub messages_summarized: usize,
+     /// Best-known context token count before compaction.
+     pub pre_compact_tokens: u64,
++    /// False when the native service reports that there is nothing to compact.
++    pub compacted: bool,
++    /// Native service used its canonical retained history instead of the generic summary.
++    pub native: bool,
++    /// Tokenized history size, excluding the separately reserved runtime prompt.
++    pub after_tokens: Option<u64>,
+ }
+ 
+ /// Errors specific to autocompact.
+@@ -47,6 +55,8 @@ pub enum CompactError {
      PromptTooLong { attempts: u32 },
      #[error("Empty response from LLM")]
      EmptyResponse,
@@ -354,7 +552,77 @@ index c222326..2a5a0c7 100644
      #[error("Stream error: {0}")]
      StreamError(String),
      #[error("Circuit breaker tripped after {failures} consecutive failures")]
-@@ -200,6 +203,10 @@ async fn collect_stream_text(mut rx: mpsc::Receiver<LlmEvent>) -> Result<(String
+@@ -90,6 +100,18 @@ pub async fn autocompact(
+     model: &str,
+     config: &CompactConfig,
+     state: &mut CompactState,
++) -> Result<CompactResult, CompactError> {
++    autocompact_with_overhead(provider, messages, model, config, state, 0).await
++}
++
++/// Reserve runtime system and tool-schema tokens omitted from native history.
++pub(crate) async fn autocompact_with_overhead(
++    provider: &dyn LlmProvider,
++    messages: &[Message],
++    model: &str,
++    config: &CompactConfig,
++    state: &mut CompactState,
++    runtime_overhead: u64,
+ ) -> Result<CompactResult, CompactError> {
+     // Circuit breaker check
+     if state.is_circuit_broken(config) {
+@@ -98,6 +120,40 @@ pub async fn autocompact(
+         });
+     }
+ 
++    // Native compaction returns the complete canonical replacement, including
++    // retained recent turns. Never summarize that replacement a second time or
++    // fall back to a lossy generic retry after a configured endpoint fails.
++    if provider.native_compaction_enabled() {
++        let reserve = (config.output_reserve as u64).saturating_add(runtime_overhead);
++        let request = NativeCompactRequest {
++            model: model.to_owned(),
++            messages: messages.to_vec(),
++            output_reserve: u32::try_from(reserve).unwrap_or(u32::MAX),
++        };
++        let native = match provider.compact(&request).await {
++            Ok(Some(result)) => result,
++            Ok(None) => {
++                state.record_failure();
++                return Err(CompactError::Provider(ProviderError::Parse(
++                    "Configured native compaction returned no result".into(),
++                )));
++            }
++            Err(error) => {
++                state.record_failure();
++                return Err(CompactError::Provider(error));
++            }
++        };
++        state.consecutive_failures = 0;
++        return Ok(CompactResult {
++            messages: native.messages,
++            messages_summarized: native.messages_summarized,
++            pre_compact_tokens: native.before_tokens.saturating_add(runtime_overhead),
++            compacted: native.compacted,
++            native: true,
++            after_tokens: Some(native.after_tokens),
++        });
++    }
++
+     let pre_compact_tokens = state.last_input_tokens;
+     let messages_summarized = messages.len();
+ 
+@@ -188,6 +244,9 @@ pub async fn autocompact(
+         messages: vec![boundary_msg, summary_msg],
+         messages_summarized,
+         pre_compact_tokens,
++        compacted: true,
++        native: false,
++        after_tokens: None,
+     })
+ }
+ 
+@@ -200,6 +259,10 @@ async fn collect_stream_text(mut rx: mpsc::Receiver<LlmEvent>) -> Result<(String
      while let Some(event) = rx.recv().await {
          match event {
              LlmEvent::TextDelta(delta) => text.push_str(&delta),
@@ -366,7 +634,7 @@ index c222326..2a5a0c7 100644
              LlmEvent::Error(e) => return Err(CompactError::StreamError(e)),
              // Ignore thinking deltas and tool calls (shouldn't happen in compact)
 diff --git a/crates/aion-agent/src/compact/auto_test.rs b/crates/aion-agent/src/compact/auto_test.rs
-index 66b01fe..70b873b 100644
+index 66b01fe..edc647b 100644
 --- a/crates/aion-agent/src/compact/auto_test.rs
 +++ b/crates/aion-agent/src/compact/auto_test.rs
 @@ -1,3 +1,4 @@
@@ -417,6 +685,154 @@ index 66b01fe..70b873b 100644
      // ── should_autocompact (TC-2.4-01..03, TC-2.4-14) ──────────────────
  
      #[test]
+@@ -233,3 +270,147 @@ mod tests {
+         assert!(extract_compact_metadata(&msg).is_none());
+     }
+ }
++
++#[cfg(test)]
++mod native_tests {
++    use super::*;
++    use aion_types::compact::{NativeCompactRequest, NativeCompactResult};
++    use std::sync::Mutex;
++
++    struct NativeProvider {
++        requests: Mutex<Vec<NativeCompactRequest>>,
++        fail: bool,
++        pending: bool,
++        compacted: bool,
++    }
++    #[async_trait::async_trait]
++    impl LlmProvider for NativeProvider {
++        fn native_compaction_enabled(&self) -> bool {
++            true
++        }
++        async fn stream(&self, _: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError> {
++            panic!("native compaction must not fall back to a stream")
++        }
++        async fn compact(&self, request: &NativeCompactRequest) -> Result<Option<NativeCompactResult>, ProviderError> {
++            self.requests.lock().unwrap().push(request.clone());
++            if self.pending {
++                return std::future::pending().await;
++            }
++            if self.fail {
++                return Err(ProviderError::Parse("invalid native result".into()));
++            }
++            let mut messages = request.messages.clone();
++            if self.compacted {
++                messages.remove(0);
++            }
++            Ok(Some(NativeCompactResult {
++                messages,
++                compacted: self.compacted,
++                before_tokens: 1000,
++                after_tokens: if self.compacted { 400 } else { 1000 },
++                messages_summarized: usize::from(self.compacted),
++            }))
++        }
++    }
++    fn provider() -> NativeProvider {
++        NativeProvider {
++            requests: Mutex::new(vec![]),
++            fail: false,
++            pending: false,
++            compacted: true,
++        }
++    }
++    fn history() -> Vec<Message> {
++        (0..4)
++            .map(|n| {
++                Message::new(
++                    if n % 2 == 0 { Role::User } else { Role::Assistant },
++                    vec![ContentBlock::Text {
++                        text: format!("turn-{n}"),
++                    }],
++                )
++            })
++            .map(|mut message| {
++                message.turn_id = Some(format!("retained-{}", message.content.len()));
++                message
++            })
++            .collect()
++    }
++    #[tokio::test]
++    async fn native_canonical_tail_and_ids_survive_repeated_compaction() {
++        let provider = provider();
++        let original = history();
++        let mut state = CompactState::new();
++        let config = CompactConfig {
++            output_reserve: 500,
++            ..Default::default()
++        };
++        let first = autocompact_with_overhead(&provider, &original, "swift", &config, &mut state, 123)
++            .await
++            .unwrap();
++        assert!(first.compacted && first.native);
++        assert_eq!(first.messages.len(), 3);
++        assert_eq!(first.messages.last().unwrap().turn_id, original.last().unwrap().turn_id);
++        assert_eq!(first.pre_compact_tokens, 1123);
++        assert_eq!(provider.requests.lock().unwrap()[0].output_reserve, 623);
++        assert_eq!(
++            provider.requests.lock().unwrap()[0].messages[0].turn_id,
++            original[0].turn_id
++        );
++        let second = autocompact(&provider, &first.messages, "swift", &config, &mut state)
++            .await
++            .unwrap();
++        assert_eq!(
++            second.messages.last().unwrap().turn_id,
++            original.last().unwrap().turn_id
++        );
++    }
++    #[tokio::test]
++    async fn native_noop_is_distinct_from_summary_success() {
++        let provider = NativeProvider {
++            compacted: false,
++            ..provider()
++        };
++        let original = history();
++        let mut state = CompactState::new();
++        let result = autocompact(&provider, &original, "swift", &CompactConfig::default(), &mut state)
++            .await
++            .unwrap();
++        assert!(!result.compacted);
++        assert_eq!(result.messages[0].turn_id, original[0].turn_id);
++    }
++    #[tokio::test]
++    async fn native_errors_and_cancel_leave_history_intact() {
++        let original = history();
++        let before = serde_json::to_value(&original).unwrap();
++        let mut state = CompactState::new();
++        let failing = NativeProvider {
++            fail: true,
++            ..provider()
++        };
++        assert!(
++            autocompact(&failing, &original, "swift", &CompactConfig::default(), &mut state)
++                .await
++                .is_err()
++        );
++        assert_eq!(state.consecutive_failures, 1);
++        let pending = NativeProvider {
++            pending: true,
++            ..provider()
++        };
++        let config = CompactConfig::default();
++        assert!(
++            tokio::time::timeout(
++                std::time::Duration::from_millis(10),
++                autocompact(&pending, &original, "swift", &config, &mut state)
++            )
++            .await
++            .is_err()
++        );
++        assert_eq!(serde_json::to_value(&original).unwrap(), before);
++        assert_eq!(
++            state.consecutive_failures, 1,
++            "cancelled request must not record a successful compaction"
++        );
++    }
++}
 diff --git a/crates/aion-agent/src/compact/prompt.rs b/crates/aion-agent/src/compact/prompt.rs
 index ad349cd..5ba2ba6 100644
 --- a/crates/aion-agent/src/compact/prompt.rs
@@ -538,3 +954,1097 @@ index 66df192..8f41028 100644
          assert!(prompt.contains("<summary>"));
      }
  
+diff --git a/crates/aion-agent/src/engine.rs b/crates/aion-agent/src/engine.rs
+index 3bf6767..f052941 100644
+--- a/crates/aion-agent/src/engine.rs
++++ b/crates/aion-agent/src/engine.rs
+@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
+ 
+ use crate::cache_diagnostics::{CacheBreakDetector, CacheDiagnostic, CacheStats};
+ use crate::commands::{CommandContext, CommandRegistry, CommandResult, SlashCommand, default_registry};
+-use crate::compact::auto::{CompactError, autocompact, should_autocompact};
++use crate::compact::auto::{CompactError, autocompact_with_overhead, should_autocompact};
+ use crate::compact::emergency::is_at_emergency_limit;
+ use crate::compact::estimate::{estimate_tokens_from_tool_image, estimate_tokens_from_tool_result};
+ use crate::compact::micro::{microcompact, should_microcompact};
+@@ -1124,12 +1124,32 @@ impl AgentEngine {
+ 
+     /// Run the multi-level compaction pipeline before each API call.
+     ///
+-    /// Execution order: microcompact → autocompact → emergency check.
+-    /// After a successful autocompact the emergency check is skipped
+-    /// because the context has been significantly reduced.
++    /// Native compaction receives intact history; generic providers retain
++    /// microcompaction followed by summarization. Native results always receive
++    /// an emergency check including runtime system prompts and tool schemas.
+     async fn run_compaction(&mut self) -> Result<(), AgentError> {
+-        // 1. Microcompact (lightweight, no LLM call)
+-        if should_microcompact(&self.messages, &self.compact_config) {
++        let native = self.provider.native_compaction_enabled();
++        let mut request_compact_config = self.compact_config.clone();
++        if native {
++            request_compact_config.output_reserve = request_compact_config
++                .output_reserve
++                .max(self.max_tokens.unwrap_or_default() as usize);
++        }
++        let native_limit = self.compact_config.context_window.saturating_sub(
++            self.compact_config
++                .emergency_buffer
++                .max(request_compact_config.output_reserve),
++        );
++        let runtime_overhead = self
++            .prompt_usage
++            .total_tokens()
++            .saturating_add(self.dynamic_system_tokens())
++            .saturating_add(estimate_tool_definitions_tokens(
++                &self.tool_definitions_for_turn(TurnKind::Normal),
++            ));
++        // Native compaction must see original tool results. A failed or
++        // cancelled native request must leave the original history intact.
++        if !native && should_microcompact(&self.messages, &self.compact_config) {
+             let result = microcompact(&mut self.messages, &self.compact_config);
+             if result.cleared_count > 0 {
+                 self.output.emit_info(&format!(
+@@ -1165,24 +1185,62 @@ impl AgentEngine {
+         if should_compact && !self.compact_state.is_circuit_broken(&self.compact_config) {
+             let provider = Arc::clone(&self.provider);
+             let mut compact_messages = self.messages.clone();
+-            project_image_input(&mut compact_messages, self.compat.image_input(), &self.model);
+-            match autocompact(
++            if !native {
++                project_image_input(&mut compact_messages, self.compat.image_input(), &self.model);
++            }
++            match autocompact_with_overhead(
+                 provider.as_ref(),
+                 &compact_messages,
+                 &self.model,
+-                &self.compact_config,
++                &request_compact_config,
+                 &mut self.compact_state,
++                runtime_overhead,
+             )
+             .await
+             {
++                Ok(result)
++                    if result.native
++                        && result
++                            .after_tokens
++                            .is_some_and(|tokens| tokens.saturating_add(runtime_overhead) >= native_limit as u64) =>
++                {
++                    // Validate the candidate before replacing history, increasing
++                    // counts, or persisting anything. The summary can be valid
++                    // while still leaving too little room for the next request.
++                    self.compact_state.record_failure();
++                    return Err(AgentError::ContextTooLong {
++                        input_tokens: result.after_tokens.unwrap_or_default().saturating_add(runtime_overhead),
++                        limit: native_limit,
++                    });
++                }
++                Ok(result) if !result.compacted => {
++                    self.output
++                        .emit_info("Autocompact: native service retained already compact history");
++                    if let Some(after_tokens) = result.after_tokens {
++                        self.context_state
++                            .replace_with_local_estimate(after_tokens.saturating_add(runtime_overhead));
++                        self.sync_compact_watermark();
++                    }
++                }
+                 Ok(result) => {
+                     self.output.emit_info(&format!(
+-                        "Autocompact: summarized {} messages ({} tokens → compact)",
+-                        result.messages_summarized, result.pre_compact_tokens
++                        "Autocompact: summarized {} messages ({} tokens → compact; {})",
++                        result.messages_summarized,
++                        result.pre_compact_tokens,
++                        if result.native {
++                            "native Strata compaction"
++                        } else {
++                            "generic summary"
++                        }
+                     ));
+                     self.messages = result.messages;
+                     self.context_state.record_compact();
+                     self.refresh_local_context_estimate();
++                    if let Some(after_tokens) = result.after_tokens {
++                        self.context_state
++                            .replace_with_local_estimate(after_tokens.saturating_add(runtime_overhead));
++                        self.sync_compact_watermark();
++                    }
+                     self.save_session();
+                     compacted = true;
+                 }
+@@ -1191,6 +1249,11 @@ impl AgentEngine {
+                 }
+                 Err(e) => {
+                     self.output.emit_error(&format!("Autocompact failed: {}", e));
++                    if native {
++                        return Err(AgentError::ApiError(format!(
++                            "Native compaction failed; original history retained: {e}"
++                        )));
++                    }
+                 }
+             }
+         } else if should_compact {
+@@ -1217,14 +1280,20 @@ impl AgentEngine {
+             }
+         }
+ 
+-        // 3. Emergency check (skip if autocompact just succeeded)
+-        if !compacted && is_at_emergency_limit(self.compact_state.last_input_tokens, &self.compact_config) {
++        // A native no-op or partial reduction can still be too large once the
++        // runtime prompt, tools, and response allowance are included.
++        if (native && self.compact_state.last_input_tokens as usize >= native_limit)
++            || (!compacted && is_at_emergency_limit(self.compact_state.last_input_tokens, &self.compact_config))
++        {
+             return Err(AgentError::ContextTooLong {
+                 input_tokens: self.compact_state.last_input_tokens,
+-                limit: self
+-                    .compact_config
+-                    .context_window
+-                    .saturating_sub(self.compact_config.emergency_buffer),
++                limit: if native {
++                    native_limit
++                } else {
++                    self.compact_config
++                        .context_window
++                        .saturating_sub(self.compact_config.emergency_buffer)
++                },
+             });
+         }
+ 
+@@ -1436,10 +1505,16 @@ impl AgentEngine {
+         // the command is not modified during execution.
+         let cmd_ptr = cmd as *const dyn SlashCommand;
+ 
++        let mut command_compact_config = self.compact_config.clone();
++        if self.provider.native_compaction_enabled() {
++            command_compact_config.output_reserve = command_compact_config
++                .output_reserve
++                .max(self.max_tokens.unwrap_or_default() as usize);
++        }
+         let mut ctx = CommandContext {
+             messages: &mut self.messages,
+             compact_state: &mut self.compact_state,
+-            compact_config: &self.compact_config,
++            compact_config: &command_compact_config,
+             provider: Arc::clone(&self.provider),
+             model: &self.model,
+             output: self.output.as_ref(),
+diff --git a/crates/aion-agent/src/engine_test.rs b/crates/aion-agent/src/engine_test.rs
+index ce0f213..9146d97 100644
+--- a/crates/aion-agent/src/engine_test.rs
++++ b/crates/aion-agent/src/engine_test.rs
+@@ -1130,6 +1130,235 @@ mod tests_compact {
+         ));
+     }
+ 
++    struct NativeProvider {
++        fail: bool,
++        pending: bool,
++        compacted: bool,
++        after_tokens: u64,
++        requests: Mutex<Vec<aion_types::compact::NativeCompactRequest>>,
++    }
++    #[async_trait::async_trait]
++    impl LlmProvider for NativeProvider {
++        fn native_compaction_enabled(&self) -> bool {
++            true
++        }
++        async fn stream(&self, _: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError> {
++            panic!("native failure must not fall back to generic summary")
++        }
++        async fn compact(
++            &self,
++            req: &aion_types::compact::NativeCompactRequest,
++        ) -> Result<Option<aion_types::compact::NativeCompactResult>, ProviderError> {
++            self.requests.lock().unwrap().push(req.clone());
++            if self.pending {
++                return std::future::pending().await;
++            }
++            if self.fail {
++                return Err(ProviderError::Parse("truncated native checkpoint".into()));
++            }
++            let mut messages = req.messages.clone();
++            if self.compacted {
++                messages.remove(0);
++            }
++            Ok(Some(aion_types::compact::NativeCompactResult {
++                messages,
++                compacted: self.compacted,
++                before_tokens: 8000,
++                after_tokens: self.after_tokens,
++                messages_summarized: usize::from(self.compacted),
++            }))
++        }
++    }
++    fn native_provider(compacted: bool, after_tokens: u64, fail: bool) -> Arc<NativeProvider> {
++        Arc::new(NativeProvider {
++            fail,
++            pending: false,
++            compacted,
++            after_tokens,
++            requests: Mutex::new(vec![]),
++        })
++    }
++    fn native_engine() -> super::AgentEngine {
++        let config = CompactConfig {
++            context_window: 10_000,
++            output_reserve: 1000,
++            emergency_buffer: 300,
++            autocompact_threshold_pct: Some(70),
++            micro_keep_recent: 1,
++            ..Default::default()
++        };
++        let mut state = CompactState::new();
++        state.last_input_tokens = 8000;
++        let mut messages = vec![Message::new(
++            Role::User,
++            vec![ContentBlock::Text {
++                text: "original task".into(),
++            }],
++        )];
++        for n in 0..8 {
++            messages.push(tool_use_msg(&format!("call-{n}"), "Read"));
++            messages.push(tool_result_msg(&format!("call-{n}"), "unmodified tool output"));
++        }
++        messages.last_mut().unwrap().turn_id = Some("retained-turn".into());
++        let mut engine = make_compact_engine(config, state, messages);
++        engine.max_tokens = Some(1000);
++        engine.context_state.replace_with_provider_usage(8000);
++        engine
++    }
++    #[tokio::test]
++    async fn native_auto_preserves_tool_content_and_canonical_ids() {
++        let mut engine = native_engine();
++        let provider = native_provider(true, 1200, false);
++        engine.provider = provider.clone();
++        let old_tail_id = engine.messages.last().unwrap().turn_id.clone();
++        engine.run_compaction().await.unwrap();
++        let requests = provider.requests.lock().unwrap();
++        assert_eq!(requests.len(), 1);
++        assert!(
++            requests[0]
++                .messages
++                .iter()
++                .flat_map(|m| &m.content)
++                .any(|b| matches!(b, ContentBlock::ToolResult { content, .. } if content == "unmodified tool output"))
++        );
++        assert_eq!(engine.context_state.microcompact_count, 0);
++        assert_eq!(engine.context_state.compact_count, 1);
++        assert_eq!(engine.messages.last().unwrap().turn_id, old_tail_id);
++        assert_eq!(engine.compact_state.last_input_tokens, 1200);
++    }
++    #[tokio::test]
++    async fn native_failure_preserves_all_history_and_stops_request() {
++        let mut engine = native_engine();
++        engine.provider = native_provider(false, 8000, true);
++        let original = serde_json::to_value(&engine.messages).unwrap();
++        assert!(engine.run_compaction().await.is_err());
++        assert_eq!(serde_json::to_value(&engine.messages).unwrap(), original);
++        assert_eq!(engine.context_state.compact_count, 0);
++        assert_eq!(engine.context_state.microcompact_count, 0);
++    }
++    #[tokio::test]
++    async fn native_noop_never_increments_count_and_checks_response_reserve() {
++        let mut engine = native_engine();
++        engine.provider = native_provider(false, 9500, false);
++        let original = serde_json::to_value(&engine.messages).unwrap();
++        assert!(matches!(
++            engine.run_compaction().await,
++            Err(super::AgentError::ContextTooLong { .. })
++        ));
++        assert_eq!(engine.context_state.compact_count, 0);
++        assert_eq!(serde_json::to_value(&engine.messages).unwrap(), original);
++    }
++    #[tokio::test]
++    async fn native_success_still_rechecks_system_and_tools_overhead() {
++        let mut engine = native_engine();
++        // The runtime prompt is sent outside history; its budget must survive compaction.
++        engine.prompt_usage = crate::context_usage::PromptUsage::from_system_prompt(&"system ".repeat(3000));
++        let provider = native_provider(true, 8000, false);
++        engine.provider = provider.clone();
++        let directory = tempdir().unwrap();
++        let manager = SessionManager::new(directory.path().to_path_buf(), 10);
++        let session = Session {
++            id: "reject-oversized-native".into(),
++            forked_from: None,
++            root_id: None,
++            created_at: Utc::now(),
++            updated_at: Utc::now(),
++            provider: "openai".into(),
++            model: "test-model".into(),
++            cwd: directory.path().display().to_string(),
++            total_usage: TokenUsage::default(),
++            context_state: engine.context_state.clone(),
++            messages: engine.messages.clone(),
++        };
++        manager.save(&session).unwrap();
++        let stored_before = serde_json::to_value(manager.load(&session.id).unwrap()).unwrap();
++        let original_history = serde_json::to_value(&engine.messages).unwrap();
++        let original_context = engine.context_state.clone();
++        let original_tokens = engine.compact_state.last_input_tokens;
++        engine.current_session = Some(session);
++        engine.session_manager = Some(manager);
++        assert!(matches!(
++            engine.run_compaction().await,
++            Err(super::AgentError::ContextTooLong { .. })
++        ));
++        assert!(provider.requests.lock().unwrap()[0].output_reserve > 1000);
++        assert_eq!(serde_json::to_value(&engine.messages).unwrap(), original_history);
++        assert_eq!(
++            engine.context_state, original_context,
++            "failed candidate must not increase count or change accounting"
++        );
++        assert_eq!(engine.compact_state.last_input_tokens, original_tokens);
++        assert_eq!(
++            serde_json::to_value(engine.current_session.as_ref().unwrap()).unwrap(),
++            stored_before
++        );
++        let stored_after = SessionManager::new(directory.path().to_path_buf(), 10)
++            .load("reject-oversized-native")
++            .unwrap();
++        assert_eq!(
++            serde_json::to_value(stored_after).unwrap(),
++            stored_before,
++            "failed candidate must not overwrite the resumable session"
++        );
++    }
++
++    #[tokio::test]
++    async fn cancelling_native_auto_future_keeps_original_history() {
++        let mut engine = native_engine();
++        engine.provider = Arc::new(NativeProvider {
++            fail: false,
++            pending: true,
++            compacted: true,
++            after_tokens: 1200,
++            requests: Mutex::new(vec![]),
++        });
++        let original = serde_json::to_value(&engine.messages).unwrap();
++        assert!(
++            tokio::time::timeout(std::time::Duration::from_millis(10), engine.run_compaction())
++                .await
++                .is_err()
++        );
++        assert_eq!(serde_json::to_value(&engine.messages).unwrap(), original);
++        assert_eq!(engine.context_state.compact_count, 0);
++        assert_eq!(engine.context_state.microcompact_count, 0);
++    }
++    #[tokio::test]
++    async fn native_auto_result_survives_session_serialization_and_resume() {
++        let mut engine = native_engine();
++        engine.provider = native_provider(true, 1200, false);
++        engine.run_compaction().await.unwrap();
++        let session = Session {
++            id: "native-resume".into(),
++            forked_from: None,
++            root_id: None,
++            created_at: Utc::now(),
++            updated_at: Utc::now(),
++            provider: "openai".into(),
++            model: "test-model".into(),
++            cwd: "test".into(),
++            total_usage: TokenUsage::default(),
++            context_state: engine.context_state.clone(),
++            messages: engine.messages.clone(),
++        };
++        let decoded: Session = serde_json::from_slice(&serde_json::to_vec(&session).unwrap()).unwrap();
++        let expected = serde_json::to_value(&engine.messages).unwrap();
++        let resumed = super::AgentEngine::resume_with_provider(
++            native_provider(true, 500, false),
++            test_config(),
++            ToolRegistry::new(),
++            Arc::new(NullOutput),
++            decoded,
++            env::temp_dir(),
++        );
++        assert_eq!(serde_json::to_value(&resumed.messages).unwrap(), expected);
++        assert_eq!(resumed.context_state.compact_count, 1);
++        assert_eq!(resumed.compact_state.last_input_tokens, 1200);
++        assert_eq!(
++            resumed.messages.last().unwrap().turn_id.as_deref(),
++            Some("retained-turn")
++        );
++    }
++
+     // -- Emergency check fires when at limit --
+ 
+     #[tokio::test]
+diff --git a/crates/aion-agent/tests/autocompact_test.rs b/crates/aion-agent/tests/autocompact_test.rs
+index 0104c6a..828d762 100644
+--- a/crates/aion-agent/tests/autocompact_test.rs
++++ b/crates/aion-agent/tests/autocompact_test.rs
+@@ -176,15 +176,22 @@ async fn tc_2_4_07_circuit_breaker_blocks_autocompact() {
+     assert!(matches!(result, Err(CompactError::CircuitBroken { .. })));
+ }
+ 
+-// ── TC-2.4-08: Prompt contains all 9 sections ──────────────────────────────
++// TC-2.4-08: Checkpoint preserves task-neutral continuation requirements.
+ 
+ #[test]
+ fn tc_2_4_08_prompt_contains_all_sections() {
+     let prompt = build_compact_prompt();
+-    for i in 1..=9 {
+-        assert!(prompt.contains(&format!("{i}.")), "Missing section {i}");
++    for heading in [
++        "Current task and constraints",
++        "Completed work and evidence",
++        "Files and resources",
++        "Unfinished work and next action",
++    ] {
++        assert!(prompt.contains(heading), "Missing checkpoint heading: {heading}");
+     }
+-    assert!(prompt.contains("CRITICAL: Respond with TEXT ONLY"));
++    assert!(prompt.contains("Do NOT call any tools"));
++    assert!(prompt.contains("Return only <summary>...</summary>"));
++    assert!(prompt.contains("not just coding"));
+ }
+ 
+ // ── TC-2.4-09: Summary formatting (normal) ──────────────────────────────────
+diff --git a/crates/aion-config/src/compat.rs b/crates/aion-config/src/compat.rs
+index 4bb44d7..da65e7f 100644
+--- a/crates/aion-config/src/compat.rs
++++ b/crates/aion-config/src/compat.rs
+@@ -30,6 +30,9 @@ pub struct ProviderCompat {
+ 
+ #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+ pub struct TransportCompat {
++    /// Opt-in native compaction path relative to this provider's base URL.
++    /// None uses the agent's ordinary compaction implementation.
++    pub native_compaction_path: Option<String>,
+     /// OpenAI wire API used for request and response projection.
+     /// Default: chat_completions for backward compatibility.
+     pub openai_api_mode: Option<OpenAiApiMode>,
+@@ -154,6 +157,7 @@ pub struct ReasoningCompat {
+ impl TransportCompat {
+     fn merge(defaults: Self, user: Self) -> Self {
+         Self {
++            native_compaction_path: user.native_compaction_path.or(defaults.native_compaction_path),
+             openai_api_mode: user.openai_api_mode.or(defaults.openai_api_mode),
+             max_tokens_field: user.max_tokens_field.or(defaults.max_tokens_field),
+             default_max_tokens: user.default_max_tokens.or(defaults.default_max_tokens),
+diff --git a/crates/aion-config/src/compat_test.rs b/crates/aion-config/src/compat_test.rs
+index e00381d..9fcfbd0 100644
+--- a/crates/aion-config/src/compat_test.rs
++++ b/crates/aion-config/src/compat_test.rs
+@@ -1,5 +1,24 @@
+ use super::*;
+ 
++#[test]
++fn native_compaction_is_opt_in_and_merges_without_losing_defaults() {
++    let defaults = ProviderCompat::openai_defaults();
++    assert!(defaults.transport.native_compaction_path.is_none());
++    let user: ProviderCompat = toml::from_str("native_compaction_path = '/chat/compact'").unwrap();
++    let merged = ProviderCompat::merge(defaults, user);
++    assert_eq!(
++        merged.transport.native_compaction_path.as_deref(),
++        Some("/chat/compact")
++    );
++    assert_eq!(merged.openai_api_path(), "/chat/completions");
++    let inherited = ProviderCompat::merge(merged, ProviderCompat::default());
++    assert_eq!(
++        inherited.transport.native_compaction_path.as_deref(),
++        Some("/chat/compact")
++    );
++    assert!(toml::to_string(&inherited).unwrap().contains("native_compaction_path"));
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -80,6 +99,7 @@ max_tokens = 64000
+         let compat = ProviderCompat {
+             transport: TransportCompat {
+                 openai_api_mode: None,
++                native_compaction_path: None,
+                 max_tokens_field: Some("max_completion_tokens".to_string()),
+                 default_max_tokens: Some(128_000),
+                 model_max_tokens: Some(vec![ModelMaxTokensRule {
+diff --git a/crates/aion-providers/src/composed.rs b/crates/aion-providers/src/composed.rs
+index f4bcb01..da8adf2 100644
+--- a/crates/aion-providers/src/composed.rs
++++ b/crates/aion-providers/src/composed.rs
+@@ -4,9 +4,11 @@ use serde_json::Value;
+ use tokio::sync::mpsc;
+ 
+ use aion_config::compat::ProviderCompat;
++use aion_types::compact::{NativeCompactRequest, NativeCompactResult};
+ use aion_types::llm::{LlmEvent, LlmRequest};
+ 
+ use crate::error::ProviderError;
++use crate::native_compaction::compact as compact_native;
+ use crate::provider::LlmProvider;
+ use crate::stream_runner::run_stream;
+ use crate::transport::ProviderTransport;
+@@ -31,6 +33,18 @@ impl ComposedProvider {
+ 
+ #[async_trait]
+ impl LlmProvider for ComposedProvider {
++    fn native_compaction_enabled(&self) -> bool {
++        matches!(self.transport, ProviderTransport::OpenAi(_)) && self.compat.transport.native_compaction_path.is_some()
++    }
++
++    async fn compact(&self, request: &NativeCompactRequest) -> Result<Option<NativeCompactResult>, ProviderError> {
++        match (&self.transport, self.compat.transport.native_compaction_path.as_deref()) {
++            (ProviderTransport::OpenAi(transport), Some(path)) => {
++                compact_native(transport, &self.compat, path, request).await.map(Some)
++            }
++            _ => Ok(None),
++        }
++    }
+     async fn stream(&self, request: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError> {
+         let (body, tool_wire_shape) = self.transport.project_body(request, &self.compat)?;
+ 
+diff --git a/crates/aion-providers/src/lib.rs b/crates/aion-providers/src/lib.rs
+index 2c497e5..2ec371f 100644
+--- a/crates/aion-providers/src/lib.rs
++++ b/crates/aion-providers/src/lib.rs
+@@ -2,6 +2,7 @@ pub mod anthropic;
+ pub mod anthropic_shared;
+ pub mod bedrock;
+ pub(crate) mod composed;
++mod native_compaction;
+ pub mod error;
+ pub(crate) mod framing;
+ pub mod openai;
+diff --git a/crates/aion-providers/src/openai.rs b/crates/aion-providers/src/openai.rs
+index 52cbb49..3a5bef0 100644
+--- a/crates/aion-providers/src/openai.rs
++++ b/crates/aion-providers/src/openai.rs
+@@ -4,6 +4,7 @@ use async_trait::async_trait;
+ use serde_json::Value;
+ use tokio::sync::mpsc;
+ 
++use aion_types::compact::{NativeCompactRequest, NativeCompactResult};
+ use aion_types::llm::{LlmEvent, LlmRequest};
+ use aion_types::message::{StopReason, TokenUsage};
+ 
+@@ -30,6 +31,13 @@ impl OpenAIProvider {
+ 
+ #[async_trait]
+ impl LlmProvider for OpenAIProvider {
++    fn native_compaction_enabled(&self) -> bool {
++        self.inner.native_compaction_enabled()
++    }
++
++    async fn compact(&self, request: &NativeCompactRequest) -> Result<Option<NativeCompactResult>, ProviderError> {
++        self.inner.compact(request).await
++    }
+     async fn stream(&self, request: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError> {
+         self.inner.stream(request).await
+     }
+diff --git a/crates/aion-providers/src/provider.rs b/crates/aion-providers/src/provider.rs
+index 5a48a0f..9b954d8 100644
+--- a/crates/aion-providers/src/provider.rs
++++ b/crates/aion-providers/src/provider.rs
+@@ -5,6 +5,7 @@ use async_trait::async_trait;
+ use tokio::sync::mpsc;
+ 
+ use aion_config::config::{Config, ProviderType};
++use aion_types::compact::{NativeCompactRequest, NativeCompactResult};
+ use aion_types::llm::{LlmEvent, LlmRequest};
+ 
+ use crate::anthropic;
+@@ -16,6 +17,18 @@ use crate::vertex;
+ /// Unified interface for LLM API providers
+ #[async_trait]
+ pub trait LlmProvider: Send + Sync {
++    /// Whether the provider is explicitly configured to own history compaction.
++    /// Callers must bypass destructive local preprocessing when this is true.
++    fn native_compaction_enabled(&self) -> bool {
++        false
++    }
++
++    /// Return a complete validated replacement, or None when unsupported.
++    /// Configured native failures are errors; callers must preserve history.
++    /// Dropping this future cancels the HTTP operation without a detached task.
++    async fn compact(&self, _request: &NativeCompactRequest) -> Result<Option<NativeCompactResult>, ProviderError> {
++        Ok(None)
++    }
+     async fn stream(&self, request: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError>;
+ }
+ 
+diff --git a/crates/aion-types/src/compact.rs b/crates/aion-types/src/compact.rs
+index 1efc586..aac711b 100644
+--- a/crates/aion-types/src/compact.rs
++++ b/crates/aion-types/src/compact.rs
+@@ -1,5 +1,25 @@
++use crate::message::Message;
+ use serde::{Deserialize, Serialize};
+ 
++/// Provider-native compaction of conversation history. Runtime system instructions
++/// stay outside this history; the caller includes their cost in output_reserve.
++#[derive(Debug, Clone)]
++pub struct NativeCompactRequest {
++    pub model: String,
++    pub messages: Vec<Message>,
++    pub output_reserve: u32,
++}
++
++/// A complete canonical replacement, applied transactionally by the caller.
++#[derive(Debug, Clone)]
++pub struct NativeCompactResult {
++    pub messages: Vec<Message>,
++    pub compacted: bool,
++    pub before_tokens: u64,
++    pub after_tokens: u64,
++    pub messages_summarized: usize,
++}
++
+ /// How a compaction was triggered.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "snake_case")]
+diff --git a/crates/aion-providers/src/native_compaction.rs b/crates/aion-providers/src/native_compaction.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/aion-providers/src/native_compaction.rs
+@@ -0,0 +1,242 @@
++//! Opt-in text compaction with a complete, validated replacement history.
++use std::collections::HashSet;
++use std::time::Duration;
++
++use aion_config::compat::{OpenAiApiMode, ProviderCompat};
++use aion_types::compact::{NativeCompactRequest, NativeCompactResult};
++use aion_types::message::{ContentBlock, Message, Role};
++use serde::Deserialize;
++use serde_json::{Value, json};
++
++use crate::error::ProviderError;
++use crate::openai_messages::build_messages;
++use crate::projector::ResolvedToolWireShape;
++use crate::transport::OpenAiTransport;
++
++#[derive(Deserialize)]
++struct WireResult {
++    messages: Vec<Value>,
++    compacted: bool,
++    before_tokens: u64,
++    after_tokens: u64,
++    retained_recent_count: usize,
++    summary: Option<String>,
++}
++
++fn invalid(reason: &str) -> ProviderError {
++    ProviderError::Parse(format!(
++        "Native compaction rejected: {reason}; original history preserved"
++    ))
++}
++
++pub(crate) async fn compact(
++    transport: &OpenAiTransport,
++    compat: &ProviderCompat,
++    path: &str,
++    request: &NativeCompactRequest,
++) -> Result<NativeCompactResult, ProviderError> {
++    // Only a relative API path is allowed. Never let a configuration path switch
++    // origins or smuggle query/fragment semantics into the authenticated request.
++    if !path.starts_with('/')
++        || path.starts_with("//")
++        || path.len() < 2
++        || path
++            .chars()
++            .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_')))
++        || path[1..].split('/').any(str::is_empty)
++    {
++        return Err(invalid("invalid native_compaction_path"));
++    }
++    validate_history(&request.messages)?;
++    let mut projection = compat.clone();
++    projection.transport.openai_api_mode = Some(OpenAiApiMode::ChatCompletions);
++    projection.transport.api_path = Some(path.to_string());
++    // Native history is canonical. Do not clean, merge, or strip content while
++    // projecting it: boundaries must remain reversible to original messages.
++    projection.messages.merge_assistant_messages = Some(false);
++    projection.messages.clean_orphan_tool_results = Some(false);
++    projection.messages.dedup_tool_results = Some(false);
++    projection.messages.strip_patterns = None;
++    projection.tools.clean_orphan_tool_calls = Some(false);
++    projection.tools.sanitize_malformed_tool_calls = Some(false);
++    projection.tools.auto_tool_id = Some(false);
++    let (wire, boundaries) = project_history(&request.messages, &projection);
++    let body = json!({"model": request.model, "messages": wire,
++        "max_tokens": request.output_reserve, "if_needed": false});
++    if compat
++        .max_request_body_bytes()
++        .is_some_and(|limit| body.to_string().len() > limit)
++    {
++        return Err(invalid("request exceeds configured body limit"));
++    }
++    let http = transport.build_projected_request(body, &projection, ResolvedToolWireShape::OpenAiFunction)?;
++    let response = tokio::time::timeout(Duration::from_secs(600), async {
++        transport
++            .send(http)
++            .await?
++            .json::<WireResult>()
++            .await
++            .map_err(ProviderError::from)
++    })
++    .await
++    .map_err(|_| invalid("request timed out"))??;
++    validate_result(request, &wire, &boundaries, response)
++}
++
++fn project_history(messages: &[Message], compat: &ProviderCompat) -> (Vec<Value>, Vec<usize>) {
++    let mut wire = Vec::new();
++    let mut boundaries = vec![0];
++    for message in messages {
++        if message.role == Role::System {
++            let text = message
++                .content
++                .iter()
++                .filter_map(|block| match block {
++                    ContentBlock::Text { text } => Some(text.as_str()),
++                    _ => None,
++                })
++                .collect::<Vec<_>>()
++                .join("\n");
++            wire.push(json!({"role":"system", "content":text}));
++        } else {
++            wire.extend(build_messages(std::slice::from_ref(message), "", compat));
++        }
++        boundaries.push(wire.len());
++    }
++    (wire, boundaries)
++}
++
++fn validate_history(messages: &[Message]) -> Result<(), ProviderError> {
++    let mut pending = HashSet::new();
++    let mut seen = HashSet::new();
++    let mut past_system = false;
++    for message in messages {
++        if message.content.is_empty() {
++            return Err(invalid("empty message"));
++        }
++        if !pending.is_empty()
++            && !message
++                .content
++                .iter()
++                .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
++        {
++            return Err(invalid("tool call interrupted before all results"));
++        }
++        if message.role == Role::System {
++            if past_system {
++                return Err(invalid("non-leading system history is unsupported"));
++            }
++        } else {
++            past_system = true;
++        }
++        let has_results = message
++            .content
++            .iter()
++            .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
++        for block in &message.content {
++            match block {
++                ContentBlock::Text { .. } if message.role != Role::Tool && !has_results => {}
++                ContentBlock::Thinking { signature: None, .. } if message.role == Role::Assistant => {}
++                ContentBlock::ToolUse {
++                    id, name, extra: None, ..
++                } if message.role == Role::Assistant
++                    && !id.is_empty()
++                    && !name.is_empty()
++                    && seen.insert(id.clone()) =>
++                {
++                    pending.insert(id.clone());
++                }
++                ContentBlock::ToolResult { tool_use_id, .. }
++                    if matches!(message.role, Role::Tool | Role::User) && pending.remove(tool_use_id) => {}
++                _ => return Err(invalid("unsupported or lossy content, or malformed tool history")),
++            }
++        }
++        if !pending.is_empty() && !matches!(message.role, Role::Assistant | Role::Tool | Role::User) {
++            return Err(invalid("incomplete tool history"));
++        }
++    }
++    if !pending.is_empty() {
++        return Err(invalid("unresolved tool calls"));
++    }
++    Ok(())
++}
++
++fn validate_result(
++    request: &NativeCompactRequest,
++    original: &[Value],
++    boundaries: &[usize],
++    result: WireResult,
++) -> Result<NativeCompactResult, ProviderError> {
++    if !result.compacted {
++        if result.messages != original || result.before_tokens != result.after_tokens {
++            return Err(invalid("unchanged response modified history or token counts"));
++        }
++        return Ok(NativeCompactResult {
++            messages: request.messages.clone(),
++            compacted: false,
++            before_tokens: result.before_tokens,
++            after_tokens: result.after_tokens,
++            messages_summarized: 0,
++        });
++    }
++    if result.before_tokens == 0 || result.after_tokens == 0 || result.after_tokens >= result.before_tokens {
++        return Err(invalid("response did not reduce token usage"));
++    }
++    let pinned = request.messages.iter().take_while(|m| m.role == Role::System).count();
++    let keep = result.retained_recent_count;
++    let suffix_wire = original
++        .len()
++        .checked_sub(keep)
++        .ok_or_else(|| invalid("invalid retained count"))?;
++    let boundary = boundaries
++        .iter()
++        .position(|&n| n == suffix_wire)
++        .ok_or_else(|| invalid("retained suffix splits an original message"))?;
++    if boundary <= pinned || keep == 0 || result.messages.len() != pinned + 1 + keep {
++        return Err(invalid("invalid replacement shape"));
++    }
++    if result.messages[..pinned] != original[..pinned] || result.messages[pinned + 1..] != original[suffix_wire..] {
++        return Err(invalid("system instructions or retained history changed"));
++    }
++    let summary = &result.messages[pinned];
++    let text = summary
++        .get("content")
++        .and_then(Value::as_str)
++        .filter(|s| !s.trim().is_empty())
++        .ok_or_else(|| invalid("empty summary"))?;
++    if summary.get("role").and_then(Value::as_str) != Some("user")
++        || summary.as_object().is_none_or(|m| m.len() != 2)
++        || result
++            .summary
++            .as_deref()
++            .is_none_or(|s| s.trim().is_empty() || !text.ends_with(s))
++    {
++        return Err(invalid("summary must be plain user-level historical text"));
++    }
++    validate_history(&request.messages[boundary..])?;
++    let mut messages = request.messages[..pinned].to_vec();
++    messages.push(Message::new(
++        Role::User,
++        vec![ContentBlock::Text { text: text.to_string() }],
++    ));
++    // Restore originals instead of reconstructing tool metadata, turn IDs,
++    // timestamps and thinking blocks from a lossy wire representation.
++    messages.extend_from_slice(&request.messages[boundary..]);
++    tracing::debug!(
++        before_tokens = result.before_tokens,
++        after_tokens = result.after_tokens,
++        retained_messages = request.messages.len() - boundary,
++        "native compaction validated"
++    );
++    Ok(NativeCompactResult {
++        messages,
++        compacted: true,
++        before_tokens: result.before_tokens,
++        after_tokens: result.after_tokens,
++        messages_summarized: boundary - pinned,
++    })
++}
++
++#[cfg(test)]
++#[path = "native_compaction_test.rs"]
++mod native_compaction_test;
+diff --git a/crates/aion-providers/src/native_compaction_test.rs b/crates/aion-providers/src/native_compaction_test.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/aion-providers/src/native_compaction_test.rs
+@@ -0,0 +1,202 @@
++use super::*;
++use crate::openai::OpenAIProvider;
++use crate::provider::LlmProvider;
++use wiremock::matchers::{header, method, path};
++use wiremock::{Mock, MockServer, ResponseTemplate};
++
++fn message(role: Role, text: &str) -> Message {
++    Message::new(role, vec![ContentBlock::Text { text: text.into() }])
++}
++
++fn request() -> NativeCompactRequest {
++    NativeCompactRequest {
++        model: "local".into(),
++        output_reserve: 8192,
++        messages: vec![
++            message(Role::System, "immutable"),
++            message(Role::User, "old"),
++            message(Role::Assistant, "old answer"),
++            message(Role::User, "recent"),
++            message(Role::Assistant, "recent answer"),
++        ],
++    }
++}
++
++fn compat() -> ProviderCompat {
++    let mut compat = ProviderCompat::openai_defaults();
++    compat.transport.native_compaction_path = Some("/chat/compact".into());
++    compat.messages.merge_assistant_messages = Some(false);
++    compat.messages.clean_orphan_tool_results = Some(false);
++    compat.tools.clean_orphan_tool_calls = Some(false);
++    compat
++}
++
++fn response(request: &NativeCompactRequest) -> Value {
++    let (wire, _) = project_history(&request.messages, &compat());
++    json!({"messages":[wire[0], {"role":"user","content":"Historical summary: old"},
++        wire[wire.len()-2], wire[wire.len()-1]], "compacted":true,
++        "before_tokens":1000,"after_tokens":100,"retained_recent_count":2,"summary":"old"})
++}
++
++#[tokio::test]
++async fn posts_authenticated_native_path_and_restores_metadata() {
++    let server = MockServer::start().await;
++    let mut req = request();
++    req.messages[3].turn_id = Some("original-turn".into());
++    Mock::given(method("POST"))
++        .and(path("/v1/chat/compact"))
++        .and(header("authorization", "Bearer local-key"))
++        .respond_with(ResponseTemplate::new(200).set_body_json(response(&req)))
++        .expect(1)
++        .mount(&server)
++        .await;
++    let provider = OpenAIProvider::new("local-key", &format!("{}/v1/", server.uri()), compat());
++    assert!(provider.native_compaction_enabled());
++    let result = provider.compact(&req).await.unwrap().unwrap();
++    assert!(result.compacted);
++    assert_eq!(result.messages_summarized, 2);
++    assert_eq!(result.messages[2].turn_id.as_deref(), Some("original-turn"));
++    assert_eq!(result.messages[1].role, Role::User);
++}
++
++#[tokio::test]
++async fn opt_in_and_http_failure_do_not_fall_back() {
++    let server = MockServer::start().await;
++    let disabled = OpenAIProvider::new("k", &server.uri(), ProviderCompat::openai_defaults());
++    assert!(!disabled.native_compaction_enabled());
++    assert!(disabled.compact(&request()).await.unwrap().is_none());
++    Mock::given(method("POST"))
++        .respond_with(ResponseTemplate::new(500))
++        .mount(&server)
++        .await;
++    let enabled = OpenAIProvider::new("k", &server.uri(), compat());
++    assert!(matches!(
++        enabled.compact(&request()).await,
++        Err(ProviderError::Api { status: 500, .. })
++    ));
++}
++
++#[tokio::test]
++async fn unchanged_history_and_cancellation_are_safe() {
++    let server = MockServer::start().await;
++    let req = request();
++    let (wire, _) = project_history(&req.messages, &compat());
++    Mock::given(method("POST"))
++        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
++        "messages":wire,"compacted":false,"before_tokens":10,"after_tokens":10,
++        "retained_recent_count":wire.len(),"summary":null})))
++        .mount(&server)
++        .await;
++    let provider = OpenAIProvider::new("k", &server.uri(), compat());
++    let result = provider.compact(&req).await.unwrap().unwrap();
++    assert!(!result.compacted);
++    assert_eq!(
++        serde_json::to_value(result.messages).unwrap(),
++        serde_json::to_value(&req.messages).unwrap()
++    );
++    server.reset().await;
++    Mock::given(method("POST"))
++        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
++        .mount(&server)
++        .await;
++    assert!(
++        tokio::time::timeout(Duration::from_millis(50), provider.compact(&req))
++            .await
++            .is_err()
++    );
++    assert_eq!(req.messages.len(), 5);
++}
++
++#[test]
++fn rejects_system_injection_expansion_and_malformed_suffix() {
++    let req = request();
++    let (wire, boundaries) = project_history(&req.messages, &compat());
++    for mutation in ["system", "tokens", "suffix", "shape"] {
++        let mut body = response(&req);
++        match mutation {
++            "system" => body["messages"][1]["role"] = json!("system"),
++            "tokens" => body["after_tokens"] = json!(1001),
++            "suffix" => body["messages"][3]["content"] = json!("changed"),
++            _ => body["messages"][1]["tool_calls"] = json!([]),
++        }
++        assert!(
++            validate_result(&req, &wire, &boundaries, serde_json::from_value(body).unwrap()).is_err(),
++            "{mutation}"
++        );
++    }
++}
++
++#[test]
++fn retains_tool_result_group_with_original_error_and_turn_metadata() {
++    let mut req = request();
++    req.messages.truncate(3);
++    req.messages.push(message(Role::User, "recent"));
++    req.messages.push(Message::new(
++        Role::Assistant,
++        vec![
++            ContentBlock::ToolUse {
++                id: "a".into(),
++                name: "read".into(),
++                input: json!({}),
++                extra: None,
++            },
++            ContentBlock::ToolUse {
++                id: "b".into(),
++                name: "read".into(),
++                input: json!({}),
++                extra: None,
++            },
++        ],
++    ));
++    let mut results = Message::new(
++        Role::User,
++        vec![
++            ContentBlock::ToolResult {
++                tool_use_id: "a".into(),
++                content: "failed".into(),
++                is_error: true,
++            },
++            ContentBlock::ToolResult {
++                tool_use_id: "b".into(),
++                content: "ok".into(),
++                is_error: false,
++            },
++        ],
++    );
++    results.turn_id = Some("tool-turn".into());
++    req.messages.push(results);
++    validate_history(&req.messages).unwrap();
++    let (wire, boundaries) = project_history(&req.messages, &compat());
++    let body = json!({"messages":[wire[0],{"role":"user","content":"old"},wire[3],wire[4],wire[5],wire[6]],
++        "compacted":true,"before_tokens":100,"after_tokens":10,"retained_recent_count":4,"summary":"old"});
++    let result = validate_result(&req, &wire, &boundaries, serde_json::from_value(body).unwrap()).unwrap();
++    assert_eq!(result.messages_summarized, 2);
++    assert_eq!(result.messages.last().unwrap().turn_id.as_deref(), Some("tool-turn"));
++    assert!(matches!(
++        result.messages.last().unwrap().content[0],
++        ContentBlock::ToolResult { is_error: true, .. }
++    ));
++}
++
++#[test]
++fn rejects_lossy_and_incomplete_input() {
++    let mut req = request();
++    req.messages.push(Message::new(
++        Role::Assistant,
++        vec![ContentBlock::ProviderItem {
++            provider: "x".into(),
++            item: json!({}),
++        }],
++    ));
++    assert!(validate_history(&req.messages).is_err());
++    req.messages.pop();
++    req.messages.push(Message::new(
++        Role::User,
++        vec![ContentBlock::ToolResult {
++            tool_use_id: "orphan".into(),
++            content: "x".into(),
++            is_error: false,
++        }],
++    ));
++    assert!(validate_history(&req.messages).is_err());
++}

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { Check, Circle, Loader2 } from "lucide-react";
 import SandboxedUi from "./SandboxedUi";
+import { specFragment } from "./intelligent-ui";
 
 export type RichActions = { onDocument?: (path: string) => void; onVisual?: () => void; onDraft?: (text: string) => void };
 
@@ -195,23 +195,6 @@ export function Artifact({ a, designSystem = false, actions }: { a: any; designS
   );
 }
 
-export function Plan({ a }: { a: any }) {
-  const steps: { text: string; status?: string }[] = a.steps ?? [];
-  const done = steps.filter((s) => s.status === "done").length;
-  return (
-    <Frame title={`Plan (${done}/${steps.length})`}>
-      <ul className="space-y-1 text-sm">
-        {steps.map((s, i) => (
-          <li key={i} className="flex items-start gap-2">
-            {s.status === "done" ? <Check size={15} className="mt-0.5 text-green-600" /> : s.status === "doing" ? <Loader2 size={15} className="mt-0.5 animate-spin text-accent" /> : <Circle size={15} className="mt-0.5 text-muted" />}
-            <span className={s.status === "done" ? "text-muted line-through" : ""}>{s.text}</span>
-          </li>
-        ))}
-      </ul>
-    </Frame>
-  );
-}
-
 export function richFor(name: string, args: any, actions?: RichActions): React.ReactNode | null {
   const a = args && typeof args === "object" ? (args.arguments ?? args) : null;
   if (!a) return null;
@@ -219,8 +202,9 @@ export function richFor(name: string, args: any, actions?: RichActions): React.R
   if (/show_table$/.test(name)) return <Table a={a} />;
   if (/show_diagram$/.test(name)) return <Diagram a={a} />;
   if (/assemble_document$/.test(name)) return <Artifact a={a} designSystem actions={actions} />;
+  if (/render_ui$/.test(name)) return <Artifact a={{ ...a, html: specFragment(a.spec, a.state) }} designSystem actions={actions} />;
   if (/publish_artifact$/.test(name)) return <Artifact a={a} actions={actions} />;
   if (/show_document$/.test(name)) return <Frame title={String(a.title ?? "Document ready")}><button onClick={() => actions?.onDocument?.(String(a.path))} className="text-sm text-accent hover:underline break-all">{String(a.path)} · Preview & revise</button></Frame>;
-  if (/update_plan$/.test(name)) return <Plan a={a} />;
+  // update_plan shows in the pinned plan above the composer (PlanDock), not as a card per call.
   return null;
 }

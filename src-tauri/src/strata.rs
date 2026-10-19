@@ -57,12 +57,51 @@ pub fn setting(key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// True when the user connected an OpenAI-compatible server they run themselves (Strata, LM Studio, Ollama...)
+/// instead of letting the app launch Strata. The app then never starts or stops that server.
+pub fn external() -> bool {
+    setting("modelSource", "strata") == "server"
+}
+
+/// The first model id an OpenAI-compatible server lists, if it answers /v1/models.
+pub fn probe(port: u16, key: Option<&str>) -> Result<String, String> {
+    match http::get(port, "/v1/models", key, Duration::from_secs(3)) {
+        Some((200, body)) => Ok(serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["data"][0]["id"].as_str().map(String::from))
+            .unwrap_or_else(|| "local-model".into())),
+        Some((401 | 403, _)) => Err(format!("The server on port {port} needs an API key.")),
+        Some((code, _)) => Err(format!("The server on port {port} answered /v1/models with HTTP {code}.")),
+        None => Err(format!("Nothing answered on port {port}. Start your model server first.")),
+    }
+}
+
+fn connect_external(app: &AppHandle, s: &Shared) -> Result<(), String> {
+    let port: u16 = setting("serverPort", "8080").parse().map_err(|_| "The saved server port is not a number.".to_string())?;
+    let key = setting("serverKey", "");
+    let bearer = if key.is_empty() { "local".to_string() } else { key };
+    let gen = {
+        let mut g = s.lock().unwrap();
+        g.gen += 1;
+        g.key = bearer.clone();
+        g.status.port = port;
+        g.gen
+    };
+    set(app, s, "starting", "Connecting to your model server…");
+    let (app2, s2) = (app.clone(), s.clone());
+    std::thread::spawn(move || monitor(app2, s2, gen, port, bearer, 0));
+    Ok(())
+}
+
 pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
     {
         let g = s.lock().unwrap();
         if g.status.state == "starting" || g.status.state == "ready" {
             return Ok(());
         }
+    }
+    if external() {
+        return connect_external(app, s);
     }
     let root = PathBuf::from(setting("strataRoot", &paths::default_strata_root()));
     let cfg = setting("modelConfig", &paths::default_model_config());
@@ -152,6 +191,32 @@ fn monitor(app: AppHandle, s: Shared, gen: u64, port: u16, key: String, pid: u32
             }
             g.status.state.clone()
         };
+        if pid == 0 {
+            // A server the user runs: it has no common /health (Ollama), so /v1/models is the check.
+            let found = probe(port, Some(&key));
+            if state == "starting" {
+                match found {
+                    Ok(model) => {
+                        s.lock().unwrap().status.model = model;
+                        set(&app, &s, "ready", "Connected to your model server");
+                    }
+                    Err(e) if t0.elapsed() > Duration::from_secs(60) => {
+                        set(&app, &s, "error", &e);
+                        return;
+                    }
+                    Err(_) => set(&app, &s, "starting", &format!("Waiting for your model server on port {port}… {}s", t0.elapsed().as_secs())),
+                }
+            } else if state == "ready" {
+                fails = if found.is_ok() { 0 } else { fails + 1 };
+                if fails >= 4 {
+                    set(&app, &s, "error", "Your model server stopped responding");
+                    return;
+                }
+            } else {
+                return;
+            }
+            continue;
+        }
         let healthy = matches!(http::get(port, "/health", None, Duration::from_secs(2)), Some((200, _)));
         if state == "starting" {
             if healthy {
@@ -207,6 +272,9 @@ pub fn stop(app: Option<&AppHandle>, s: &Shared) {
 /// Model + machine details for the Settings panel. The API key stays on this side; only data goes out.
 /// Context window of the configured model (its `--max-context`), 32768 if the config does not say.
 pub fn context_window() -> u64 {
+    if external() {
+        return setting("serverContext", "32768").parse::<u64>().ok().filter(|n| *n >= 4096).unwrap_or(32768);
+    }
     let cfg = setting("modelConfig", &paths::default_model_config());
     std::fs::read_to_string(&cfg).ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
@@ -242,7 +310,7 @@ pub fn info(s: &Shared) -> serde_json::Value {
     let (cpu_name, cpu_load, proc_gib) = cpu_stats(s);
     let get = |p: &str| -> Value {
         if port == 0 { return Value::Null; }
-        http::get(port, p, Some(&key), Duration::from_secs(2))
+        http::get(port, p, Some(&key), Duration::from_millis(900))
             .filter(|(c, _)| *c == 200)
             .and_then(|(_, b)| serde_json::from_str::<Value>(&b).ok())
             .unwrap_or(Value::Null)
@@ -257,27 +325,34 @@ pub fn info(s: &Shared) -> serde_json::Value {
 
 /// Lightweight composer telemetry. Reads only the model HTTP endpoints and avoids sysinfo's
 /// process-tree refresh used by `info`, which is intentionally reserved for Settings.
-pub fn telemetry(s: &Shared) -> Option<f64> {
+/// Generation speed, plus the size of the request being served right now (prompt + tokens so far), which is
+/// the chat's live context size while a turn runs.
+pub fn telemetry(s: &Shared) -> (Option<f64>, Option<u64>) {
     let (port, key, ready) = {
         let g = s.lock().unwrap();
         (g.status.port, g.key.clone(), g.status.state == "ready")
     };
     if !ready || port == 0 {
-        return None;
+        return (None, None);
     }
     let current = http::get(port, "/status", Some(&key), Duration::from_millis(750))
         .filter(|(status, _)| *status == 200)
         .and_then(|(_, body)| serde_json::from_str::<serde_json::Value>(&body).ok());
+    let live = current.as_ref().and_then(|v| {
+        let prompt = v.get("prompt_tokens")?.as_u64()?;
+        Some(prompt + v.get("generated").and_then(serde_json::Value::as_u64).unwrap_or(0))
+    });
     if let Some(value) = current.as_ref().and_then(current_tokens_per_second) {
-        return Some(value);
+        return (Some(value), live);
     }
     let detailed = http::get(port, "/v1/status", Some(&key), Duration::from_millis(750))
         .filter(|(status, _)| *status == 200)
-        .and_then(|(_, body)| serde_json::from_str::<serde_json::Value>(&body).ok())?;
-    current
+        .and_then(|(_, body)| serde_json::from_str::<serde_json::Value>(&body).ok());
+    let tps = current
         .as_ref()
         .and_then(last_tokens_per_second)
-        .or_else(|| last_tokens_per_second(&detailed))
+        .or_else(|| detailed.as_ref().and_then(last_tokens_per_second));
+    (tps, live)
 }
 
 fn current_tokens_per_second(value: &serde_json::Value) -> Option<f64> {
@@ -296,13 +371,14 @@ fn finite_positive(value: Option<f64>) -> Option<f64> {
 
 fn cpu_stats(s: &Shared) -> (String, f32, Option<f64>) {
     use std::sync::OnceLock;
-    use sysinfo::{Pid, ProcessesToUpdate, System};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     static SYS: OnceLock<Mutex<System>> = OnceLock::new();
     let pid = s.lock().unwrap().child.as_ref().map(|c| c.id());
     let mut sys = SYS.get_or_init(|| Mutex::new(System::new())).lock().unwrap();
     sys.refresh_cpu_usage();
     if pid.is_some() {
-        sys.refresh_processes(ProcessesToUpdate::All, true);
+        // Memory only: a full refresh (command lines, disk, CPU per process) is what made Settings slow.
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_memory());
     }
     let name = sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default();
     // The model runs in child processes of the launcher: add up the whole tree.

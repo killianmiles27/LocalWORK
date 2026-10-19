@@ -40,12 +40,12 @@ pub fn read_allowed(host: &str) -> bool {
     hosts().get(host).and_then(|h| h.get("read_ok")).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ssh_hosts() -> Value {
     hosts()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ssh_save_host(name: String, host: String, user: String, port: u16, read_ok: bool) -> Result<(), String> {
     let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
     if !ok(&name) || !ok(&host) || !ok(&user) {
@@ -56,7 +56,7 @@ pub fn ssh_save_host(name: String, host: String, user: String, port: u16, read_o
     std::fs::write(dir().join("hosts.json"), serde_json::to_string_pretty(&h).unwrap()).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ssh_delete_host(name: String) -> Result<(), String> {
     let mut h = hosts();
     if let Some(o) = h.as_object_mut() { o.remove(&name); }
@@ -64,7 +64,7 @@ pub fn ssh_delete_host(name: String) -> Result<(), String> {
 }
 
 /// Public key text; generates the ed25519 key on first use and limits its ACL to the current user.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ssh_public_key() -> Result<String, String> {
     let key = dir().join("id_ed25519");
     if !key.exists() {
@@ -77,7 +77,7 @@ pub fn ssh_public_key() -> Result<String, String> {
 }
 
 /// Fetch the server's host key and return its fingerprint for the user to confirm.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ssh_scan(host: String, port: u16) -> Result<Value, String> {
     let keys = run(Command::new(tool("ssh-keyscan")).args(["-T", "8", "-t", "ed25519,ecdsa,rsa", "-p", &port.to_string(), &host]), None)?;
     let keys: String = keys.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");
@@ -87,7 +87,7 @@ pub fn ssh_scan(host: String, port: u16) -> Result<Value, String> {
 }
 
 /// Pin a scanned host key (after the user confirmed the fingerprint).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ssh_pin(keys: String) -> Result<(), String> {
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(dir().join("known_hosts")).map_err(|e| e.to_string())?;

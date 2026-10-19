@@ -32,7 +32,7 @@ fn missing() -> Option<String> {
     None
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn voice_status() -> Value {
     match missing() {
         None => json!({"available": true, "detail": ""}),

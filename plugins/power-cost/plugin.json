@@ -1,0 +1,20 @@
+{
+  "id": "power-cost",
+  "name": "Electricity cost",
+  "version": "1.0.0",
+  "author": "LocalWORK",
+  "description": "What a task costs in electricity: GPU draw measured with nvidia-smi, plus the CPU's rated watts scaled by its load, plus the rest of the machine. Set your price per kWh. It is an estimate, not a meter reading.",
+  "enabledByDefault": false,
+  "settings": [
+    { "key": "pricePerKwh", "label": "Price per kWh", "type": "number", "default": 0.17, "help": "From your electricity bill." },
+    { "key": "currency", "label": "Currency symbol", "type": "text", "default": "$" },
+    { "key": "cpuWatts", "label": "CPU watts at full load", "type": "number", "default": 65, "help": "The CPU's rated power (TDP or PPT)." },
+    { "key": "baseWatts", "label": "Rest of the machine (watts)", "type": "number", "default": 40, "help": "Board, memory, drives, fans and power-supply loss. Add the GPU here if it is not NVIDIA." }
+  ],
+  "contributes": {
+    "statusItems": [
+      { "id": "task", "label": "Task", "source": "host:power_stats", "value": "task.cost", "prefix": "${setting:currency}", "decimals": 4, "secondary": "watts", "secondaryUnit": " W",
+        "tooltip": "Electricity for the current or last task. Session total: ${session.cost}. Now: ${cost_per_hour} per hour at ${price_per_kwh} per kWh." }
+    ]
+  }
+}

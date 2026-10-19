@@ -50,7 +50,7 @@ fn prune(d: &Path, keep: usize) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rollback_list() -> Vec<Version> {
     let dir = crate::paths::data_dir();
     let mut out = vec![];
@@ -65,7 +65,7 @@ pub fn rollback_list() -> Vec<Version> {
 }
 
 /// Replace the installed executable with the saved copy of `version`, then restart.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rollback_to(app: tauri::AppHandle, version: String) -> Result<(), String> {
     if !version.chars().all(|c| c.is_ascii_digit() || c == '.') {
         return Err("bad version".into());

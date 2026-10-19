@@ -1,12 +1,16 @@
 mod agent;
 mod documents;
+mod export;
 mod desktop;
 mod http;
 mod paths;
+mod plugins;
 mod policy;
 mod rollback;
+mod runconfig;
 mod setup;
 mod ssh;
+mod stats;
 mod sshpolicy;
 mod store;
 mod strata;
@@ -31,25 +35,115 @@ fn new_id() -> String {
     format!("c{:x}{:x}", store::now(), n & 0xffff_ffff)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
+fn plugins_list() -> Vec<Value> {
+    plugins::list_json()
+}
+
+#[tauri::command(async)]
+fn plugin_set_enabled(id: String, on: bool) -> Result<(), String> {
+    plugins::set_enabled(&id, on)
+}
+
+#[tauri::command(async)]
+fn status_items() -> Vec<Value> {
+    plugins::status_items()
+}
+
+#[tauri::command(async)]
+fn system_stats() -> Value {
+    stats::get()
+}
+
+#[tauri::command(async)]
+fn power_stats(settings: Option<Value>) -> Value {
+    stats::power(&settings.unwrap_or(Value::Null))
+}
+
+#[tauri::command(async)]
+fn plugin_import(path: String) -> Result<Value, String> {
+    plugins::import(&path)
+}
+
+#[tauri::command(async)]
+fn plugin_export(id: String, dest: String) -> Result<(), String> {
+    plugins::export(&id, &dest)
+}
+
+#[tauri::command(async)]
+fn plugin_remove(id: String) -> Result<(), String> {
+    plugins::remove(&id)
+}
+
+#[tauri::command(async)]
+fn plugin_settings_set(id: String, values: Value) -> Result<Value, String> {
+    plugins::set_settings(&id, &values)
+}
+
+#[tauri::command(async)]
+fn plugins_folder() -> Result<(), String> {
+    desktop::reveal_folder(&plugins::user_folder().to_string_lossy())
+}
+
+#[tauri::command(async)]
+fn modes_list(s: State<App>) -> Value {
+    serde_json::json!({"modes": plugins::modes(), "effort": plugins::effort_get(&s.strata)})
+}
+
+#[tauri::command(async)]
+fn effort_set(s: State<App>, effort: Option<String>) -> Result<Value, String> {
+    plugins::effort_set(&s.strata, effort)
+}
+
+/// Switch to another model mode: point at its run config and reload the model. Chats keep their
+/// sessions; each agent restarts on its next message with the new context window.
+#[tauri::command(async)]
+fn mode_switch(app: AppHandle, s: State<App>, id: String, reload: Option<bool>) -> Result<Value, String> {
+    let m = plugins::find_mode(&id).ok_or_else(|| format!("no mode {id}"))?;
+    if m["active"] == true && reload != Some(true) && s.strata.lock().unwrap().status.state == "ready" {
+        return Ok(m);
+    }
+    let cfg = m["config"].as_str().unwrap_or("").to_string();
+    setup::set_model_config(cfg)?;
+    let ags: Vec<_> = s.agents.lock().unwrap().drain().map(|(_, a)| a).collect();
+    for a in ags {
+        a.shutdown();
+    }
+    strata::stop(Some(&app), &s.strata);
+    strata::start(&app, &s.strata)?;
+    Ok(plugins::find_mode(&id).unwrap_or(m))
+}
+
+#[tauri::command(async)]
+fn run_config_read(path: String) -> Result<Value, String> {
+    runconfig::read(&path)
+}
+
+#[tauri::command(async)]
+fn run_config_save(path: String, config: Value, new_name: Option<String>) -> Result<String, String> {
+    runconfig::save(&path, config, new_name)
+}
+
+#[tauri::command(async)]
 fn model_status(s: State<App>) -> strata::Status {
     s.strata.lock().unwrap().status.clone()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn model_info(s: State<App>) -> Value {
     strata::info(&s.strata)
 }
 
 #[tauri::command]
-async fn model_telemetry(s: State<'_, App>) -> Result<Option<f64>, String> {
+async fn model_telemetry(s: State<'_, App>) -> Result<Value, String> {
     let strata = s.strata.clone();
-    tauri::async_runtime::spawn_blocking(move || strata::telemetry(&strata))
+    let (tps, ctx) = tauri::async_runtime::spawn_blocking(move || strata::telemetry(&strata))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"tps": tps, "ctx": ctx}))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_auto_edit(s: State<App>, id: Option<String>, on: bool) {
     store::kv_set(&s.db.lock().unwrap(), "auto_edit", if on { "1" } else { "0" });
     let _ = id;
@@ -59,12 +153,12 @@ fn set_auto_edit(s: State<App>, id: Option<String>, on: bool) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn model_start(app: AppHandle, s: State<App>) -> Result<(), String> {
     strata::start(&app, &s.strata)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn model_stop(app: AppHandle, s: State<App>) {
     let ags: Vec<_> = s.agents.lock().unwrap().values().cloned().collect();
     for a in ags {
@@ -73,12 +167,12 @@ fn model_stop(app: AppHandle, s: State<App>) {
     strata::stop(Some(&app), &s.strata);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_conversations(s: State<App>) -> Vec<Value> {
     store::list_convs(&s.db.lock().unwrap())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_workspace(s: State<App>, id: String) -> Result<(), String> {
     let workspace = store::conv_info(&s.db.lock().unwrap(), &id)
         .map(|(_, workspace, _)| workspace)
@@ -86,7 +180,7 @@ fn open_workspace(s: State<App>, id: String) -> Result<(), String> {
     desktop::reveal_folder(&workspace)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_conversation(app: AppHandle, s: State<App>, workspace: Option<String>) -> Result<String, String> {
     let id = new_id();
     let workspace = match workspace {
@@ -108,7 +202,28 @@ fn default_workspace(app: &AppHandle, s: &State<App>, id: &str) -> Result<String
     Ok(folder.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
+/// Saves a chat as Markdown. The save dialog runs here, so the UI never gets a general file-write command.
+#[tauri::command(async)]
+fn export_markdown(app: AppHandle, s: State<App>, id: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (title, msgs) = {
+        let c = s.db.lock().unwrap();
+        (store::conv_info(&c, &id).map(|x| x.0).ok_or("Unknown chat")?, store::messages(&c, &id, 0))
+    };
+    let name: String = title.chars().filter(|c| !"<>:\"/\\|?*".contains(*c) && !c.is_control()).take(80).collect();
+    let name = if name.trim().is_empty() { "chat".to_string() } else { name.trim().to_string() };
+    let Some(picked) = app.dialog().file().add_filter("Markdown", &["md"]).set_file_name(format!("{name}.md")).blocking_save_file() else {
+        return Ok(None);
+    };
+    let mut path = picked.into_path().map_err(|e| e.to_string())?;
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+        path.set_extension("md");
+    }
+    std::fs::write(&path, export::chat_markdown(&title, &msgs)).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command(async)]
 fn delete_conversation(s: State<App>, id: String) {
     if let Some(a) = s.agents.lock().unwrap().remove(&id) {
         a.shutdown();
@@ -116,12 +231,12 @@ fn delete_conversation(s: State<App>, id: String) {
     store::delete_conv(&s.db.lock().unwrap(), &id);
 }
 
-#[tauri::command]
-fn load_messages(s: State<App>, id: String) -> Vec<Value> {
-    store::messages(&s.db.lock().unwrap(), &id)
+#[tauri::command(async)]
+fn load_messages(s: State<App>, id: String, after: Option<i64>) -> Vec<Value> {
+    store::messages(&s.db.lock().unwrap(), &id, after.unwrap_or(0))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn agent_send(app: AppHandle, s: State<App>, id: String, text: String) -> Result<(), String> {
     let a = agent::get_or_start(&app, &s.agents, &s.db, &s.strata, &id)?;
     let enabled = store::kv_get(&s.db.lock().unwrap(), "auto_edit").map(|v| v != "0").unwrap_or(true);
@@ -163,7 +278,7 @@ fn unique_in(d: &std::path::Path, name: &str) -> std::path::PathBuf {
 }
 
 /// Copies dropped files into <workspace>ttachments and returns their workspace-relative paths.
-#[tauri::command]
+#[tauri::command(async)]
 fn attach_paths(s: State<App>, id: String, paths: Vec<String>) -> Result<Vec<String>, String> {
     let d = attach_dir(&s, &id)?;
     let mut out = vec![];
@@ -181,7 +296,7 @@ fn attach_paths(s: State<App>, id: String, paths: Vec<String>) -> Result<Vec<Str
 }
 
 /// Saves pasted file or image bytes into <workspace>ttachments.
-#[tauri::command]
+#[tauri::command(async)]
 fn attach_bytes(s: State<App>, id: String, name: String, data: Vec<u8>) -> Result<String, String> {
     let d = attach_dir(&s, &id)?;
     let dst = unique_in(&d, &name);
@@ -189,20 +304,46 @@ fn attach_bytes(s: State<App>, id: String, name: String, data: Vec<u8>) -> Resul
     Ok(format!("attachments/{}", dst.file_name().unwrap().to_string_lossy()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn agent_compact(app: AppHandle, s: State<App>, id: String) -> Result<(), String> {
     let a = agent::get_or_start(&app, &s.agents, &s.db, &s.strata, &id)?;
     a.send(json!({"type": "message", "msg_id": new_id(), "content": "/compact"}));
     Ok(())
 }
 
-#[tauri::command]
+fn live_dir(s: &State<App>, id: &str) -> Result<std::path::PathBuf, String> {
+    let db = s.db.lock().map_err(|_| "Database lock unavailable")?;
+    let (_, ws, _) = store::conv_info(&db, id).ok_or("Unknown chat")?;
+    Ok(std::path::PathBuf::from(ws).join(".browser").join("live"))
+}
+
+/// Recent browser frames the workbench browser tool saved for this chat's live view (oldest first).
+#[tauri::command(async)]
+fn browser_frames(s: State<App>, id: String) -> Result<Value, String> {
+    let dir = live_dir(&s, &id)?;
+    let Ok(text) = std::fs::read_to_string(dir.join("index.json")) else { return Ok(json!([])) };
+    let v: Value = serde_json::from_str(&text).unwrap_or(json!({}));
+    let frames = v["frames"].as_array().cloned().unwrap_or_default();
+    Ok(Value::Array(frames.into_iter().filter(|f| f["file"].as_str().is_some_and(|n| frame_name(n) && dir.join(n).is_file())).collect()))
+}
+
+fn frame_name(n: &str) -> bool {
+    n.strip_prefix("frame-").and_then(|r| r.strip_suffix(".jpeg")).is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+}
+
+#[tauri::command(async)]
+fn browser_frame(s: State<App>, id: String, file: String) -> Result<tauri::ipc::Response, String> {
+    if !frame_name(&file) { return Err("Not a browser frame".into()); }
+    std::fs::read(live_dir(&s, &id)?.join(file)).map(tauri::ipc::Response::new).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
 fn context_usage(s: State<App>, id: String) -> Value {
     let used = store::kv_get(&s.db.lock().unwrap(), &format!("ctx:{id}")).and_then(|v| v.parse::<u64>().ok());
     json!({"used": used, "window": strata::context_window()})
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn agent_stop(s: State<App>, id: String) {
     let agent = s.agents.lock().unwrap().remove(&id);
     if let Some(a) = agent {
@@ -213,35 +354,35 @@ fn agent_stop(s: State<App>, id: String) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn agent_answer(s: State<App>, id: String, call_id: String, allow: bool, remember: bool) {
     if let Some(a) = s.agents.lock().unwrap().get(&id) {
         a.answer(&call_id, allow, remember);
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_setting(s: State<App>, key: String) -> Option<String> {
     store::kv_get(&s.db.lock().unwrap(), &key)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_setting(s: State<App>, key: String, value: String) {
     store::kv_set(&s.db.lock().unwrap(), &key, &value);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn memories_list(s: State<App>) -> Vec<Value> {
     let c = s.db.lock().unwrap();
     store::recent_memories(&c, 500).into_iter().map(|(id, text)| json!({"id": id, "text": text})).collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn memory_delete(s: State<App>, id: i64) {
     store::delete_memory(&s.db.lock().unwrap(), id);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn data_dir() -> String {
     paths::data_dir().to_string_lossy().to_string()
 }
@@ -324,10 +465,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            run_config_read,
+            browser_frames,
+            browser_frame,
+            run_config_save,
             documents::documents_list, documents::document_preview, documents::document_open,
             documents::document_revisions, documents::document_export,
-            documents::document_save_visual,
-            setup::hardware_check, setup::set_strata_root, setup::set_model_config, setup::set_web_access, setup::strata_update_check, setup::strata_update_apply,
+            documents::document_save_visual, documents::document_save, documents::document_office_edit,
+            setup::hardware_check, setup::set_strata_root, setup::probe_model_server, setup::set_model_server, setup::use_own_strata, setup::set_model_config, setup::set_web_access, setup::strata_update_check, setup::strata_update_apply,
             rollback::rollback_list,
             rollback::rollback_to,
             model_status,
@@ -338,6 +483,7 @@ pub fn run() {
             create_conversation,
             delete_conversation,
             load_messages,
+            export_markdown,
             model_info,
             model_telemetry,
             desktop::open_external,
@@ -357,7 +503,9 @@ pub fn run() {
             memory_delete,
             voice::voice_status,
             voice::voice_transcribe,
-            voice::voice_tidy
+            voice::voice_tidy,
+            plugins_list, plugin_set_enabled, status_items, system_stats, power_stats,
+            plugin_import, plugin_export, plugin_remove, plugin_settings_set, plugins_folder, modes_list, effort_set, mode_switch
         ])
         .build(tauri::generate_context!())
         .expect("error while building app")

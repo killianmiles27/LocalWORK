@@ -373,7 +373,7 @@ pub async fn document_preview(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_revisions(s: State<'_, App>, id: String, path: String) -> Result<Value, String> {
     let file = resolve_file(&workspace(&s, &id)?, &path)?;
     Ok(json!(records(&paths::data_dir(), &file)?
@@ -382,7 +382,7 @@ pub fn document_revisions(s: State<'_, App>, id: String, path: String) -> Result
         .collect::<Vec<_>>()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_open(
     s: State<'_, App>,
     id: String,
@@ -405,7 +405,7 @@ pub fn document_open(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_export(
     s: State<'_, App>,
     id: String,
@@ -441,7 +441,7 @@ pub fn document_export(
 }
 
 /// Only invoked by the user's Save copy dialog, never exposed as an agent tool.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_save_visual(destination: String, html: String) -> Result<(), String> {
     use std::io::Write;
     let destination = PathBuf::from(destination);
@@ -470,9 +470,160 @@ pub fn document_save_visual(destination: String, html: String) -> Result<(), Str
     Ok(())
 }
 
+/// Saves the user's own edit to a text document. Refuses when the file changed since the user
+/// started editing (usually the assistant), so neither side silently overwrites the other.
+#[tauri::command(async)]
+pub fn document_save(
+    s: State<'_, App>,
+    id: String,
+    path: String,
+    content: String,
+    expected: String,
+) -> Result<(), String> {
+    let root = workspace(&s, &id)?;
+    save_text(&paths::data_dir(), &root, &path, &content, &expected)
+}
+
+fn save_text(data: &Path, root: &Path, path: &str, content: &str, expected: &str) -> Result<(), String> {
+    let file = resolve_file(root, path)?;
+    if !matches!(kind(&file).as_deref(), Some("md" | "txt" | "csv" | "json" | "html")) {
+        return Err("Only text documents can be edited here".into());
+    }
+    if content.len() > MAX_PREVIEW as usize {
+        return Err("Document exceeds the 8 MB edit limit".into());
+    }
+    let current = String::from_utf8(read_bounded(&file, MAX_PREVIEW)?).map_err(|e| e.to_string())?;
+    if current != expected {
+        return Err("The file changed while you were editing (probably the assistant). Copy your text, reload and try again.".into());
+    }
+    snapshot_at(data, root, path)?;
+    let temp = file.with_extension(format!("lw-save-{:08x}", rand::random::<u32>()));
+    fs::write(&temp, content).map_err(|e| e.to_string())?;
+    fs::rename(&temp, &file).map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        e.to_string()
+    })
+}
+
+/// The smallest stretch of `before` that changed, widened until it occurs only once, with its
+/// replacement. A find/replace keeps the surrounding run formatting, unlike rewriting the text.
+fn find_replace(before: &str, after: &str) -> Option<(String, String)> {
+    let b: Vec<char> = before.chars().collect();
+    let a: Vec<char> = after.chars().collect();
+    let mut start = 0;
+    while start < b.len() && start < a.len() && b[start] == a[start] {
+        start += 1;
+    }
+    let mut tail = 0;
+    while tail < b.len() - start && tail < a.len() - start && b[b.len() - 1 - tail] == a[a.len() - 1 - tail] {
+        tail += 1;
+    }
+    let (mut lo, mut hi) = (start, b.len() - tail);
+    let mut left = true;
+    loop {
+        let old: String = b[lo..hi].iter().collect();
+        // OfficeCLI reads r"..." as a regular expression.
+        if !old.is_empty() && !old.starts_with("r\"") && before.matches(old.as_str()).count() == 1 {
+            let new: String = a[lo..a.len() - (b.len() - hi)].iter().collect();
+            return Some((old, new));
+        }
+        if lo == 0 && hi == b.len() {
+            return None;
+        }
+        if (left && lo > 0) || hi == b.len() {
+            lo -= 1;
+        } else {
+            hi += 1;
+        }
+        left = !left;
+    }
+}
+
+/// Applies the user's in-place edit of one element in a Word, PowerPoint or Excel preview.
+#[tauri::command]
+pub async fn document_office_edit(
+    s: State<'_, App>,
+    id: String,
+    path: String,
+    node: String,
+    before: String,
+    after: String,
+) -> Result<(), String> {
+    let root = workspace(&s, &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::ffi::OsStr;
+        let file = resolve_file(&root, &path)?;
+        let kind = kind(&file).ok_or("Unsupported document type")?;
+        if !matches!(kind.as_str(), "docx" | "xlsx" | "pptx") {
+            return Err("Not an Office document".into());
+        }
+        if !node.starts_with('/') || node.len() > 300 || node.chars().any(char::is_control) {
+            return Err("Invalid element path".into());
+        }
+        if after.len() > 64 * 1024 || after.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+            return Err("Edited text is too long or contains control characters".into());
+        }
+        if before == after {
+            return Ok(());
+        }
+        snapshot(&root, &path)?;
+        let target = native_path(&file);
+        let set = |extra: &[&str]| {
+            let mut args = vec![OsStr::new("set"), OsStr::new(&target), OsStr::new(&node)];
+            args.extend(extra.iter().map(OsStr::new));
+            office_output(&args)
+        };
+        if kind == "xlsx" {
+            let prop = match after.strip_prefix('=') {
+                Some(formula) if !formula.trim().is_empty() => format!("formula={formula}"),
+                _ => format!("value={after}"),
+            };
+            return set(&["--prop", &prop]).map(|_| ());
+        }
+        if let Some((old, new)) = find_replace(&before, &after) {
+            if set(&["--find", &old, "--replace", &new])?.contains("(1 matched)") {
+                return Ok(());
+            }
+        }
+        // The preview text did not line up with the stored runs; rewrite the element's text.
+        set(&["--prop", &format!("text={after}")]).map(|_| ())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn find_replace_is_minimal_and_unique() {
+        let (old, new) = find_replace("Hello world", "Hello there world").unwrap();
+        assert_eq!("Hello world".replacen(&old, &new, 1), "Hello there world");
+        assert_eq!(find_replace("Sales rose 5%", "Sales rose 7%"), Some(("5".into(), "7".into())));
+        // "a" occurs twice, so it widens until unique.
+        let (old, new) = find_replace("a b a", "a b c").unwrap();
+        assert_eq!("a b a".matches(&old).count(), 1);
+        assert_eq!("a b a".replacen(&old, &new, 1), "a b c");
+        assert_eq!(find_replace("", "new"), None);
+        let (old, new) = find_replace("abc", "").unwrap();
+        assert_eq!((old.as_str(), new.as_str()), ("abc", ""));
+        let (old, new) = find_replace("café au lait", "café noir").unwrap();
+        assert_eq!("café au lait".replacen(&old, &new, 1), "café noir");
+    }
+    #[test]
+    fn text_save_refuses_a_changed_file() {
+        let temp = Temp::new();
+        let (ws, data) = (temp.0.join("ws"), temp.0.join("data"));
+        fs::create_dir(&ws).unwrap();
+        fs::write(ws.join("notes.md"), "v1").unwrap();
+        assert!(save_text(&data, &ws, "notes.md", "mine", "old").is_err());
+        assert_eq!(fs::read_to_string(ws.join("notes.md")).unwrap(), "v1");
+        save_text(&data, &ws, "notes.md", "mine", "v1").unwrap();
+        assert_eq!(fs::read_to_string(ws.join("notes.md")).unwrap(), "mine");
+        assert_eq!(records(&data, &resolve_file(&ws, "notes.md").unwrap()).unwrap().len(), 1);
+        fs::write(ws.join("run.bat"), "x").unwrap();
+        assert!(save_text(&data, &ws, "run.bat", "y", "x").is_err());
+    }
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {

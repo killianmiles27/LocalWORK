@@ -15,10 +15,12 @@ LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference, a loc
 - Local voice transcription through whisper.cpp.
 - Optional SSH access to servers you add yourself.
 - Context usage estimates, automatic compaction, and a Stop button.
+- Plugins for model modes, skills, status readouts and tools, imported and exported as zips. See the [plugin gallery](plugins/README.md).
+- Office templates: attach a company template or example document, and results come back in that format.
 
 ## Getting started
 
-Start with the [setup guide](docs/SETUP.md). It covers Strata, model configuration, building the app, and the first-run wizard. Once installed, see the [usage guide](docs/USAGE.md).
+Start with the [setup guide](docs/SETUP.md). It covers Strata, model configuration, building the app, and the first-run wizard. Once installed, see the [usage guide](docs/USAGE.md). Optional extras, such as a CPU/GPU bar and an electricity cost per task, are [plugins](plugins/README.md). Running a customized copy on several PCs is covered in [MAINTAINING.md](docs/MAINTAINING.md).
 
 The repository contains source and build scripts. Model weights and runtime executables are not checked in. An app build needs the pinned tools described in [vendor/README.md](vendor/README.md).
 

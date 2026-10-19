@@ -16,10 +16,7 @@ pub fn get(port: u16, path: &str, bearer: Option<&str>, timeout: Duration) -> Op
     s.write_all(req.as_bytes()).ok()?;
     let mut buf = Vec::new();
     let _ = s.read_to_end(&mut buf);
-    let text = String::from_utf8_lossy(&buf).to_string();
-    let status = text.split_whitespace().nth(1)?.parse::<u16>().ok()?;
-    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-    Some((status, body))
+    response(&buf)
 }
 
 pub fn free_port() -> u16 {
@@ -47,6 +44,10 @@ pub fn post_json(port: u16, path: &str, bearer: Option<&str>, body: &str, timeou
     s.write_all(req.as_bytes()).ok()?;
     let mut buf = Vec::new();
     let _ = s.read_to_end(&mut buf);
+    response(&buf)
+}
+
+fn response(buf: &[u8]) -> Option<(u16, String)> {
     let split = buf.windows(4).position(|w| w == b"\r\n\r\n")?;
     let head = String::from_utf8_lossy(&buf[..split]).to_string();
     let raw = &buf[split + 4..];

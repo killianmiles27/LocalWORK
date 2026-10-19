@@ -52,11 +52,18 @@ button { cursor: pointer; }
 button:disabled { cursor: default; }
 .workspace-panel { width: 48vw; min-width: 360px; max-width: 900px; }
 @media (max-width: 1000px) { .workspace-panel { width: 50vw; } }
+.pane-resizer { position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 30; touch-action: none; }
+.pane-resizer::after { content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 1px; background: transparent; transition: background-color .15s; }
+.pane-resizer:hover::after, .pane-resizer:focus-visible::after, .pane-resizer:active::after { background: var(--color-accent); width: 2px; }
 
 .prose { --tw-prose-body: var(--color-ink); --tw-prose-headings: var(--color-ink); --tw-prose-bold: var(--color-ink);
   --tw-prose-links: var(--color-accent); --tw-prose-code: var(--color-ink); --tw-prose-th-borders: var(--color-line);
   --tw-prose-td-borders: var(--color-line); --tw-prose-bullets: var(--color-muted); --tw-prose-counters: var(--color-muted);
-  --tw-prose-hr: var(--color-line); max-width: none; line-height: 1.65; }
+  --tw-prose-hr: var(--color-line); --tw-prose-quotes: var(--color-ink); --tw-prose-quote-borders: var(--color-line);
+  --tw-prose-captions: var(--color-muted); --tw-prose-kbd: var(--color-ink); --tw-prose-pre-code: var(--color-ink);
+  --tw-prose-lead: var(--color-ink); max-width: none; line-height: 1.65; }
+.prose :where(blockquote) { font-style: normal; font-weight: inherit; }
+.prose :where(blockquote p):first-of-type::before, .prose :where(blockquote p):last-of-type::after { content: none; }
 .prose :where(code):not(:where(pre *))::before, .prose :where(code):not(:where(pre *))::after { content: none; }
 .prose :where(code):not(:where(pre *)) { background: var(--color-panel-2); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
 .prose :where(pre) { background: var(--color-panel); color: var(--color-ink); border: 1px solid var(--color-line); border-radius: 10px; }
@@ -74,6 +81,9 @@ button:disabled { cursor: default; }
 .chat-row:hover { transform: translateX(2px); }
 .chat-row[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 2px; background: var(--color-accent); }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes slide { from { left: -33%; } to { left: 100%; } }
+@keyframes lw-fade { from { background-color: rgb(250 204 21 / .35); } to { background-color: transparent; } }
+.lw-changed { animation: lw-fade 6s ease-out forwards; border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) {
   .chat-row { animation: none; opacity: 1; }
   .sidebar { transition: none; }

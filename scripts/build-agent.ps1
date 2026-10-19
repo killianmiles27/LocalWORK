@@ -22,6 +22,12 @@ try {
     if ($LASTEXITCODE) { throw 'Agent patch failed.' }
     cargo test --locked -p aion-agent --lib compact::
     if ($LASTEXITCODE) { throw 'Compaction regression tests failed.' }
+    cargo test --locked -p aion-agent --lib native_
+    if ($LASTEXITCODE) { throw 'Native agent transaction tests failed.' }
+    cargo test --locked -p aion-providers native_compaction
+    if ($LASTEXITCODE) { throw 'Native provider compaction tests failed.' }
+    cargo test --locked -p aion-agent --test autocompact_test
+    if ($LASTEXITCODE) { throw 'Automatic compaction integration tests failed.' }
     cargo build --locked --release -p aion-cli
     if ($LASTEXITCODE) { throw 'Agent release build failed.' }
     $built = Join-Path (Get-Location).Path 'target\release\aionrs.exe'

@@ -34,12 +34,14 @@ $skillRoot = Join-Path $repo 'skills'
 $copies += Get-ChildItem -LiteralPath $skillRoot -Recurse -File | ForEach-Object {
     [pscustomobject]@{ Source = $_.FullName; Relative = Join-Path 'skills' $_.FullName.Substring($skillRoot.Length + 1) }
 }
-$copies += @('HANDOFF.md','NOTICE.md','LICENSE') | ForEach-Object { [pscustomobject]@{ Source = Join-Path $repo $_; Relative = $_ } }
+$copies += @('NOTICE.md','LICENSE') | ForEach-Object { [pscustomobject]@{ Source = Join-Path $repo $_; Relative = $_ } }
 $noticeRoot = Join-Path $repo 'third-party'
 $copies += Get-ChildItem -LiteralPath $noticeRoot -Recurse -File | ForEach-Object {
     [pscustomobject]@{ Source = $_.FullName; Relative = Join-Path 'third-party' $_.FullName.Substring($noticeRoot.Length + 1) }
 }
-$retiredFiles = @('skills\gapminder\SKILL.md')
+# Plugins no longer ship inside the app: install them from the plugin pack (scripts/package-plugins.ps1)
+# or with the personal plugins sync script, which copy them to the user plugins folder.
+$retiredFiles = @('skills\gapminder\SKILL.md', 'HANDOFF.md', 'plugins\power-cost\plugin.json', 'plugins\system-stats\plugin.json')
 
 # Finish every backup before replacing any installed file.
 foreach ($copy in $copies) {

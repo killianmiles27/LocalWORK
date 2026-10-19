@@ -1,4 +1,4 @@
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_external(url: String) -> Result<(), String> {
     open_external_url(&url)
 }

@@ -1,7 +1,7 @@
 //! One aionrs process per conversation, spoken to over JSON Lines (--json-stream).
 //! The host owns the approval policy: aionrs runs in its default "ask for everything" mode and every
 //! tool_request is answered here, either automatically by policy or by the user through the UI.
-use crate::{documents, paths, policy, store, strata, supervisor};
+use crate::{documents, http, paths, plugins, policy, store, strata, supervisor};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -24,6 +24,8 @@ struct Inner {
     queue: Vec<Value>,
     remembered: Vec<String>,
     pending: HashMap<String, Value>,
+    /// MCP servers announced to aionrs but not yet `mcp_ready`; the first message waits for all of them.
+    mcp_pending: usize,
 }
 
 pub struct Agent {
@@ -50,6 +52,7 @@ fn dispatch_next(inner: &mut Inner) {
     if inner.ready && !inner.processing && !inner.queue.is_empty() {
         let message = inner.queue.remove(0);
         inner.processing = true;
+        if !message["msg_id"].as_str().unwrap_or("").starts_with("ctx-") { crate::stats::task_begin(); }
         write_line(inner, &message);
     }
 }
@@ -182,7 +185,7 @@ impl Agent {
 const COMPACT_MARK: &str = "# managed by LocalWORK";
 
 /// Keep the model's real window in the project config while preserving unrelated settings.
-fn compact_config(old: &str, window: u64) -> Result<String, String> {
+fn compact_config(old: &str, window: u64, native: bool) -> Result<String, String> {
     let mut config = old.parse::<toml_edit::DocumentMut>().map_err(|e| format!("Invalid .aionrs.toml: {e}"))?;
     let reserve = (window / 10).clamp(1024, 4096).min(window / 4);
     let trigger = window * 8 / 10;
@@ -195,18 +198,42 @@ fn compact_config(old: &str, window: u64) -> Result<String, String> {
     for (key, value) in [("context_window", window), ("output_reserve", reserve), ("autocompact_buffer", buffer), ("autocompact_threshold_pct", 80), ("emergency_buffer", (window / 20).min(1500))] {
         compact.insert(key, toml_edit::value(i64::try_from(value).map_err(|_| "Context limit is too large")?));
     }
+    // Native compaction is opt-in only after the selected server advertises it.
+    let previous_native = config.get("providers")
+        .and_then(|v| v.get("openai")).and_then(|v| v.get("compat"))
+        .and_then(|v| v.get("native_compaction_path")).and_then(|v| v.as_str())
+        == Some("/chat/compact");
+    if native || previous_native {
+        let providers = config.entry("providers").or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_like_mut().ok_or("The providers configuration must be a TOML table")?;
+        let openai = providers.entry("openai").or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_like_mut().ok_or("The openai provider configuration must be a TOML table")?;
+        let compat = openai.entry("compat").or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_like_mut().ok_or("The provider compatibility configuration must be a TOML table")?;
+        if native {
+            compat.insert("native_compaction_path", toml_edit::value("/chat/compact"));
+        } else {
+            compat.remove("native_compaction_path");
+        }
+    }
     let text = config.to_string();
     Ok(if old.is_empty() { format!("{COMPACT_MARK}\n{text}") } else { text })
 }
 
-fn write_compact_config(workspace: &std::path::Path) -> Result<(), String> {
+fn native_compaction_supported(body: &str) -> bool {
+    serde_json::from_str::<Value>(body).ok()
+        .and_then(|v| v.get("capabilities")?.get("chat_compaction")?.as_bool())
+        == Some(true)
+}
+
+fn write_compact_config(workspace: &std::path::Path, native: bool) -> Result<(), String> {
     let path = workspace.join(".aionrs.toml");
     let old = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(format!("Could not read context configuration {}: {e}", path.display())),
     };
-    let text = compact_config(&old, strata::context_window())?;
+    let text = compact_config(&old, strata::context_window(), native)?;
     if text != old {
         std::fs::write(&path, text).map_err(|e| format!("Could not configure automatic context compaction {}: {e}", path.display()))?;
     }
@@ -246,7 +273,9 @@ pub fn get_or_start(
         }
         (g.status.port, g.key.clone(), g.status.model.clone())
     };
-    write_compact_config(&workspace)?;
+    let native = http::get(port, "/health", None, std::time::Duration::from_secs(3))
+        .is_some_and(|(code, body)| code == 200 && native_compaction_supported(&body));
+    write_compact_config(&workspace, native)?;
     let vendor = paths::vendor_dir();
     if workbench_mcp(&vendor, conv).is_none() {
         return Err("Workbench tools are missing. Choose a configured Strata folder in Settings and check that workbench-mcp/server.py is installed beside LocalWORK.".into());
@@ -255,9 +284,11 @@ pub fn get_or_start(
     let mut cmd = Command::new(&exe);
     cmd.args(["--json-stream", "--provider", "openai", "--base-url", &format!("http://127.0.0.1:{port}/v1")])
         .env("API_KEY", &key)
-        .args(["--model", &model, "--max-turns", "60", "--no-color"])
+        // 60 turns ran out on long browse-and-write tasks; hitting the budget forces a tool-less final answer.
+        .args(["--model", &model, "--max-turns", "200", "--no-color"])
         // Without this aionrs asks for 20k output tokens, which cannot fit (or compact) in a 32k window.
-        .args(["--max-tokens", &(strata::context_window() / 8).clamp(1024, 4096).to_string()])
+        // An eighth of the window still lets one tool call carry a whole document in a large window.
+        .args(["--max-tokens", &(strata::context_window() / 8).clamp(1024, 16384).to_string()])
         .args(["--system-prompt", &system_prompt(&db)])
         .arg("--project-dir")
         .arg(&workspace);
@@ -299,12 +330,14 @@ pub fn get_or_start(
 
 fn skill_list() -> String {
     let mut rows = vec![];
-    if let Ok(rd) = std::fs::read_dir(paths::resource_dir("skills")) {
+    let mut seen = std::collections::HashSet::new();
+    for dir in plugins::skill_dirs() {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
         for e in rd.flatten() {
             let Ok(t) = std::fs::read_to_string(e.path().join("SKILL.md")) else { continue };
             let field = |k: &str| t.lines().find_map(|l| l.strip_prefix(&format!("{k}:")).map(|v| v.trim().to_string()));
             if let (Some(n), Some(d)) = (field("name"), field("description")) {
-                if n != "officecli-basics" {
+                if n != "officecli-basics" && seen.insert(n.clone()) {
                     rows.push(format!("- {n}: {d}"));
                 }
             }
@@ -325,7 +358,7 @@ fn system_prompt(db: &Db) -> String {
     // Cross-chat memory is switched off: every chat starts fresh and knows nothing about the user.
     let _ = db;
     let notes: Vec<(i64, String)> = vec![];
-    let base = format!("{SYSTEM_PROMPT}{}", skill_list());
+    let base = format!("{SYSTEM_PROMPT}{}{}", skill_list(), plugins::prompt_addenda());
     if notes.is_empty() {
         return base;
     }
@@ -359,7 +392,7 @@ fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Option<Value> {
             "OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(),
             "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy(),
             "WORKBENCH_DB": paths::data_dir().join("workbench.db").to_string_lossy(),
-            "WORKBENCH_SKILLS": paths::resource_dir("skills").to_string_lossy(),
+            "WORKBENCH_SKILLS": std::env::join_paths(plugins::skill_dirs()).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
             "BROWSER_NODE": app_vendor.join("node").join("node.exe").to_string_lossy(),
             "BROWSER_CLI": app_vendor.join("playwright").join("node_modules").join("@playwright").join("cli").join("playwright-cli.js").to_string_lossy(),
             "BROWSER_BROWSERS": app_vendor.join("browsers").to_string_lossy(),
@@ -375,7 +408,7 @@ fn maybe_title(app: &AppHandle, db: &Db, conv: &str) {
     let (first_user, first_reply) = {
         let c = db.lock().unwrap();
         if store::kv_get(&c, &key).is_some() { return; }
-        let msgs = store::messages(&c, conv);
+        let msgs = store::messages(&c, conv, 0);
         let pick = |role: &str| msgs.iter().find(|m| m["role"] == role).and_then(|m| m["body"]["text"].as_str()).map(String::from);
         let (Some(u), Some(a)) = (pick("user"), pick("assistant")) else { return };
         store::kv_set(&c, &key, "1");
@@ -441,17 +474,34 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     let c = db.lock().unwrap();
                     store::set_has_session(&c, &conv);
                 }
-                let mcp = workbench_mcp(&vendor, &conv);
+                let mut servers: Vec<Value> = workbench_mcp(&vendor, &conv).into_iter().collect();
+                servers.extend(plugins::mcp_servers());
                 let mut g = agent.inner.lock().unwrap();
-                if let Some(m) = mcp {
-                    write_line(&mut g, &m);
+                if !servers.is_empty() {
+                    g.mcp_pending = servers.len();
+                    for m in &servers {
+                        write_line(&mut g, m);
+                    }
                 } else {
+                    g.ready = true;
+                    dispatch_next(&mut g);
+                }
+            }
+            // A failed AddMcpServer is a plain error event before the first message; don't let it hold the chat.
+            "error" if !agent.inner.lock().unwrap().ready
+                && ev.to_string().contains("AddMcpServer") => {
+                let mut g = agent.inner.lock().unwrap();
+                g.mcp_pending = g.mcp_pending.saturating_sub(1);
+                eprintln!("plugin MCP server failed: {ev}");
+                if g.mcp_pending == 0 {
                     g.ready = true;
                     dispatch_next(&mut g);
                 }
             }
             "mcp_ready" => {
                 let mut g = agent.inner.lock().unwrap();
+                g.mcp_pending = g.mcp_pending.saturating_sub(1);
+                if g.mcp_pending > 0 && !g.ready { continue; }
                 g.ready = true;
                 dispatch_next(&mut g);
             }
@@ -544,6 +594,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     let c = db.lock().unwrap();
                     store::add_msg(&c, &conv, "error", &ev["error"]);
                 }
+                if !ev["msg_id"].as_str().unwrap_or("").starts_with("ctx-") { crate::stats::task_end(); }
                 if ty == "stream_end" {
                     let mut g = agent.inner.lock().unwrap();
                     g.processing = false;
@@ -579,22 +630,40 @@ mod context_tests {
     #[test]
     fn compact_preserves_other_settings_and_is_idempotent() {
         let old = "model = \"custom\"\n[compact]\nenabled = false\ncontext_window = 200000\ncustom_setting = 42\n[provider]\nname = \"openai\"\n";
-        let configured = compact_config(old, 4096).unwrap();
+        let configured = compact_config(old, 4096, false).unwrap();
         assert!(configured.contains("custom_setting = 42"));
         assert!(configured.contains("[provider]\nname = \"openai\""));
         assert!(configured.contains("autocompact_threshold_pct = 80"));
         assert_eq!(configured.matches("context_window =").count(), 1);
-        assert_eq!(compact_config(&configured, 4096).unwrap(), configured);
+        assert_eq!(compact_config(&configured, 4096, false).unwrap(), configured);
     }
+    #[test]
+    fn native_compact_requires_capability_and_preserves_user_config() {
+        assert!(native_compaction_supported(r#"{"capabilities":{"chat_compaction":true}}"#));
+        for body in ["{}", "bad json", r#"{"capabilities":{"chat_compaction":"true"}}"#] {
+            assert!(!native_compaction_supported(body));
+        }
+        let original = "model = \"custom\"\n[providers.openai.compat]\ninclude_stream_options = false\n";
+        let enabled = compact_config(original, 65536, true).unwrap();
+        let parsed = enabled.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(parsed["providers"]["openai"]["compat"]["native_compaction_path"].as_str(), Some("/chat/compact"));
+        assert_eq!(parsed["providers"]["openai"]["compat"]["include_stream_options"].as_bool(), Some(false));
+        assert_eq!(compact_config(&enabled, 65536, true).unwrap(), enabled);
+        let disabled = compact_config(&enabled, 65536, false).unwrap();
+        assert!(!disabled.contains("native_compaction_path"));
+        assert!(disabled.contains("include_stream_options = false"));
+        assert!(compact_config("providers = 4", 65536, true).is_err());
+    }
+
     #[test]
     fn compact_supports_inline_and_quoted_tables_without_corrupting_config() {
         for old in ["compact = { enabled = false, context_window = 200000, max_failures = 5 }\n", "[\"compact\"]\nmax_failures = 5\n"] {
-            let configured = compact_config(old, 32768).unwrap();
+            let configured = compact_config(old, 32768, false).unwrap();
             let parsed = configured.parse::<toml_edit::DocumentMut>().unwrap();
             assert_eq!(parsed["compact"]["context_window"].as_integer(), Some(32768));
             assert_eq!(parsed["compact"]["max_failures"].as_integer(), Some(5));
-            assert_eq!(compact_config(&configured, 32768).unwrap(), configured);
+            assert_eq!(compact_config(&configured, 32768, false).unwrap(), configured);
         }
-        assert!(compact_config("[compact", 32768).is_err());
+        assert!(compact_config("[compact", 32768, false).is_err());
     }
 }

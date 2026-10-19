@@ -4,19 +4,26 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, FolderOpen, MessageSquare, Mic, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import Md from "./Md";
+import PlanDock, { latestPlan } from "./PlanDock";
+import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Download, FolderOpen, MessageSquare, Mic, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import Wizard from "./Wizard";
 import { useVoice } from "./voice";
 import { richFor } from "./Rich";
 import type { RichActions } from "./Rich";
-import Workspace from "./Workspace";
+import Workspace, { touchedFile, type Activity } from "./Workspace";
 import type { VisualItem } from "./Workspace";
+import ModeSwitcher from "./ModeSwitcher";
+import StatusItems from "./StatusItems";
+import { BrowserPeek } from "./BrowserLive";
+import QuestionCard, { AskedLine, isAsk, openQuestion } from "./Question";
+import Logo from "./Logo";
+import FirstTokenCountdown, { ttftEstimate, ttftRecord } from "./FirstToken";
 
 type Conv = { id: string; title: string; workspace: string; updated: number };
 type Msg = { id: number; role: string; body: any; ts: number };
+const CACHED_CHATS = 3;
 type Status = { state: string; detail: string; port: number; model: string };
 type Approval = { conv: string; call_id: string; tool: string; class: string; reason: string; description?: string; args: any; can_remember: boolean };
 
@@ -43,6 +50,8 @@ export default function App() {
   const [status, setStatus] = useState<Status>({ state: "starting", detail: "", port: 0, model: "" });
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [input, setInput] = useState("");
+  // Messages sent while the assistant is working go out, in order, once the current turn ends.
+  const [queue, setQueue] = useState<{ text: string; files: string[] }[]>([]);
   const [autoEdit, setAutoEdit] = useState(true);
   const autoEditInteracted = useRef(false);
   const [err, setErr] = useState("");
@@ -51,11 +60,20 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceRefresh, setWorkspaceRefresh] = useState(0);
-  const [workspaceRequest, setWorkspaceRequest] = useState<{ path?: string; visual?: string; nonce: number }>();
+  const [activity, setActivity] = useState<Activity | undefined>();
+  const callFiles = useRef(new Map<string, string>());
+  const userEdits = useRef(new Set<string>());
+  const [browserTick, setBrowserTick] = useState(0);
+  const [workspaceRequest, setWorkspaceRequest] = useState<{ path?: string; visual?: string; browser?: boolean; nonce: number }>();
   const [wizard, setWizard] = useState(false);
   const [showTps, setShowTps] = useState(true);
   const [tps, setTps] = useState<number | null>(null);
   const [ctx, setCtx] = useState<{ used: number | null; window: number }>({ used: null, window: 32768 });
+  const modeKey = useRef("default|default");
+  // Set while a chat's first reply has not produced anything yet; drives the countdown.
+  const [firstWait, setFirstWait] = useState<{ conv: string; t0: number; key: string; est: number | null } | null>(null);
+  const firstWaitRef = useRef(firstWait);
+  firstWaitRef.current = firstWait;
   const navigation = useRef(0);
   const createdHere = useRef<string | null>(null);
   const creating = useRef<Promise<string> | null>(null);
@@ -79,14 +97,30 @@ export default function App() {
   const refreshCtx = (id: string) =>
     invoke<{ used: number | null; window: number }>("context_usage", { id }).then((c) => { if (curRef.current === id) setCtx(c); }).catch(() => {});
   const refreshConvs = () => invoke<Conv[]>("list_conversations").then(setConvs).catch((e) => setErr(String(e)));
-  const reload = (id: string) =>
-    invoke<Msg[]>("load_messages", { id }).then((m) => { if (curRef.current === id) setMsgs(m); }).catch((e) => setErr(String(e)));
+  // Recently viewed chats stay in memory. Messages are append-only, so a reload (each tool step, or switching
+  // back to a chat) fetches only rows newer than the last one held instead of the whole history.
+  const chatCache = useRef(new Map<string, Msg[]>());
+  const exportChat = (id: string) => invoke("export_markdown", { id }).catch((e) => setErr(String(e)));
+  const reload = (id: string) => {
+    const after = chatCache.current.get(id)?.at(-1)?.id ?? 0;
+    return invoke<Msg[]>("load_messages", { id, after }).then((rows) => {
+      const cache = chatCache.current, have = cache.get(id) ?? [];
+      const last = have.at(-1)?.id ?? 0;
+      const fresh = rows.filter(m => m.id > last);
+      const next = fresh.length ? [...have, ...fresh] : have;
+      cache.delete(id); cache.set(id, next);
+      for (const k of cache.keys()) { if (cache.size <= CACHED_CHATS) break; if (k !== curRef.current) cache.delete(k); }
+      if (curRef.current === id) setMsgs(next);
+    }).catch((e) => setErr(String(e)));
+  };
 
   useEffect(() => {
     refreshConvs();
     invoke<string | null>("get_setting", { key: "auto_edit" }).then(v => { if (!autoEditInteracted.current) setAutoEdit(v !== "0"); }).catch(() => {});
     invoke<string | null>("get_setting", { key: "show_tps" }).then(v => setShowTps(v !== "0")).catch(() => {});
     invoke<string | null>("get_setting", { key: "wizard_done" }).then((v) => { if (!v) setWizard(true); }).catch(() => {});
+    const showWizard = () => setWizard(true);
+    window.addEventListener("open-wizard", showWizard);
     invoke<string | null>("get_setting", { key: "projects_folder" }).then((v) => { if (v) setProjDir(v); }).catch(() => {});
     invoke<Status>("model_status").then(setStatus).catch(() => {});
     const subs = [
@@ -94,15 +128,26 @@ export default function App() {
       listen<Approval>("approval-request", (e) => setApprovals((a) => [...a, e.payload])),
       listen<{ conv: string; ev: any }>("agent-event", (e) => {
         const { conv, ev } = e.payload;
+        const fw = firstWaitRef.current;
+        if (fw && fw.conv === conv) {
+          if (ev.type === "text_delta" || ev.type === "thinking" || ev.type === "tool_request") { ttftRecord(fw.key, Date.now() - fw.t0); setFirstWait(null); }
+          else if (ev.type === "stream_end" || ev.type === "error" || ev.type === "agent_exit") setFirstWait(null);
+        }
         if (conv !== curRef.current) return;
         switch (ev.type) {
           case "text_delta": setLive((l) => ({ ...l, busy: true, text: l.text + text(ev.text) })); break;
           case "thinking": setLive((l) => ({ ...l, busy: true, thinking: l.thinking + text(ev.text) })); break;
           case "tool_request": case "tool_running": case "tool_result": case "tool_cancelled":
+            if (ev.type === "tool_result" && /browser/i.test(String(ev.tool_name ?? ""))) setBrowserTick(n => n + 1);
+            if (ev.type === "tool_request" && ev.call_id) { const f = touchedFile(String(ev.tool?.name ?? ""), ev.tool?.args); if (f) callFiles.current.set(ev.call_id, f); }
+            if (ev.type === "tool_result" && callFiles.current.has(ev.call_id)) {
+              const path = callFiles.current.get(ev.call_id)!; callFiles.current.delete(ev.call_id);
+              setActivity(a => ({ path, busy: true, nonce: (a?.nonce ?? 0) + 1 })); setWorkspaceRefresh(n => n + 1);
+            }
             setLive((l) => ({ ...l, busy: true, text: "", thinking: "" })); reload(conv); break;
           case "stream_end": case "error": case "agent_exit":
             setApprovals(a => a.filter(pending => pending.conv !== conv));
-            setWorkspaceRefresh(n => n + 1);
+            setWorkspaceRefresh(n => n + 1); setActivity(a => a && { ...a, busy: false }); callFiles.current.clear();
             setLive({ text: "", thinking: "", busy: false }); reload(conv); refreshConvs(); refreshCtx(conv); break;
           case "context_usage": setCtx({ used: ev.used, window: ev.window }); break;
           case "info": refreshCtx(conv); break;
@@ -110,15 +155,16 @@ export default function App() {
         }
       }),
     ];
-    return () => { subs.forEach((s) => { s.then((f) => f()); }); };
+    return () => { window.removeEventListener("open-wizard", showWizard); subs.forEach((s) => { s.then((f) => f()); }); };
   }, []);
 
   useEffect(() => {
     if (cur && createdHere.current === cur) { createdHere.current = null; return; }
     setFiles([]);
     setInput("");
+    setQueue([]);
     setLive({ text: "", thinking: "", busy: false });
-    setMsgs([]);
+    setMsgs((cur && chatCache.current.get(cur)) || []);
     setErr("");
     setWorkspaceRequest(undefined);
     setCtx((c) => ({ ...c, used: null }));
@@ -126,17 +172,21 @@ export default function App() {
   }, [cur]);
 
   useEffect(() => {
-    if (!showTps || status.state !== "ready") { setTps(null); return; }
+    // Also polled while this chat's turn runs: the request being served is the chat's live context size,
+    // so the ring stays current during long tasks instead of only after the turn ends.
+    if ((!showTps && !live.busy) || status.state !== "ready") { setTps(null); return; }
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     async function pull() {
-      try { const value = await invoke<number | null>("model_telemetry"); if (active) setTps(value); }
-      catch { if (active) setTps(null); }
+      try {
+        const t = await invoke<{ tps: number | null; ctx: number | null }>("model_telemetry");
+        if (active) { setTps(t.tps); if (live.busy && t.ctx) setCtx((c) => ({ ...c, used: t.ctx })); }
+      } catch { if (active) setTps(null); }
       if (active) timer = setTimeout(pull, 1500);
     }
     pull();
     return () => { active = false; clearTimeout(timer); };
-  }, [showTps, status.state]);
+  }, [showTps, status.state, live.busy]);
 
   // Keep links in chat out of the app's document. Rust also guards top-level navigation.
   useEffect(() => {
@@ -259,23 +309,36 @@ export default function App() {
       await ensureConversation(dir);
     } catch (e) { setErr(String(e)); }
   }
-  async function send(override?: string) {
+  async function send(override?: string, queued?: string[]) {
     const typed = (override ?? input).trim();
-    if ((!typed && !files.length) || live.busy || !modelReady) return;
-    if (typed === "/compact" && !files.length) { setInput(""); return compact(); }
-    const body = files.length
-      ? `${typed || "Please look at the attached file" + (files.length > 1 ? "s" : "") + "."}
+    const attached = queued ?? files;
+    if ((!typed && !attached.length) || !modelReady) return;
+    if (live.busy) {
+      if (queued) return;
+      setQueue(q => [...q, { text: typed, files: attached }]);
+      setFiles([]); if (override === undefined) setInput("");
+      return;
+    }
+    if (typed === "/compact" && !attached.length) { setInput(""); return compact(); }
+    const body = attached.length
+      ? `${typed || "Please look at the attached file" + (attached.length > 1 ? "s" : "") + "."}
 
-Attached (read with read_attachment): ${files.join(", ")}`
+Attached (read with read_attachment): ${attached.join(", ")}`
       : typed;
+    const edited = [...userEdits.current]; userEdits.current.clear();
+    const message = edited.length ? `${body}
+
+(Note: I edited ${edited.map(p => `"${p}"`).join(", ")} directly in the file pane since your last change; read the current file before editing it.)` : body;
     const epoch = navigation.current;
     setErr(""); stick.current = true;
     setLive({ text: "", thinking: "", busy: true });
+    const first = !msgs.some((m) => m.role === "assistant");
     try {
       const id = await ensureConversation();
       if (epoch !== navigation.current) return;
-      setFiles([]); setInput("");
-      await invoke("agent_send", { id, text: body }); await reload(id); refreshConvs();
+      if (first) setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
+      if (!queued) { setFiles([]); if (override === undefined) setInput(""); }
+      await invoke("agent_send", { id, text: message }); await reload(id); refreshConvs();
     } catch (e) { if (epoch === navigation.current) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); } }
   }
   async function compact() {
@@ -285,6 +348,12 @@ Attached (read with read_attachment): ${files.join(", ")}`
     try { await invoke("agent_compact", { id: cur }); }
     catch (e) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
   }
+  useEffect(() => {
+    if (live.busy || !queue.length || status.state !== "ready") return;
+    const [next, ...rest] = queue;
+    setQueue(rest);
+    send(next.text, next.files);
+  }, [live.busy, queue, status.state]);
   function answer(a: Approval, allow: boolean, remember: boolean) {
     invoke("agent_answer", { id: a.conv, callId: a.call_id, allow, remember });
     setApprovals((x) => x.filter((y) => y.call_id !== a.call_id));
@@ -334,6 +403,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
       {dragging && <div className="fixed inset-0 z-50 grid place-items-center bg-accent/10 border-2 border-dashed border-accent pointer-events-none text-accent font-medium">Drop files to attach them</div>}
       <aside data-open={sidebarOpen} className="sidebar w-[240px] shrink-0 bg-panel border-r border-line flex flex-col">
         <div className="w-[240px] flex flex-col h-full">
+        <div className="px-4 pt-3 pb-0.5 flex items-center gap-2 text-sm font-semibold tracking-tight select-none"><Logo size={18} />LocalWORK</div>
         <div className="p-2 flex items-center gap-1">
           <button onClick={newConv} disabled={live.busy}
             className="flex-1 flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium hover:bg-panel-2 transition-colors">
@@ -352,11 +422,14 @@ Attached (read with read_attachment): ${files.join(", ")}`
               <div className="min-w-0 flex-1">
                 <div className="truncate">{c.title}</div>
               </div>
+              <button title="Export as Markdown" aria-label="Export as Markdown" className="hidden group-hover:block text-muted hover:text-ink"
+                onClick={(e) => { e.stopPropagation(); exportChat(c.id); }}><Download size={14} /></button>
               <button title="Delete" className="hidden group-hover:block text-muted hover:text-red-600"
                 onClick={async (e) => {
                   e.stopPropagation();
                   if (!window.confirm("Delete this chat?")) return;
                   await invoke("delete_conversation", { id: c.id });
+                  chatCache.current.delete(c.id);
                   if (cur === c.id) selectConversation(null);
                   refreshConvs();
                 }}><Trash2 size={14} /></button>
@@ -378,19 +451,21 @@ Attached (read with read_attachment): ${files.join(", ")}`
         <header data-tauri-drag-region className={"flex items-center gap-2 pl-3 h-11 text-sm shrink-0 " + (workspaceOpen && cur ? "pr-4" : "pr-36")} >
           {!sidebarOpen && <button onClick={toggleSidebar} title="Show chats" aria-label="Show chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink transition-colors shrink-0"><PanelLeftOpen size={16} /></button>}
           <span className="truncate text-muted pointer-events-none">{curConv?.title}</span>
-          {cur && <button onClick={() => setWorkspaceOpen(!workspaceOpen)} aria-label="Files & visuals" title="Files" aria-expanded={workspaceOpen} className="ml-auto shrink-0 inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted hover:bg-panel"><PanelRight size={16} />Files</button>}
+          {cur && <button onClick={() => exportChat(cur)} title="Export as Markdown" aria-label="Export as Markdown" className="ml-auto shrink-0 grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink"><Download size={16} /></button>}
+          {cur && <button onClick={() => setWorkspaceOpen(!workspaceOpen)} aria-label="Files & visuals" title="Files" aria-expanded={workspaceOpen} className="shrink-0 inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted hover:bg-panel"><PanelRight size={16} />Files</button>}
         </header>
         <div className={"flex flex-col flex-1 min-h-0 " + (!msgs.length && !live.busy ? "justify-center pb-[10vh]" : "")}>
             <div className={"relative min-h-0 " + (msgs.length || live.busy ? "flex-1" : "h-20 shrink-0")}>
             <div ref={scrollRef} onScroll={onScroll} className={"absolute inset-0 " + (msgs.length || live.busy ? "overflow-auto" : "overflow-hidden")}>
               <div className={"mx-auto max-w-3xl px-6 py-6 space-y-5"}>
-                {msgs.length === 0 && !live.busy && <h1 className="text-2xl text-center tracking-tight">What should we work on?</h1>}
+                {msgs.length === 0 && !live.busy && <h1 className="flex items-center justify-center gap-3 text-2xl tracking-tight"><Logo size={30} />What should we work on?</h1>}
                 {group(msgs).map((g) => g.kind === "tools"
                   ? <ToolGroup key={g.items[0].id} items={g.items} />
                   : <Row key={g.m.id} m={g.m} actions={{ onDocument: openDocument, onVisual: () => openVisual(String(g.m.id)), onDraft: draft }} />)}
                 {live.thinking && <div className="text-xs text-muted italic whitespace-pre-wrap max-h-24 overflow-auto">{live.thinking}</div>}
                 {live.text && <Assistant>{live.text}</Assistant>}
-                {live.busy && !live.text && mine.length === 0 && (
+                {live.busy && !live.text && !live.thinking && mine.length === 0 && firstWait?.conv === cur && <FirstTokenCountdown start={firstWait.t0} estimate={firstWait.est} />}
+                {live.busy && !live.text && mine.length === 0 && firstWait?.conv !== cur && (
                   <div className="flex items-center gap-2 text-muted text-sm"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" /> Working…</div>
                 )}
                 {mine.map((a) => <ApprovalCard key={a.call_id} a={a} answer={answer} />)}
@@ -405,10 +480,26 @@ Attached (read with read_attachment): ${files.join(", ")}`
             )}
             </div>
 
-            <div className="shrink-0 px-6 pb-4">
-              <div className="mx-auto max-w-3xl">
+            <div className="@container shrink-0 px-6 pb-4">
+              <div className="relative mx-auto max-w-3xl">
+                {cur && !workspaceOpen && browserTick > 0 && <BrowserPeek key={cur} id={cur} tick={browserTick} onOpen={() => { setWorkspaceRequest({ browser: true, nonce: Date.now() }); setWorkspaceOpen(true); }} />}
+                {cur && <PlanDock plan={latestPlan(msgs)} busy={live.busy} />}
+                {cur && (() => { const q = openQuestion(msgs); return q && <QuestionCard q={q} canSend={modelReady} busy={live.busy} onAnswer={(t) => send(t)} />; })()}
+                {queue.length > 0 && (
+                  <div className="mb-2 space-y-1" aria-label="Queued messages">
+                    {queue.map((q, i) => (
+                      <div key={i} className="flex items-center gap-2 rounded-lg border border-line bg-card px-3 py-1.5 text-sm">
+                        <span className="shrink-0 text-xs text-muted">Queued</span>
+                        <span className="min-w-0 flex-1 truncate">{q.text || q.files.map(baseName).join(", ")}</span>
+                        <button title="Edit" aria-label="Edit queued message" className="text-xs text-muted hover:text-ink"
+                          onClick={() => { setQueue(x => x.filter((_, j) => j !== i)); setInput(q.text); setFiles(f => [...f, ...q.files]); taRef.current?.focus(); }}>Edit</button>
+                        <button title="Remove" aria-label="Remove queued message" className="text-muted hover:text-red-600" onClick={() => setQueue(x => x.filter((_, j) => j !== i))}><X size={13} /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
-                <div className="rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
+                <div className="@container rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
                   {files.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                       {files.map((f) => (
@@ -421,20 +512,22 @@ Attached (read with read_attachment): ${files.join(", ")}`
                   )}
                   <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)} onPaste={onPaste} rows={1}
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
-                    placeholder="Ask for something…" aria-label="Message"
+                    placeholder={live.busy ? "Type to queue a message…" : "Ask for something…"} aria-label="Message"
                     className="w-full min-h-16 resize-none bg-transparent px-4 pt-4 pb-2 outline-none placeholder:text-muted" />
-                  <div className="flex items-center justify-between px-3 pb-2">
-                    <div className="flex items-center gap-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 px-3 pb-2">
+                    <div className="flex items-center gap-1 min-w-0 [&>button]:shrink-0">
                     <button onClick={pickFiles} title="Attach files" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel"><Paperclip size={17} /></button>
                     <button onClick={chooseFolder} disabled={live.busy} title="Start a chat in a folder" aria-label="Start a chat in a folder" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel disabled:opacity-30"><FolderOpen size={17} /></button>
-                    {curConv && <button onClick={() => invoke("open_workspace", { id: cur }) .catch(e => setErr(String(e)))} title={curConv.workspace} className="text-xs text-muted truncate max-w-36 hover:text-ink">{baseName(curConv.workspace) === curConv.id ? "Outputs" : baseName(curConv.workspace)}</button>}
+                    {curConv && <button onClick={() => invoke("open_workspace", { id: cur }) .catch(e => setErr(String(e)))} title={curConv.workspace} className="hidden @min-[26rem]:block text-xs text-muted truncate max-w-36 hover:text-ink">{baseName(curConv.workspace) === curConv.id ? "Outputs" : baseName(curConv.workspace)}</button>}
                     <button onClick={toggleEdits} title={autoEdit ? "Automatic mode on" : "Automatic mode off"} aria-label={autoEdit ? "Automatic mode on" : "Automatic mode off"} aria-pressed={autoEdit} className={"p-2 rounded-lg hover:bg-panel " + (autoEdit ? "text-accent" : "text-muted")}>
                       {autoEdit ? <Check size={15} /> : <ShieldAlert size={15} />}
                     </button>
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                    <StatusItems />
+                    <ModeSwitcher ready={modelReady} state={status.state} onKey={(k) => { modeKey.current = k; }} onError={setErr} />
                     {cur && <ContextRing used={ctx.used} window={ctx.window} busy={live.busy} onCompact={compact} />}
-                    {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}
+                    {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="hidden @min-[30rem]:inline text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}
                     {input.trim().length > 20 && !live.busy && (
                       <button onClick={tidy} disabled={tidying || !modelReady} title="Ask the model to turn this into a clear request"
                         className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted hover:bg-panel disabled:opacity-40">
@@ -448,7 +541,10 @@ Attached (read with read_attachment): ${files.join(", ")}`
                         (voice.recording ? "bg-red-500 text-white animate-pulse" : voice.busy ? "bg-panel text-muted animate-pulse" : "text-muted hover:bg-panel")}>
                       <Mic size={16} />
                     </button>
-                    {live.busy ? (
+                    {live.busy && (input.trim() || files.length) ? (
+                      <button onClick={() => send()} title="Queue: sends when the current step finishes"
+                        className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-accent-fg hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
+                    ) : live.busy ? (
                       <button onClick={() => invoke("agent_stop", { id: cur })} title="Stop"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-ink text-bg"><Square size={12} fill="currentColor" /></button>
                     ) : (
@@ -462,7 +558,7 @@ Attached (read with read_attachment): ${files.join(", ")}`
             </div>
         </div>
       </main>
-    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
+    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} browserTick={browserTick} activity={activity} canSend={modelReady} onSend={t => send(t)} onUserEdit={p => userEdits.current.add(p)} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
       </div>
     {wizard && <Wizard onDone={() => setWizard(false)} />}
     {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} onClose={() => setShowSettings(false)} />}
@@ -475,6 +571,7 @@ const isPlainTool = (m: Msg) => {
   const b = m.body ?? {};
   const nm = String(b.request?.name ?? b.name ?? "");
   if (/memory_save/.test(nm) && /Saved memory #(\d+): (.*)/.test(String(b.output ?? ""))) return false;
+  if (isAsk(b) && b.status !== "error" && b.status !== "cancelled") return false;
   const declined = b.status === "cancelled";
   return declined || b.status === "error" || !richFor(nm, b.request?.args, undefined);
 };
@@ -482,6 +579,8 @@ type Block = { kind: "row"; m: Msg } | { kind: "tools"; items: Msg[] };
 function group(msgs: Msg[]): Block[] {
   const out: Block[] = [];
   for (const m of msgs) {
+    // Thinking-only steps have no visible text; letting them split tool runs would print one row per call.
+    if (m.role === "assistant" && !text(m.body?.text).trim()) continue;
     const last = out[out.length - 1];
     if (isPlainTool(m)) { if (last?.kind === "tools") last.items.push(m); else out.push({ kind: "tools", items: [m] }); }
     else out.push({ kind: "row", m });
@@ -494,25 +593,29 @@ const toolLabel = (m: Msg) => text(m.body?.request?.name ?? m.body?.name).replac
 function ToolGroup({ items }: { items: Msg[] }) {
   const [open, setOpen] = useState(false);
   const failed = items.filter((m) => m.body?.status === "error" || m.body?.status === "cancelled").length;
-  const names = Array.from(new Set(items.map(toolLabel))).slice(0, 3).join(", ");
+  const counts = new Map<string, number>();
+  for (const m of items) counts.set(toolLabel(m), (counts.get(toolLabel(m)) ?? 0) + 1);
+  const names = [...counts].slice(0, 3).map(([n, c]) => c > 1 ? `${n} ×${c}` : n).join(", ");
+  // Repeated calls of one tool in a row collapse into a single expandable line.
+  const runs: Msg[][] = [];
+  for (const m of items) { const r = runs.at(-1); if (r && toolLabel(r[0]) === toolLabel(m)) r.push(m); else runs.push([m]); }
   return (
     <div className="ml-10 text-sm text-muted">
       <button onClick={() => setOpen(!open)} aria-expanded={open} className="inline-flex items-center gap-1.5 hover:text-ink">
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <span>{items.length === 1 ? "Used a tool" : `Used ${items.length} tools`}{names && <span className="opacity-70"> · {names}{new Set(items.map(toolLabel)).size > 3 ? "…" : ""}</span>}{failed > 0 && <span className="text-red-600"> · {failed} not completed</span>}</span>
+        <span>{counts.size === 1 ? `Used ${names}` : `Used ${items.length} tools`}{counts.size > 1 && <span className="opacity-70"> · {names}{counts.size > 3 ? "…" : ""}</span>}{failed > 0 && <span className="text-red-600"> · {failed} not completed</span>}</span>
       </button>
       {open && (
         <div className="mt-1 ml-1.5 border-l border-line pl-3 space-y-0.5">
-          {items.map((m) => {
-            const b = m.body ?? {};
-            const declined = b.status === "cancelled";
+          {runs.map((run) => {
+            const bad = run.filter(m => m.body?.status === "error" || m.body?.status === "cancelled").length;
             return (
-              <details key={m.id} className="group">
+              <details key={run[0].id} className="group">
                 <summary className="flex items-center gap-2 cursor-pointer list-none py-0.5 hover:text-ink">
-                  {declined || b.status === "error" ? <X size={12} className="text-red-600" /> : <Wrench size={12} />}
-                  <span className="truncate">{declined ? "Declined: " : ""}{toolLabel(m)}</span>
+                  {bad ? <X size={12} className="text-red-600" /> : <Wrench size={12} />}
+                  <span className="truncate">{run.length === 1 && run[0].body?.status === "cancelled" ? "Declined: " : ""}{toolLabel(run[0])}{run.length > 1 ? ` ×${run.length}` : ""}{bad > 0 && run.length > 1 ? ` · ${bad} not completed` : ""}</span>
                 </summary>
-                <pre className="my-1 text-xs whitespace-pre-wrap max-h-60 overflow-auto rounded-lg bg-panel border border-line p-3">{text(b.request?.args ?? {})}{"\n---\n"}{text(b.output)}</pre>
+                {run.map(m => <pre key={m.id} className="my-1 text-xs whitespace-pre-wrap max-h-60 overflow-auto rounded-lg bg-panel border border-line p-3">{text(m.body?.request?.args ?? {})}{"\n---\n"}{text(m.body?.output)}</pre>)}
               </details>
             );
           })}
@@ -563,7 +666,7 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number | nu
           <div className="relative mt-1 h-2">
             <div className="absolute top-0 h-2 w-px bg-muted" style={{ left: "80%" }} />
           </div>
-          <p className="text-xs text-muted">Older messages are summarized automatically at about 80% (the tick). {busy ? "Usage updates when the current turn finishes." : "Usage is estimated by the agent."}</p>
+          <p className="text-xs text-muted">Older messages are summarized automatically at about 80% (the tick). {busy ? "Live: the size of the request the model is reading now." : "Measured after the last turn."}</p>
           <div className="my-3 border-t border-line" />
           <button onClick={() => { setOpen(false); onCompact(); }} disabled={busy}
             className="w-full rounded-lg border border-line px-3 py-1.5 text-left hover:bg-panel-2 disabled:opacity-50">
@@ -578,7 +681,7 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number | nu
 function Assistant({ children }: { children: string }) {
   return (
     <div className="flex gap-3">
-      <div className="prose py-3 min-w-0 flex-1"><Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown></div>
+      <div className="prose py-3 min-w-0 flex-1"><Md embeds>{children}</Md></div>
     </div>
   );
 }
@@ -599,6 +702,7 @@ function Row({ m, actions }: { m: Msg; actions?: RichActions }) {
   if (m.role === "tool") {
     const declined = b.status === "cancelled";
     const nm = String(b.request?.name ?? b.name ?? "");
+    if (isAsk(b) && !declined && b.status !== "error") return <AskedLine body={b} />;
     const saved = /memory_save/.test(nm) && /Saved memory #(\d+): (.*)/.exec(String(b.output ?? ""));
     if (saved) return <MemoryChip id={Number(saved[1])} text={saved[2]} />;
     const rich = !declined && b.status !== "error" ? richFor(nm, b.request?.args, actions) : null;

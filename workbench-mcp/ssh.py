@@ -1,5 +1,5 @@
 """ssh_exec: run one command on a configured SSH host with the system OpenSSH client.
-Hosts, the key and the pinned host keys live in %LOCALAPPDATA%\Workbench\ssh (managed by the app's Settings)."""
+Hosts, the key and the pinned host keys live in %LOCALAPPDATA%/Workbench/ssh (managed by the app's Settings)."""
 import json, os, subprocess
 
 CREATE_NO_WINDOW = 0x08000000

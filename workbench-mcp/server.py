@@ -45,7 +45,7 @@ TOOLS = [
     {
         "name": "load_skill",
         "description": "Load the full step-by-step instructions of a skill by name (see the skill list in your instructions). Call it before starting that kind of task.",
-        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "force": {"type": "boolean", "description": "Reload a skill that was already loaded in this chat."}}, "required": ["name"]},
     },
     {
         "name": "browser",
@@ -102,6 +102,14 @@ TOOLS = [
                         "html": {"type": "string", "maxLength": 200000}}, "required": ["title", "description", "html"]},
     },
     {
+        "name": "render_ui",
+        "description": "Display a compact declarative UI (dashboard, calculator, form, comparison, chart) from a JSON spec; cheaper than "
+                       "assemble_document. Node: {\"t\":\"Col\",\"c\":[...]}; strings are text. Inputs bind with \"bind\":\"$name\"; "
+                       "strings starting with = are expressions. Load the intelligent-ui skill first.",
+        "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "spec": {"type": "object"}, "state": {"type": "object"}},
+                        "required": ["title", "spec"]},
+    },
+    {
         "name": "show_document",
         "description": "Present a finished or revised workspace file in the document panel for preview, revisions, open and save-copy actions. "
                        "Call after creating or editing a docx, xlsx, pptx, md, txt, csv, html or PDF. This does not create or validate the file.",
@@ -118,6 +126,11 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {"text": {"type": "string"}, "status": {"type": "string", "enum": ["todo", "doing", "done"]}}, "required": ["text"]}}}, "required": ["steps"]},
     },
     {
+        "name": "ask_user",
+        "description": "Ask the user one short question they must decide (a name, a choice between real alternatives). It appears as a card above their message box with optional answer buttons. Do not ask what you can find out or sensibly assume.",
+        "inputSchema": {"type": "object", "properties": {"question": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}, "maxItems": 4, "description": "Optional short answers to offer as buttons. The user can always type their own."}}, "required": ["question"]},
+    },
+    {
         "name": "workspace_info",
         "description": "List files in the workspace folder (names, sizes).",
         "inputSchema": {"type": "object", "properties": {}},
@@ -125,7 +138,108 @@ TOOLS = [
 ]
 
 
+UI_TYPES = ("Col Row Grid Card Tabs Divider Title Text Caption Badge List Markdown Link Code Table Chart Stat Progress Input TextArea "
+            "Select Slider Checkbox RadioGroup SegmentedControl DatePicker Button Form Flashcard Timer Svg").split()
+UI_SVG = ("Rect", "Circle", "Line", "Path", "Text")
+UI_BIND = ("Input", "TextArea", "Select", "Slider", "Checkbox", "RadioGroup", "SegmentedControl", "DatePicker")
+UI_MAX_BYTES, UI_MAX_DEPTH, UI_MAX_NODES = 100_000, 12, 800
+
+
+def validate_ui_spec(spec):
+    """Return the node count of a render_ui spec or raise ValueError with a one-line fixable message."""
+    count = [0]
+
+    def walk(node, path, depth, in_svg):
+        if isinstance(node, str):
+            if in_svg:
+                raise ValueError(f"render_ui: {path} must be an object (Rect, Circle, Line, Path or Text)")
+            return
+        if not isinstance(node, dict):
+            raise ValueError(f"render_ui: {path} must be an object or a string")
+        count[0] += 1
+        if count[0] > UI_MAX_NODES:
+            raise ValueError(f"render_ui: more than {UI_MAX_NODES} nodes; simplify the spec")
+        if depth > UI_MAX_DEPTH:
+            raise ValueError(f"render_ui: nesting deeper than {UI_MAX_DEPTH} at {path}; flatten it")
+        t = node.get("t")
+        if in_svg:
+            if t not in UI_SVG:
+                raise ValueError(f"render_ui: unknown Svg child {t!r} at {path}; use one of: {', '.join(UI_SVG)}")
+        elif t not in UI_TYPES:
+            raise ValueError(f"render_ui: unknown component {t!r} at {path}; use one of: {', '.join(UI_TYPES)}")
+        if t in UI_BIND:
+            b = node.get("bind")
+            if not isinstance(b, str) or not b.startswith("$") or not b[1:].replace("_", "a").isalnum():
+                raise ValueError(f"render_ui: {t} at {path} needs \"bind\":\"$name\"")
+        if t in ("Select", "RadioGroup", "SegmentedControl") and not isinstance(node.get("options"), (list, str)):
+            raise ValueError(f"render_ui: {t} at {path} needs \"options\":[...]")
+        if t == "Tabs":
+            items = node.get("items")
+            if not isinstance(items, list) or not items or not all(isinstance(i, dict) and "label" in i for i in items):
+                raise ValueError(f"render_ui: Tabs at {path} needs \"items\":[{{\"label\":...,\"c\":[...]}}]")
+            for i, it in enumerate(items):
+                kids = it.get("c", [])
+                kids = kids if isinstance(kids, list) else [kids]
+                for j, k in enumerate(kids):
+                    walk(k, f"{path}.items[{i}].c[{j}]", depth + 1, False)
+            return
+        if t == "Chart" and ("data" not in node):
+            raise ValueError(f"render_ui: Chart at {path} needs \"data\" (rows) plus \"x\" and \"y\"")
+        if t == "Table" and ("columns" not in node or "rows" not in node):
+            raise ValueError(f"render_ui: Table at {path} needs \"columns\" and \"rows\"")
+        c = node.get("c")
+        if c is not None:
+            if isinstance(c, str):
+                c = [c]
+            if not isinstance(c, list):
+                raise ValueError(f"render_ui: 'c' at {path} must be a list of nodes")
+            for j, k in enumerate(c):
+                walk(k, f"{path}.c[{j}]", depth + 1, t == "Svg")
+
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError:
+            raise ValueError("render_ui: spec is not valid JSON; pass an object like {\"t\":\"Col\",\"c\":[...]}")
+    if not isinstance(spec, dict):
+        raise ValueError("render_ui: spec must be an object like {\"t\":\"Col\",\"c\":[...]}")
+    if len(json.dumps(spec)) > UI_MAX_BYTES:
+        raise ValueError(f"render_ui: spec is larger than {UI_MAX_BYTES // 1000} KB; use fewer rows or components")
+    walk(spec, "spec", 0, False)
+    return count[0]
+
+
+_loaded_skills = set()
+# Tools whose result depends only on their arguments for the length of a chat: a repeat is a loop, not new work.
+IDEMPOTENT = ("web_search", "web_fetch", "read_attachment", "memory_search")
+_seen = {}
+OUTPUT_CAP = 24000
+
+
+def guarded_call(name, args):
+    key = (name, json.dumps(args, sort_keys=True, default=str)) if name in IDEMPOTENT else None
+    n = _seen.get(key, 0) if key else 0
+    if n >= 2:
+        return ("You have already made this exact call twice in this chat and the result has not changed. "
+                "Do not call it again: use what you have, try a different query or source, or move on to the next step.")
+    text = call_tool(name, args)
+    if len(text) > OUTPUT_CAP:
+        text = text[:OUTPUT_CAP] + f"\n[Output truncated: {len(text) - OUTPUT_CAP} more characters. Ask for a narrower range if you need them.]"
+    if key:
+        _seen[key] = n + 1
+        if n == 1:
+            text = ("Note: you already made this exact call earlier in this chat; the result is the same as before. "
+                    "Use it and move on rather than repeating it.\n\n") + text[:4000]
+    return text
+
+
 def call_tool(name, args):
+    if name == "render_ui":
+        state = args.get("state")
+        if state is not None and not isinstance(state, dict):
+            raise ValueError("render_ui: state must be an object like {\"price\":100}")
+        n = validate_ui_spec(args.get("spec"))
+        return f"Displayed {n} components with the bundled Open Intelligent UI design system. Controls run locally; follow-ups require user review."
     if name == "assemble_document":
         html = args.get("html")
         if not isinstance(html, str) or not html.strip() or len(html) > 200000:
@@ -139,6 +253,15 @@ def call_tool(name, args):
         if os.path.splitext(full)[1].lower() not in (".docx", ".xlsx", ".pptx", ".md", ".txt", ".csv", ".html", ".pdf", ".json"):
             raise ValueError("Unsupported document type")
         return "Presented in the document panel. This confirms the file exists, not that its contents or layout are correct."
+    if name == "ask_user":
+        q = str(args.get("question", "")).strip()
+        opts = args.get("options") or []
+        if not q or len(q) > 600:
+            raise ValueError("question must be one short question (at most 600 characters)")
+        if not isinstance(opts, list) or len(opts) > 4 or any(not isinstance(o, str) or not o.strip() or len(o) > 80 for o in opts):
+            raise ValueError("options must be at most 4 short strings")
+        return ("Shown to the user. Their answer arrives as their next message. If the rest of the task does not depend on it, "
+                "continue meanwhile with a stated assumption; otherwise end your turn now with one line saying what you are waiting for.")
     if name == "workspace_info":
         rows = []
         for root, dirs, files in os.walk(os.getcwd()):
@@ -167,12 +290,17 @@ def call_tool(name, args):
         import ssh
         return ssh.ssh_exec(args["host"], args["command"], args.get("timeout", 60))
     if name == "load_skill":
-        d = os.environ.get("WORKBENCH_SKILLS", "")
+        # The app passes core and plugin skill folders joined with the OS path separator; first match wins.
+        dirs = [d for d in os.environ.get("WORKBENCH_SKILLS", "").split(os.pathsep) if d]
         n = os.path.basename(str(args.get("name", "")).strip())
-        f = os.path.join(d, n, "SKILL.md")
-        if not n or not os.path.isfile(f):
-            have = [x for x in os.listdir(d) if os.path.isfile(os.path.join(d, x, "SKILL.md"))] if os.path.isdir(d) else []
+        f = next((os.path.join(d, n, "SKILL.md") for d in dirs if n and os.path.isfile(os.path.join(d, n, "SKILL.md"))), None)
+        if not f:
+            have = {x for d in dirs if os.path.isdir(d) for x in os.listdir(d) if os.path.isfile(os.path.join(d, x, "SKILL.md"))}
             return "No such skill. Available: " + ", ".join(sorted(have))
+        if n.lower() in _loaded_skills and not args.get("force"):
+            return (f"The {n} skill is already loaded earlier in this chat; follow those instructions and continue the task. "
+                    "Only if they are no longer in your context, call load_skill again with force:true.")
+        _loaded_skills.add(n.lower())
         return open(f, encoding="utf8").read()
     if name in ("memory_save", "memory_search", "memory_forget"):
         import memory
@@ -283,7 +411,7 @@ for line in sys.stdin:
     elif method == "tools/call":
         p = msg.get("params", {})
         try:
-            text = call_tool(p.get("name"), p.get("arguments") or {})
+            text = guarded_call(p.get("name"), p.get("arguments") or {})
             reply(id_, {"content": [{"type": "text", "text": text}]})
         except Exception as e:  # tool errors are results, not protocol errors
             reply(id_, {"content": [{"type": "text", "text": str(e)}], "isError": True})

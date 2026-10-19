@@ -1,38 +1,52 @@
 ---
 name: intelligent-ui
-description: Interactive explanations, dashboards, comparisons, calculators and small tools using Open Intelligent UI.
+description: Interactive explanations, dashboards, comparisons, calculators, forms and small tools using Open Intelligent UI.
 ---
 
-Use the `assemble_document` tool with `title`, `description`, and `html` (an HTML
-body fragment with optional inline style and script). LocalWORK displays it with
-Open Intelligent UI's bundled theme, form styling, and SVG helper classes.
+Prefer `render_ui` (title, spec, state?) for dashboards, calculators, forms and
+comparisons: a compact JSON spec, no HTML. Use `assemble_document` (title,
+description, html fragment) only for bespoke visuals. Use plain text for simple
+answers. Label sample data and assumptions; never invent retrieved facts.
 
-Use text for simple answers; existing show_chart/show_table tools for basic data;
-interactive UI when changing inputs, filtering data or exploring a mechanism helps.
-Label sample data and assumptions. Never invent retrieved facts or citations.
+Node: `{"t":"Col","gap":3,"c":[...]}`. A plain string is text. Types:
+Col Row(justify) Grid(cols) Card(title) Tabs(items:[{label,c}]) Divider Title Text
+Caption Badge(tone info|success|warning|danger) List(items) Markdown(text; **b** *i*
+`code` [t](https://..) - lists #heads) Link(href,text; http(s), opens in the browser after the user confirms) Code Table(columns,rows,sortable) Chart(kind bar|line|area|
+pie|donut|scatter, data, x, y:[..]) Stat(label,value,delta) Progress(value,max)
+Svg(w,h,c:[Rect Circle Line Path Text]) Flashcard(front,back) Timer(seconds)
+Button(label,action,variant:"primary") Form(submit,action,c).
+Inputs need `"bind":"$name"` and `label`: Input(type) TextArea Select(options)
+Slider(min,max,step,unit) Checkbox RadioGroup(options) SegmentedControl(options)
+DatePicker. options: ["a","b"] or [{label,value}]. Any node: `"show":expr`.
+`state` gives initial values: `{"amt":200000}`; unset inputs default sensibly.
 
-Theme colors: var(--color-text-primary), var(--color-text-secondary),
-var(--color-background-primary), var(--color-background-secondary),
-var(--color-border-tertiary), plus semantic info/success/warning/danger variants.
-Use var(--font-sans), var(--font-serif), var(--font-mono). Form controls are styled.
-SVG helper classes: .box .node .arr .leader, text .t .ts .th, and color ramps
-.c-purple .c-teal .c-coral .c-pink .c-gray .c-blue .c-green .c-amber .c-red.
+Expressions: a string starting with `=` (e.g. `"=$price*$qty"`) in any prop.
+Text also interpolates `{...}`: `"Total {fixed($t,2)}"`. Syntax: $vars, numbers,
+'strings', + - * / %, == != < > <= >=, && || !, `c ? a : b`, `$o.k`, `$a[0]`,
+`[1,2]`. Functions: sum avg min max round fixed format(x,'currency'|'percent'|
+'compact') len join map(arr,'field') filter(arr,'field',value) sort(arr,'field',
+'desc') range concat upper lower clamp abs floor ceil pow sqrt pmt(rate,n,pv)
+contains slice unique date today addDays. Bad math gives empty, not a crash.
+Chart/Table `data`/`rows` are arrays of objects: `"data":"=$rows"`.
 
-Every enabled control must work. Validate input, bounds, finite numbers and zero
-divisors. State units. Include reset and accessible labels. Respect reduced motion.
-Use textContent for untrusted values. Use inline SVG, canvas or vanilla JavaScript;
-no CDN imports, fetch, remote images/fonts, credentials, or filesystem access.
+Actions (Button, Form): `{"set":{"$x":"=$x+1"}}` `{"reset":["$x"]}` `{"toggle":"$f"}`
+`{"copy":"=expr"}` `{"toAssistant":"Explain {$x}"}`; or a list of these. toAssistant
+only offers a follow-up for the user to review; it never sends. Add a Reset button.
 
-`sendPrompt(text)` offers a follow-up to the user. Only call it from a deliberate
-click. The host shows the suggestion for review; it never sends automatically.
-There is no openLink bridge, cross-widget storage, or external application access.
-Do not claim a message was sent or a file saved because a widget displayed it.
+Loan calculator:
+`{"t":"Card","title":"Loan","c":[{"t":"Slider","bind":"$amt","label":"Amount","min":1000,"max":500000,"step":1000},{"t":"Slider","bind":"$rate","label":"Rate %","min":1,"max":15,"step":0.1},{"t":"Slider","bind":"$yrs","label":"Years","min":1,"max":40},{"t":"Stat","label":"Monthly","value":"=format(pmt($rate/1200,$yrs*12,$amt),'currency')"},{"t":"Button","label":"Reset","action":{"reset":["$amt","$rate","$yrs"]}}]}`
+with state `{"amt":200000,"rate":6,"yrs":30}`.
 
-For saved deliverables create an actual file with Write/OfficeCLI and call
-`show_document` with its relative path. Artifacts persist in the conversation;
-they are not automatically workspace files. Keep existing calculations and
-requirements when revising; make a new widget rather than pretending to patch one.
+Comparison dashboard:
+`{"t":"Col","c":[{"t":"Title","text":"Plans"},{"t":"SegmentedControl","bind":"$m","options":["a","b"]},{"t":"Tabs","items":[{"label":"Chart","c":[{"t":"Chart","kind":"bar","data":"=$d","x":"n","y":["a","b"]}]},{"label":"Table","c":[{"t":"Table","columns":["n","a","b"],"rows":"=$d","sortable":true}]}]}]}`
+with state `{"m":"a","d":[{"n":"Q1","a":3,"b":5},{"n":"Q2","a":4,"b":2}]}`.
 
-Adapted from CopilotKit/OpenIntelligentUI at
-8391a94c1c3939c679e40ddd7bfc08a9ef690e70 (MIT). The unmodified upstream
-response playbook and license are bundled in this directory for provenance.
+If render_ui returns an error, fix the named path and call again. For assemble_document:
+host theme vars (--color-text-primary, --color-background-secondary, --color-border-tertiary,
+--font-sans) and styled controls are available; no CDN, fetch or remote assets; use
+textContent for untrusted values; `sendPrompt(text)` from a deliberate click only.
+For saved deliverables create a real file and call `show_document`.
+
+Adapted from CopilotKit/OpenIntelligentUI at 8391a94c1c3939c679e40ddd7bfc08a9ef690e70
+(MIT; license bundled here) and thesysdev/open-intelligent-ui at
+03213439358bf3408ad61a46ec9e3230c5572e48 (MIT, Thesys Inc.; see NOTICE.md).

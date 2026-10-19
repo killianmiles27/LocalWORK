@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
+import { ModelEditor, Plugins } from "./SettingsModel";
+
+const TABS = ["General", "Model", "Plugins", "Connections", "App"] as const;
 
 type Info = { cpu?: { name: string; load: number; server_ram_gib: number | null }; model: string; quant: string; file: string; context: string | null; kv: string | null; status: any; live: any };
 type St = { state: string; detail: string; port: number; model: string };
@@ -82,6 +85,8 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
   const [web, setWeb] = useState<boolean | null>(null);
   const [webBusy, setWebBusy] = useState(false);
   const [mem, setMem] = useState<{ id: number; text: string }[]>([]);
+  const [tab, setTab] = useState<(typeof TABS)[number]>(() => (TABS as readonly string[]).includes(sessionStorage.getItem("settings-tab") ?? "") ? sessionStorage.getItem("settings-tab") as any : "General");
+  useEffect(() => { try { sessionStorage.setItem("settings-tab", tab); } catch { /* ignore */ } }, [tab]);
   const loadMem = () => invoke<{ id: number; text: string }[]>("memories_list").then(setMem).catch(() => {});
 
   useEffect(() => {
@@ -109,12 +114,17 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg max-h-full overflow-auto rounded-2xl bg-bg border border-line shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-2xl h-[min(44rem,100%)] flex flex-col overflow-hidden rounded-2xl bg-bg border border-line shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 h-12 border-b border-line">
           <h2 className="font-medium">Settings</h2>
           <button onClick={onClose} title="Close" className="text-muted hover:text-ink"><X size={18} /></button>
         </div>
-        <div className="px-5 py-4 space-y-5">
+        <div className="flex min-h-0 flex-1">
+        <nav aria-label="Settings sections" className="w-36 shrink-0 border-r border-line p-2 space-y-0.5">
+          {TABS.map(t => <button key={t} aria-current={tab === t ? "page" : undefined} onClick={() => setTab(t)} className={"w-full rounded-lg px-2.5 py-1.5 text-left text-sm " + (tab === t ? "bg-panel text-ink" : "text-muted hover:bg-panel hover:text-ink")}>{t}</button>)}
+        </nav>
+        <div className="min-w-0 flex-1 overflow-auto px-5 py-4 space-y-5">
+          {tab === "General" && <>
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Model</h3>
             <Row k="Name" v={info?.model || status.model || "–"} />
@@ -142,6 +152,14 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
             <Row k="System memory" v={ram ? `${num(ram.used_gib)} / ${num(ram.total_gib)} GiB` : "–"} />
             {info?.cpu?.server_ram_gib != null && <Row k="Model server memory" v={`${num(info.cpu.server_ram_gib)} GiB`} />}
           </section>
+          </>}
+          {tab === "Model" && <>
+          <ModelEditor state={status.state} />
+          <ModelSetup />
+          <StrataUpdate />
+          </>}
+          {tab === "Plugins" && <Plugins />}
+          {tab === "App" && <>
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Memory</h3>
             <div className="text-sm text-muted py-1">Cross-chat memory is disabled. Any saved legacy entries can be removed below.</div>
@@ -154,14 +172,6 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
               ))}
             </ul>
           </section>
-          <StrataUpdate />
-          <ModelSetup />
-          <section>
-            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Web tools</h3>
-            <label className="flex items-center justify-between gap-4 py-2 text-sm">Enable web search and browsing<input type="checkbox" disabled={web === null || webBusy} checked={web ?? false} onChange={async event => { const on = event.target.checked; const previous = web; setWeb(on); setWebBusy(true); try { await invoke("set_web_access", { on }); } catch (error) { setWeb(previous); window.alert(String(error)); } finally { setWebBusy(false); } }} /></label>
-            <p className="text-xs text-muted">Searches and page requests contact external services. This setting does not block networking from commands, updates or SSH.</p>
-          </section>
-          <SshHosts />
           <Rollback />
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">App</h3>
@@ -169,6 +179,16 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
             <Row k="Model inference" v="On this computer" />
             <p className="text-xs text-muted">Web tools, updates and SSH use the network. Chats, browser profiles and generated files are stored locally.</p>
           </section>
+          </>}
+          {tab === "Connections" && <>
+          <section>
+            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Web tools</h3>
+            <label className="flex items-center justify-between gap-4 py-2 text-sm">Enable web search and browsing<input type="checkbox" disabled={web === null || webBusy} checked={web ?? false} onChange={async event => { const on = event.target.checked; const previous = web; setWeb(on); setWebBusy(true); try { await invoke("set_web_access", { on }); } catch (error) { setWeb(previous); window.alert(String(error)); } finally { setWebBusy(false); } }} /></label>
+            <p className="text-xs text-muted">Searches and page requests contact external services. This setting does not block networking from commands, updates or SSH.</p>
+          </section>
+          <SshHosts />
+          </>}
+        </div>
         </div>
       </div>
     </div>
@@ -196,8 +216,9 @@ function ModelSetup() {
     <div className="flex flex-wrap gap-2">
       <button disabled={busy} onClick={() => choose(false)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose Strata folder</button>
       <button disabled={busy} onClick={() => choose(true)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose model configuration</button>
+      <button disabled={busy} onClick={() => window.dispatchEvent(new Event("open-wizard"))} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Run setup again…</button>
     </div>
-    <p className="text-xs text-muted mt-2">Use a trusted Strata configuration. It selects the executable, model files and launch arguments.</p>
+    <p className="text-xs text-muted mt-2">Use a trusted Strata configuration. It selects the executable, model files and launch arguments. Setup also connects a model server you run yourself (LM Studio, Ollama, or Strata started on its own).</p>
     {message && <p role="status" className="text-sm mt-2 break-all">{message}</p>}
   </section>;
 }

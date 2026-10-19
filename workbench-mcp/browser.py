@@ -15,6 +15,11 @@ PROFILES = os.environ.get("BROWSER_PROFILES", os.path.join(os.path.dirname(os.pa
 SESSION = re.sub(r"[^A-Za-z0-9_-]", "", os.environ.get("BROWSER_SESSION", "default"))[:24] or "default"
 TIMEOUT = 90
 _failed_evaluations = 0
+_capture = None  # background screenshot for the app's live view; finished before the next command
+LIVE_FRAMES = 12
+# Commands after which the page may look different.
+CHANGES = {"goto", "click", "dblclick", "fill", "type", "press", "hover", "select", "check", "uncheck", "drag", "upload",
+           "go-back", "go-forward", "reload", "resize", "tab-new", "tab-select", "tab-close"}
 
 # Commands the model may run. No run-code, no state/cookie/route/storage commands.
 ALLOWED = {
@@ -143,7 +148,53 @@ def _env():
     return e
 
 
+def _settle_capture():
+    global _capture
+    if _capture is not None:
+        try:
+            _capture.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            _capture.kill()
+        _capture = None
+
+
+def _live_capture(out):
+    """Save a viewport JPEG for the app's live browser view without making the model wait for it."""
+    global _capture
+    d = os.path.join(_workspace(), ".browser", "live")
+    try:
+        os.makedirs(d, exist_ok=True)
+        t = int(time.time() * 1000)
+        name = f"frame-{t}.jpeg"
+        index_path = os.path.join(d, "index.json")
+        try:
+            with open(index_path, encoding="utf-8") as f:
+                frames = json.load(f)["frames"]
+        except (OSError, ValueError, KeyError, TypeError):
+            frames = []
+        prev = frames[-1] if frames else {}
+        url = re.search(r"Page URL: (\S+)", out)
+        title = re.search(r"Page Title: (.*)", out)
+        frames.append({"file": name, "t": t, "url": url.group(1) if url else prev.get("url", ""),
+                       "title": (title.group(1).strip() if title else prev.get("title", ""))[:200]})
+        for old in frames[:-LIVE_FRAMES]:
+            try:
+                os.remove(os.path.join(d, old["file"]))
+            except OSError:
+                pass
+        frames = frames[-LIVE_FRAMES:]
+        with open(index_path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"frames": frames}, f)
+        os.replace(index_path + ".tmp", index_path)
+        _capture = subprocess.Popen([NODE, CLI, f"-s={SESSION}", "screenshot", f"--filename={os.path.join(d, name)}"],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                    cwd=_workspace(), env=_env(), creationflags=CREATE_NO_WINDOW)
+    except Exception:
+        _capture = None  # the live view is optional
+
+
 def _run(args, timeout=TIMEOUT):
+    _settle_capture()
     r = subprocess.run([NODE, CLI, f"-s={SESSION}", *args], capture_output=True, text=True, timeout=timeout,
                        cwd=_workspace(), env=_env(), creationflags=CREATE_NO_WINDOW, stdin=subprocess.DEVNULL,
                        encoding="utf-8", errors="replace")
@@ -260,6 +311,7 @@ def run(args):
             return "Browser is open."
     else:
         _ensure_open()
+    wait = False
     if cmd == "wait":
         # playwright-cli has no wait command. Keep the advertised tool contract
         # bounded and return fresh state after scripts/animations have advanced.
@@ -271,6 +323,7 @@ def run(args):
             raise ValueError("wait expects seconds between 0 and 30")
         time.sleep(seconds)
         cmd, rest = "snapshot", []
+        wait = True
     rc, out = _run([cmd, *rest])
     out = _result_text(_inline_snapshots(out))
     _clean_snapshots()
@@ -299,10 +352,13 @@ def run(args):
             except ValueError as e:
                 _run(["goto", "about:blank"])
                 raise ValueError(str(e) + " The page was closed.")
+    if cmd in CHANGES or wait:
+        _live_capture(out)
     return (out[:24000] + "\n[output truncated]" if len(out) > 24000 else out) or "OK"
 
 
 def shutdown():
+    _settle_capture()
     try:
         if CLI and os.path.exists(CLI):
             _run(["close"], timeout=20)

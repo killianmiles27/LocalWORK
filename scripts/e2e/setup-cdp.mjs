@@ -26,8 +26,11 @@ try {
   await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('model_status')).state === 'ready', undefined, {timeout: 20000});
   assert.equal((await invoke('context_usage', {id: 'setup-fixture'})).window, 16384);
   await page.getByRole('button', {name: 'Settings', exact: true}).click();
+  const sections = page.getByRole('navigation', {name: 'Settings sections'});
+  await sections.getByRole('button', {name: 'Model', exact: true}).click();
   await page.getByRole('button', {name: 'Choose Strata folder', exact: true}).waitFor();
   await page.getByRole('button', {name: 'Choose model configuration', exact: true}).waitFor();
+  await sections.getByRole('button', {name: 'Connections', exact: true}).click();
   const web = page.getByRole('checkbox', {name: 'Enable web search and browsing', exact: true});
   await web.uncheck();
   await page.waitForFunction(async () => await window.__TAURI_INTERNALS__.invoke('get_setting', {key: 'web_access'}) === 'off');

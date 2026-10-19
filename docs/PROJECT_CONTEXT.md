@@ -18,6 +18,8 @@ Use npm ci, scripts/fetch-vendor.ps1, scripts/build-agent.ps1, and scripts/insta
 - src-tauri/src/agent.rs: one child agent per chat; JSONL protocol, MCP registration, message queue, approval dispatch, revision capture.
 - src-tauri/src/strata.rs: authenticated loopback service launch/ownership/readiness/telemetry.
 - src-tauri/src/policy.rs and sshpolicy.rs: conservative action classification. Unknown or complex read-only forms ask; Automatic mode allows ordinary work. OfficeCLI positional and secondary paths need classification before read shortcuts. This remains a heuristic, not shell isolation.
+- src-tauri/src/plugins.rs, runconfig.rs; src/ModeSwitcher.tsx, StatusItems.tsx, SettingsModel.tsx: declarative plugins (modes, skills, prompt text, MCP servers, status items), mode/effort switching and the run-config editor. See docs/PLUGINS.md. Machine-specific launch profiles live in a user plugin, never in app/.
+- src/BrowserLive.tsx: live browser view (peek card plus Files-panel view with step thumbnails) from screenshots the browser tool saves per chat.
 - workbench-mcp/server.py: tool schemas/dispatch and Office verification bundle. public_web.py validates and IP-pins fetches including redirects, with byte/time bounds. browser.py drives background Chromium; navigation DNS checks and hostname globs do not constrain every page subrequest.
 
 ## Invariants
@@ -26,7 +28,7 @@ Use npm ci, scripts/fetch-vendor.ps1, scripts/build-agent.ps1, and scripts/insta
 - The host serializes agent messages, including /context. Upstream can drop requests delivered concurrently. Approval answers and Stop bypass this queue.
 - Stop has a bounded graceful shutdown and then kills only that agent's tree. Stale readers cannot remove its replacement. Completed file operations are not undone.
 - Context usage is a projection, never the sum of every request's usage. Unknown stays unknown. An internal /context stream ending does not finish the UI's active user turn.
-- The host merges managed compact settings with toml_edit, preserving unrelated user config. Trigger is 80% of the actual window. Manual and automatic compaction share the pinned upstream patch (target 800â€“1200, cap 3072); MaxTokens checkpoints do not replace history.
+- The host merges managed compact settings with toml_edit, preserving unrelated user config. Trigger is 80% of the actual window. A health capability opts the OpenAI-compatible agent into Strata /v1/chat/compact for both manual and automatic compaction; otherwise the generic checkpoint remains available. Native replacement is transactional: preserve leading instructions, exact recent turn/tool groups and their session metadata; errors/cancellation never fall back to history-dropping summaries. Runtime system/tool overhead and reply capacity count toward the context limit. No-op results do not create a compaction boundary.
 - Automatic mode defaults on and persists across chats/restarts. Explicit dangerous/consequential actions still ask. Browser eval labels are descriptions, not authoritative action classification.
 - Cross-chat memory injection is disabled. Do not advertise automatic personalization from the legacy memory table.
 - Browser is headless. Long snapshots and errors have recoverable workspace files. Retain clickable refs even when labels are absent. No website-specific skill is shipped; examples/recipes under scripts/e2e are test fixtures only.
@@ -34,6 +36,10 @@ Use npm ci, scripts/fetch-vendor.ps1, scripts/build-agent.ps1, and scripts/insta
 - Interactive HTML uses opaque-origin iframe sandboxing, bounded messages and explicit composer review for follow-ups. Keep src/intelligent-ui.ts, SandboxedUi.tsx and Tauri frame CSP paired. Do not replay old show_document calls when reopening a chat.
 - Direct supported edits preserve previous file revisions; arbitrary shell edits do not. Canonical Windows paths must be normalized to native DOS/UNC spelling at OfficeCLI/Explorer boundaries; extended prefixes can miss resident Office sessions.
 - Updater supports signed raw Windows installer EXEs. ZIP extraction is disabled to remove an unnecessary vulnerable dependency. Forks need their own signing key and endpoint. Rollback currently restores the executable and cannot guarantee matching old resources.
+
+- Plugins are data only: no code is injected into the UI or host. Status sources are an allowlist (`HOST_SOURCES`) of read-only commands. A manifest that fails to parse is listed as *Not loaded* with its error, never silently dropped. Only one model instance runs; a mode switch with reload restarts the owned Strata process.
+- Loop guards live in server.py and the system prompt together: load_skill dedupes per chat (force:true reloads); identical idempotent calls (web_search, web_fetch, read_attachment, memory_search) return a short note on the 2nd call and a refusal from the 3rd; all tool output is capped at 24,000 characters. Errors are not counted.
+- The brand mark is defined in three places that must stay in step: scripts/make-icons.py (icons), public/icon.svg and src/Logo.tsx. The mark carries no letters, so a rename does not need new art.
 
 ## Checks
 

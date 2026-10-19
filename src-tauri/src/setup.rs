@@ -39,7 +39,7 @@ fn model_config_ok(path: &str) -> bool {
         .is_some()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn hardware_check() -> Value {
     use sysinfo::{Disks, System};
     let mut sys = System::new();
@@ -65,21 +65,75 @@ pub fn hardware_check() -> Value {
         "ram_gib": ram, "disk_free_gib": free, "gpu": gpu,
         "strata_root": root.to_string_lossy(), "strata_found": strata_ok(&root),
         "model_config_found": model_config_ok(&strata::setting("modelConfig", &paths::default_model_config())),
+        "model_source": strata::setting("modelSource", "strata"),
+        "server_port": strata::setting("serverPort", "8080"),
     })
 }
 
+/// Look for an OpenAI-compatible server the user already runs: the given port, or the usual ones
+/// (Strata 8080, LM Studio 1234, Ollama 11434). Only 127.0.0.1 is ever contacted.
+#[tauri::command(async)]
+pub fn probe_model_server(port: Option<u16>, key: Option<String>) -> Value {
+    let key = key.filter(|k| !k.trim().is_empty());
+    let ports: Vec<u16> = port.map(|p| vec![p]).unwrap_or_else(|| vec![8080, 1234, 11434]);
+    let mut last = String::new();
+    for p in ports {
+        match strata::probe(p, key.as_deref()) {
+            Ok(model) => return json!({"ok": true, "port": p, "model": model}),
+            Err(e) => last = e,
+        }
+    }
+    json!({"ok": false, "error": if port.is_some() { last } else { "No model server found on ports 8080, 1234 or 11434.".into() }})
+}
+
+/// Use a server the user runs. Checked before it is saved; the app will not start or stop it.
+#[tauri::command(async)]
+pub fn set_model_server(port: u16, key: Option<String>, context: Option<u64>) -> Result<Value, String> {
+    let key = key.unwrap_or_default().trim().to_string();
+    let model = strata::probe(port, if key.is_empty() { None } else { Some(&key) })?;
+    write_setting("serverPort", &port.to_string())?;
+    write_setting("serverKey", &key)?;
+    write_setting("serverContext", &context.filter(|c| *c >= 4096).unwrap_or(32768).to_string())?;
+    write_setting("modelSource", "server")?;
+    Ok(json!({"ok": true, "model": model}))
+}
+
+/// Go back to letting the app launch Strata itself.
+#[tauri::command(async)]
+pub fn use_own_strata() -> Result<(), String> {
+    write_setting("modelSource", "strata")
+}
+
 /// Point the app at a Strata folder (validated) and remember it in settings.json.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_strata_root(path: String) -> Result<Value, String> {
     let p = PathBuf::from(&path);
     if !strata_ok(&p) {
         return Err("That folder is not a ready Strata installation. Choose the folder containing serve\\server.py and .venv\\Scripts\\python.exe. Install Strata and run SETUP.bat first if needed.".into());
     }
     write_setting("strataRoot", &path)?;
-    Ok(json!({"ok": true}))
+    write_setting("modelSource", "strata")?;
+    // Strata's setup writes strata-<model>.json next to its start script; pick the newest if none is chosen yet.
+    let mut picked = None;
+    if !model_config_ok(&strata::setting("modelConfig", &paths::default_model_config())) {
+        picked = std::fs::read_dir(&p).ok().and_then(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|f| {
+                    let n = f.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    n.starts_with("strata-") && n.ends_with(".json") && n.matches('.').count() == 1
+                })
+                .filter(|f| model_config_ok(&f.to_string_lossy()))
+                .max_by_key(|f| f.metadata().and_then(|m| m.modified()).ok())
+        });
+        if let Some(f) = &picked {
+            write_setting("modelConfig", &f.to_string_lossy())?;
+        }
+    }
+    Ok(json!({"ok": true, "modelConfig": picked.map(|f| f.to_string_lossy().to_string())}))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_model_config(path: String) -> Result<Value, String> {
     let config = PathBuf::from(&path);
     let text = std::fs::read_to_string(&config)
@@ -90,6 +144,7 @@ pub fn set_model_config(path: String) -> Result<Value, String> {
         return Err("This does not look like a Strata model configuration: it needs an 'args' array.".into());
     }
     write_setting("modelConfig", &path)?;
+    write_setting("modelSource", "strata")?;
     Ok(json!({"ok": true}))
 }
 
@@ -107,7 +162,7 @@ fn write_setting(key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_web_access(s: State<App>, on: bool) {
     WEB_OFF.store(!on, Ordering::SeqCst);
     crate::store::kv_set(&s.db.lock().unwrap(), "web_access", if on { "on" } else { "off" });
@@ -124,7 +179,7 @@ fn git(root: &PathBuf, args: &[&str]) -> Option<String> {
 }
 
 /// Step 1: look only (git fetch), report whether the Strata folder is behind its upstream.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn strata_update_check() -> Result<Value, String> {
     let root = strata_root();
     if !strata_ok(&root) {

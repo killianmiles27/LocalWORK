@@ -32,7 +32,9 @@ The supported updater download is a signed Windows installer EXE. ZIP updater ex
 
 ## Publish deliberately
 
-After reviewing and testing the actual release artifacts, create a GitHub release for the matching tag. Attach the installer, its signature, and latest.json. No script here automatically makes the repository public or publishes a release.
+After reviewing and testing the actual release artifacts, create a GitHub release for the matching tag. Attach the installer, its signature, and latest.json.
+
+The installer is the plain app with no plugins. Plugins ship as separate assets: run `pwsh -NoProfile -File scripts/package-plugins.ps1`, then attach everything in `dist-plugins/`. That is `LocalWORK-recommended-plugins_<version>.zip`, which installs every gallery plugin in one import, plus one `<id>_<version>.zip` per plugin. Keeping plugins out of the installer means updates never overwrite or remove a user's plugins, and one updater feed serves everyone. No script here automatically makes the repository public or publishes a release.
 
 ```json
 {

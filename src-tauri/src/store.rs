@@ -77,9 +77,11 @@ pub fn add_msg(c: &Connection, conv: &str, role: &str, body: &Value) {
     let _ = c.execute("UPDATE conversations SET updated=?2 WHERE id=?1", params![conv, now()]);
 }
 
-pub fn messages(c: &Connection, conv: &str) -> Vec<Value> {
-    let mut st = c.prepare("SELECT id,role,body,ts FROM messages WHERE conv=?1 ORDER BY id").unwrap();
-    st.query_map([conv], |r| {
+/// Messages are append-only (only deleting a whole chat removes rows), so `after` lets the UI fetch just
+/// the rows it has not seen yet.
+pub fn messages(c: &Connection, conv: &str, after: i64) -> Vec<Value> {
+    let mut st = c.prepare("SELECT id,role,body,ts FROM messages WHERE conv=?1 AND id>?2 ORDER BY id").unwrap();
+    st.query_map(params![conv, after], |r| {
         let body: String = r.get(2)?;
         Ok(json!({"id": r.get::<_, i64>(0)?, "role": r.get::<_, String>(1)?,
                   "body": serde_json::from_str::<Value>(&body).unwrap_or(Value::Null), "ts": r.get::<_, i64>(3)?}))
