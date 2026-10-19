@@ -4,7 +4,8 @@ This guide is for running your own customized LocalWORK on more than one PC whil
 
 | Thing | Lives in | Contains | Shared |
 |---|---|---|---|
-| **Core app** | this repository | code, general skills, gallery plugins, docs | public (GitHub) |
+| **Core app** | this repository | code, general skills, docs | public (GitHub) |
+| **Official plugins** | [LocalWORK-plugins](https://github.com/killianmiles27/LocalWORK-plugins) | plugins anyone can use, listed in *Get plugins* | public (GitHub) |
 | **Your setup** | a private repository of your own, e.g. `personal-plugins/` | plugins with your model paths, per-PC launch profiles, private skills | private (your machines only) |
 | **Installed app** | an install folder per PC | the built app, updated from a release or deployed from the core repository | not in Git |
 
@@ -15,6 +16,7 @@ Rule of thumb: if a change would work unchanged on a stranger's PC, it belongs i
 ```
 LocalWORK/                    any parent folder
   app/                        clone of this repository (public)
+  LocalWORK-plugins/          clone of the official plugins (public)
   personal-plugins/           your private repository
     my-model/plugin.json      a plugin with your mode menu, e.g. Sprint, 64K, 128K
     machines/<COMPUTERNAME>/profiles/*.json   each PC's tuned Strata run configs
@@ -22,7 +24,7 @@ LocalWORK/                    any parent folder
 ```
 
 A `sync.ps1` for this layout:
-- copies every plugin folder (and, optionally, the gallery plugins from `app/plugins`) into `%LOCALAPPDATA%\Workbench\plugins`;
+- copies every plugin folder (and, optionally, the official plugins from `LocalWORK-plugins/`) into `%LOCALAPPDATA%\Workbench\plugins`;
 - copies `machines\<COMPUTERNAME>\profiles\*.json` into the Strata `profiles` folder;
 - backs up whatever it replaces.
 

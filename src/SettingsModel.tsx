@@ -5,10 +5,12 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 type Mode = { id: string; label: string; group: string; config: string; context: number | null; found: boolean; active: boolean };
 type Cfg = Record<string, any> & { args: string[] };
 type Field = { key: string; label: string; type?: "number" | "text" | "boolean"; default?: unknown; help?: string };
+type StoreItem = { id: string; dir: string; name: string; version: string; description: string; author?: string; state: "new" | "installed" | "update"; installedVersion?: string; runsPrograms: boolean };
+type StoreList = { source: string; branch: string; official: boolean; plugins: StoreItem[] };
 type PluginRow = { id: string; name: string; version: string; description: string; enabled: boolean; source: string; dir: string; contributes: string[]; error?: string; settingsSchema?: Field[]; settings?: Record<string, unknown>; author?: string; homepage?: string };
 
-/** The public plugin gallery. Each folder there is one plugin; releases also ship them as .zip files, including a pack of all of them. */
-export const PLUGIN_GALLERY = "https://github.com/killianmiles27/LocalWORK/tree/main/plugins";
+/** The official plugin repository. Each folder there is one plugin; the store in Settings installs from it. */
+export const PLUGIN_GALLERY = "https://github.com/killianmiles27/LocalWORK-plugins";
 
 const h3 = "text-xs font-medium text-muted uppercase tracking-wide mb-1";
 const inp = "rounded-lg border border-line bg-panel px-2 py-1 text-sm min-w-0 w-full";
@@ -241,7 +243,84 @@ export function Plugins() {
       <p className="text-xs text-muted mt-2">A plugin is a folder with a plugin.json; share it as a .zip. Modes and composer items update right away; skills, prompt text and tools apply to chats started afterwards.</p>
       {msg && <p role="status" className="text-xs mt-1 break-all">{msg}</p>}
       {err && <p className="text-xs text-red-600">{err}</p>}
+      <PluginStore onInstalled={changed} />
     </section>
+  );
+}
+
+const short = (u: string) => u.replace(/^https:\/\/github\.com\//, "");
+
+/** Browse GitHub repositories of plugins and install from them. The official repository is listed first. */
+function PluginStore({ onInstalled }: { onInstalled: () => void }) {
+  const [sources, setSources] = useState<string[]>([]);
+  const [lists, setLists] = useState<Record<string, StoreList | string>>({});
+  const [adding, setAdding] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const btn = "rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-panel-2 disabled:opacity-40";
+
+  const fetchOne = (src: string) => {
+    setLists(l => ({ ...l, [src]: "Loading…" }));
+    return invoke<StoreList>("store_list", { source: src }).then(r => setLists(l => ({ ...l, [src]: r }))).catch(e => setLists(l => ({ ...l, [src]: String(e) })));
+  };
+  const refresh = (list: string[]) => list.forEach(fetchOne);
+  useEffect(() => { invoke<string[]>("store_sources").then(s => { setSources(s); refresh(s); }).catch(e => setNote(String(e))); }, []);
+
+  async function saveSources(next: string[]) {
+    try { const s = await invoke<string[]>("store_sources_set", { list: next }); setSources(s); return s; } catch (e) { setNote(String(e)); return null; }
+  }
+  async function add() {
+    setNote("");
+    const s = await saveSources([...sources, adding.trim()]);
+    if (s) { setAdding(""); s.filter(x => !(x in lists)).forEach(fetchOne); }
+  }
+  async function install(src: string, it: StoreItem) {
+    setBusy(it.dir); setNote("");
+    try {
+      const r = await invoke<{ name: string; runsPrograms: boolean }>("store_install", { source: src, dir: it.dir });
+      setNote(r.runsPrograms ? `Installed ${r.name}. It starts programs on this computer, so it is off until you turn it on above.` : `Installed ${r.name}.`);
+      onInstalled(); await fetchOne(src);
+    } catch (e) { setNote(String(e)); }
+    finally { setBusy(null); }
+  }
+
+  return (
+    <div className="mt-4">
+      <h3 className={h3}>Get plugins</h3>
+      <p className="text-xs text-muted mb-2">Add any public GitHub repository of LocalWORK plugins. Every folder in it with a plugin.json shows up here.</p>
+      <div className="flex gap-1.5 mb-2">
+        <input className={inp} placeholder="github.com/owner/repo" value={adding} onChange={e => setAdding(e.target.value)} onKeyDown={e => e.key === "Enter" && adding.trim() && add()} aria-label="Plugin repository link" />
+        <button className={btn} disabled={!adding.trim()} onClick={add}>Add</button>
+        <button className={btn} onClick={() => refresh(sources)}>Refresh</button>
+      </div>
+      {sources.map(src => {
+        const l = lists[src];
+        return (
+          <div key={src} className="rounded-lg border border-line p-2.5 mb-2">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="font-medium truncate">{short(src)}</span>
+              {typeof l === "object" && l.official && <span className="rounded bg-accent/15 text-accent px-1.5 py-0.5 text-[11px]">Official</span>}
+              <button className="ml-auto text-[11px] text-muted underline" onClick={() => invoke("open_external", { url: src })}>Open</button>
+              <button className="text-[11px] text-muted underline hover:text-red-600" onClick={() => saveSources(sources.filter(x => x !== src))}>Remove</button>
+            </div>
+            {typeof l === "string" && <p className={"text-xs mt-1 " + (l === "Loading…" ? "text-muted" : "text-red-600 break-words")}>{l}</p>}
+            {typeof l === "object" && l.plugins.length === 0 && <p className="text-xs text-muted mt-1">No plugins found in this repository.</p>}
+            {typeof l === "object" && l.plugins.map(it => (
+              <div key={it.dir} className="flex items-start gap-3 py-1.5 border-b border-line last:border-0 text-sm">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 flex-wrap"><span>{it.name || it.id}</span><span className="text-xs text-muted">{it.version}{it.author ? ` · ${it.author}` : ""}</span>{it.runsPrograms && <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[11px] text-muted">runs programs</span>}</div>
+                  {it.description && <div className="text-xs text-muted">{it.description}</div>}
+                </div>
+                {it.state === "installed"
+                  ? <span className="text-xs text-muted py-1">Installed</span>
+                  : <button className={btn} disabled={busy != null} onClick={() => install(src, it)}>{busy === it.dir ? "Installing…" : it.state === "update" ? `Update from ${it.installedVersion || "older"}` : "Install"}</button>}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+      {note && <p role="status" className="text-xs mt-1 break-all">{note}</p>}
+    </div>
   );
 }
 

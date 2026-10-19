@@ -34,7 +34,7 @@ For Word, Excel, and PowerPoint, the assistant can bundle structural checks into
 
 The browser works in the background. You can follow tool activity in the chat and request screenshots. Sessions are separate from your everyday browser and can persist in a project profile.
 
-Web searches and page requests leave the PC. Disable web tools in the setup wizard for offline file work. This setting controls the built-in web tools; it is not a firewall and does not stop a shell command, update check, or SSH connection from using the network.
+Web searches and page requests leave the PC. Disable web tools in Settings → Connections for local-only file work, or turn on **offline mode** there to keep LocalWORK itself off the internet: web, browser and SSH tools are refused, and the plugin store and update checks do nothing. A chat you use while offline mode is on stays offline after you turn it off; opening it shows *Keep offline* or *Allow internet* so you decide per chat. This setting controls the built-in web tools; it is not a firewall and does not stop a shell command, update check, or SSH connection from using the network.
 
 Browser profiles may contain login cookies. Treat the data folder as sensitive. Private-address filters are incomplete for browser subrequests; use a VM or separate Windows account when browsing untrusted sites on a sensitive network.
 

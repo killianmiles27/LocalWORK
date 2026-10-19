@@ -226,7 +226,41 @@ pub fn modes() -> Vec<Value> {
             "config": path.to_string_lossy(), "context": context_of(&path), "found": true, "active": key == current,
         }));
     }
+    // Models set up in the Strata folder itself (strata-<model>.json). PolyStrata keeps one per installed model.
+    let root = PathBuf::from(strata::setting("strataRoot", &paths::default_strata_root()));
+    for (path, label) in root_models(&root) {
+        let key = norm(&path.to_string_lossy());
+        if out.iter().any(|m| norm(m["config"].as_str().unwrap_or("")) == key) { continue; }
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        out.push(json!({
+            "id": format!("model/{stem}"), "plugin": null, "label": label, "description": "", "group": "Models",
+            "config": path.to_string_lossy(), "context": context_of(&path), "found": true, "active": key == current,
+        }));
+    }
     out
+}
+
+/// `strata-*.json` run configs in a Strata or PolyStrata folder, with a display name each.
+pub fn root_models(root: &Path) -> Vec<(PathBuf, String)> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+    files.retain(|f| {
+        let n = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+        n.starts_with("strata-") && n.ends_with(".json")
+    });
+    files.sort();
+    files
+        .into_iter()
+        .filter_map(|f| {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(&f).ok()?).ok()?;
+            v.get("args")?.as_array()?;
+            let stem = f.file_stem()?.to_string_lossy().to_string();
+            let label = ["display_name", "model_name"]
+                .iter()
+                .find_map(|k| v.get(*k).and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(String::from))
+                .unwrap_or_else(|| stem.trim_start_matches("strata-").to_string());
+            Some((f, label))
+        })
+        .collect()
 }
 
 fn norm(p: &str) -> String {
@@ -236,7 +270,7 @@ fn norm(p: &str) -> String {
 fn context_of(cfg: &Path) -> Option<u64> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(cfg).ok()?).ok()?;
     let a = v.get("args")?.as_array()?;
-    let i = a.iter().position(|x| x.as_str() == Some("--max-context"))?;
+    let i = a.iter().position(|x| matches!(x.as_str(), Some("--max-context" | "--ctx")))?;
     a.get(i + 1)?.as_str()?.parse().ok()
 }
 
@@ -433,7 +467,7 @@ fn copy_dir(from: &Path, to: &Path, count: &mut usize) -> Result<(), String> {
     Ok(())
 }
 
-fn unzip(zip_path: &Path, to: &Path) -> Result<(), String> {
+pub fn unzip(zip_path: &Path, to: &Path) -> Result<(), String> {
     let f = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
     let mut z = zip::ZipArchive::new(f).map_err(|e| format!("Not a readable .zip: {e}"))?;
     if z.len() > MAX_IMPORT_FILES { return Err("The plugin has too many files.".into()); }
@@ -616,6 +650,22 @@ mod tests {
         assert!(unzip(&evil, &base.join("out2")).is_err());
         assert!(!base.join("escape.txt").exists());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn lists_models_in_a_polystrata_folder() {
+        let d = std::env::temp_dir().join(format!("lw-poly-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("polystrata.py"), "").unwrap();
+        std::fs::write(d.join("strata-glm-5.3.json"), r#"{"exe":"x","args":["--max-context","65536"],"model_name":"glm-5.3","display_name":"GLM 5.3"}"#).unwrap();
+        std::fs::write(d.join("strata-qwen.json"), r#"{"args":[]}"#).unwrap();
+        std::fs::write(d.join("strata-bad.json"), r#"{"model_name":"no args"}"#).unwrap();
+        std::fs::write(d.join("strata-old.json.bak"), "{}").unwrap();
+        let m = super::root_models(&d);
+        assert_eq!(m.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>(), ["GLM 5.3", "qwen"]);
+        assert_eq!(super::context_of(&m[0].0), Some(65536));
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

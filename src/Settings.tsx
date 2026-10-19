@@ -83,6 +83,7 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
   const [info, setInfo] = useState<Info | null>(null);
   const [dir, setDir] = useState("");
   const [web, setWeb] = useState<boolean | null>(null);
+  const [offline, setOffline] = useState<boolean | null>(null);
   const [webBusy, setWebBusy] = useState(false);
   const [mem, setMem] = useState<{ id: number; text: string }[]>([]);
   const [tab, setTab] = useState<(typeof TABS)[number]>(() => (TABS as readonly string[]).includes(sessionStorage.getItem("settings-tab") ?? "") ? sessionStorage.getItem("settings-tab") as any : "General");
@@ -96,6 +97,7 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
     loadMem();
     invoke<string>("data_dir").then(setDir).catch(() => {});
     invoke<string | null>("get_setting", { key: "web_access" }).then(value => setWeb(value !== "off")).catch(() => {});
+    invoke<boolean>("offline_get").then(setOffline).catch(() => {});
     const t = setInterval(pull, 2000);
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", esc);
@@ -173,6 +175,7 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
             </ul>
           </section>
           <Rollback />
+          <AppUpdates />
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">App</h3>
             <Row k="Data folder" v={dir || "–"} />
@@ -181,6 +184,11 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
           </section>
           </>}
           {tab === "Connections" && <>
+          <section>
+            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Offline mode</h3>
+            <label className="flex items-center justify-between gap-4 py-2 text-sm">Keep LocalWORK off the internet<input type="checkbox" disabled={offline === null} checked={offline ?? false} onChange={async event => { const on = event.target.checked; setOffline(on); try { await invoke("set_offline", { on }); window.dispatchEvent(new Event("offline-changed")); } catch (error) { setOffline(!on); window.alert(String(error)); } }} /></label>
+            <p className="text-xs text-muted">Turns off web search, browsing and SSH tools, the plugin store and update checks. Chats you use while this is on stay offline later; each one asks before going online again. Commands you approve and programs started by plugins are not blocked, so they could still reach the network.</p>
+          </section>
           <section>
             <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Web tools</h3>
             <label className="flex items-center justify-between gap-4 py-2 text-sm">Enable web search and browsing<input type="checkbox" disabled={web === null || webBusy} checked={web ?? false} onChange={async event => { const on = event.target.checked; const previous = web; setWeb(on); setWebBusy(true); try { await invoke("set_web_access", { on }); } catch (error) { setWeb(previous); window.alert(String(error)); } finally { setWebBusy(false); } }} /></label>
@@ -195,6 +203,38 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
   );
 }
 
+function AppUpdates() {
+  const [auto, setAuto] = useState<boolean | null>(null);
+  const [found, setFound] = useState<{ available: boolean; current: string; version?: string; notes?: string } | null>(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  useEffect(() => { invoke<boolean>("auto_update_get").then(setAuto).catch(() => {}); }, []);
+  async function check() {
+    setBusy("Checking…"); setMsg("");
+    try { const r = await invoke<typeof found>("app_update_check"); setFound(r); if (r && !r.available) setMsg(`LocalWORK ${r.current} is the newest version.`); }
+    catch (e) { setMsg(String(e)); } finally { setBusy(""); }
+  }
+  async function install() {
+    setBusy("Downloading the update. LocalWORK restarts when it is installed…"); setMsg("");
+    try { await invoke("app_update_install"); } catch (e) { setMsg(String(e)); setBusy(""); }
+  }
+  const btn = "rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-panel-2 disabled:opacity-40";
+  return (
+    <section>
+      <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Updates</h3>
+      <label className="flex items-center justify-between gap-4 py-2 text-sm">Update automatically when LocalWORK opens<input type="checkbox" disabled={auto === null} checked={auto ?? false} onChange={async e => { const on = e.target.checked; setAuto(on); try { await invoke("auto_update_set", { on }); } catch (error) { setAuto(!on); setMsg(String(error)); } }} /></label>
+      <p className="text-xs text-muted">Off by default. When on, LocalWORK checks GitHub for a new signed release each time it opens, installs it and restarts. Chats and settings are kept. Skipped while offline mode is on.</p>
+      <div className="flex flex-wrap items-center gap-2 mt-2">
+        <button className={btn} disabled={!!busy} onClick={check}>Check for updates</button>
+        {found?.available && <button className="rounded-lg bg-accent text-accent-fg px-2.5 py-1 text-xs disabled:opacity-40" disabled={!!busy} onClick={install}>Install {found.version}</button>}
+        {busy && <span className="text-xs text-muted">{busy}</span>}
+      </div>
+      {found?.available && <p className="text-xs text-muted mt-1">Version {found.version} is available (you have {found.current}).{found.notes ? " " + found.notes.slice(0, 300) : ""}</p>}
+      {msg && <p role="status" className="text-xs mt-1 break-words">{msg}</p>}
+    </section>
+  );
+}
+
 function ModelSetup() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -203,7 +243,7 @@ function ModelSetup() {
     try {
       const path = await open(config
         ? { title: "Choose your Strata model configuration", filters: [{ name: "JSON", extensions: ["json"] }] }
-        : { title: "Choose your Strata installation", directory: true });
+        : { title: "Choose your Strata or PolyStrata folder", directory: true });
       if (typeof path === "string") {
         await invoke(config ? "set_model_config" : "set_strata_root", { path });
         setMessage("Saved. Stop and start the model to use this configuration.");
@@ -214,11 +254,11 @@ function ModelSetup() {
   return <section>
     <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Model setup</h3>
     <div className="flex flex-wrap gap-2">
-      <button disabled={busy} onClick={() => choose(false)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose Strata folder</button>
+      <button disabled={busy} onClick={() => choose(false)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose Strata or PolyStrata folder</button>
       <button disabled={busy} onClick={() => choose(true)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose model configuration</button>
       <button disabled={busy} onClick={() => window.dispatchEvent(new Event("open-wizard"))} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Run setup again…</button>
     </div>
-    <p className="text-xs text-muted mt-2">Use a trusted Strata configuration. It selects the executable, model files and launch arguments. Setup also connects a model server you run yourself (LM Studio, Ollama, or Strata started on its own).</p>
+    <p className="text-xs text-muted mt-2">Use a trusted Strata or PolyStrata configuration. PolyStrata runs more than Qwen (GLM, DeepSeek, Gemma and others); each model it sets up appears in the model menu. It selects the executable, model files and launch arguments. Setup also connects a model server you run yourself (LM Studio, Ollama, or Strata started on its own).</p>
     {message && <p role="status" className="text-sm mt-2 break-all">{message}</p>}
   </section>;
 }
@@ -260,7 +300,7 @@ function StrataUpdate() {
     setBusy("");
   }
   async function apply() {
-    if (!confirm("Update Strata now? The model stops, updates, and restarts. Open chats are interrupted.")) return;
+    if (!confirm("Update Strata (or PolyStrata) now? The model stops, updates, and restarts. Open chats are interrupted.")) return;
     setBusy("Updating… this can take a few minutes"); setErr("");
     try { setRes(await invoke<Applied>("strata_update_apply")); setChk(null); } catch (e) { setErr(String(e)); }
     setBusy("");
@@ -268,11 +308,11 @@ function StrataUpdate() {
   return (
     <section>
       <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Model engine</h3>
-      <div className="text-sm text-muted mb-1">Strata runs the model. Checking looks only; nothing changes until you confirm.</div>
-      <button disabled={!!busy} onClick={check} className="rounded-lg border border-line px-3 py-1 text-sm hover:border-accent disabled:opacity-40">Check for Strata update</button>
+      <div className="text-sm text-muted mb-1">Strata or PolyStrata runs the model. Checking looks only; nothing changes until you confirm.</div>
+      <button disabled={!!busy} onClick={check} className="rounded-lg border border-line px-3 py-1 text-sm hover:border-accent disabled:opacity-40">Check for model engine update</button>
       {busy && <span className="ml-2 text-xs text-muted">{busy}</span>}
       {chk && !chk.git && <div className="text-sm mt-2">{chk.message}</div>}
-      {chk?.git && chk.behind === 0 && <div className="text-sm mt-2">Strata is up to date ({chk.head}).</div>}
+      {chk?.git && chk.behind === 0 && <div className="text-sm mt-2">The engine is up to date ({chk.head}).</div>}
       {chk?.git && !!chk.behind && (
         <div className="mt-2 text-sm">
           {chk.behind} new change{chk.behind > 1 ? "s" : ""} available:

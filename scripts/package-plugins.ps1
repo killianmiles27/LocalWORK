@@ -1,12 +1,15 @@
-<# Packages the public plugins in plugins/ for a release:
+<# Packages the official plugins (a checkout of github.com/killianmiles27/LocalWORK-plugins, by default
+   ..\LocalWORK-plugins next to this repository) for a release:
      dist-plugins/LocalWORK-recommended-plugins_<version>.zip  every plugin, one import installs them all
      dist-plugins/<id>_<plugin version>.zip                    each plugin on its own
-   Settings -> Plugins -> Import accepts any of these. Reads only plugins/; writes only dist-plugins/. #>
+   Settings -> Plugins -> Import accepts any of these. Reads only the plugin checkout; writes only dist-plugins/. #>
 [CmdletBinding()]
-param([string[]]$Only)
+param([string[]]$Only, [string]$Source)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content -LiteralPath (Join-Path $repo 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version
+if (-not $Source) { $Source = Join-Path (Split-Path -Parent $repo) 'LocalWORK-plugins' }
+if (-not (Test-Path -LiteralPath $Source)) { throw "No plugin checkout at $Source. Clone github.com/killianmiles27/LocalWORK-plugins there or pass -Source." }
 $out = Join-Path $repo 'dist-plugins'
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
@@ -24,7 +27,7 @@ function New-Zip([string]$Folder, [string]$Zip) {
     } finally { $z.Dispose() }
 }
 
-$plugins = Get-ChildItem -LiteralPath (Join-Path $repo 'plugins') -Directory | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'plugin.json') }
+$plugins = Get-ChildItem -LiteralPath $Source -Directory | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'plugin.json') }
 if ($Only) { $plugins = $plugins | Where-Object { $Only -contains $_.Name } }
 if (-not $plugins) { throw 'No plugins to package.' }
 

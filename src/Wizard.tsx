@@ -5,11 +5,13 @@ import { Check, AlertTriangle, Copy, ExternalLink } from "lucide-react";
 
 type Hw = {
   ram_gib: number; disk_free_gib: number | null; gpu: { name: string; vram_gib: number | null; driver: string } | null;
-  strata_root: string; strata_found: boolean; model_config_found: boolean; model_source?: string; server_port?: string;
+  strata_root: string; strata_found: boolean; model_config_found: boolean; model_source?: string; server_port?: string; engine?: string;
 };
 type Path = "strata" | "server" | "setup";
 
 const STRATA_URL = "https://github.com/Niko1221/Strata";
+/** Strata fork that also runs GLM, DeepSeek, LFM, Gemma and newer Qwen models. Same folder layout and server. */
+const POLY_URL = "https://github.com/VecSzn/PolyStrata";
 const g = (n: number | null | undefined) => (typeof n === "number" ? n.toFixed(1) + " GiB" : "unknown");
 
 function Line({ ok, label, value }: { ok: boolean; label: string; value: string }) {
@@ -65,7 +67,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
 
   async function pickStrata() {
     setErr(""); setNote("");
-    const d = await open({ directory: true, title: "Choose your Strata folder" });
+    const d = await open({ directory: true, title: "Choose your Strata or PolyStrata folder" });
     if (!d || Array.isArray(d)) return;
     try {
       const r = await invoke<{ modelConfig?: string | null }>("set_strata_root", { path: d });
@@ -135,16 +137,16 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
           <>
             <h2 className="text-lg font-medium mb-1">Do you already have an AI model?</h2>
             <p className="text-sm text-muted mb-3">LocalWORK needs a model to talk to. Pick what fits you.</p>
-            <Choice on={path === "strata"} onClick={() => setPath("strata")} title="Yes, Strata is installed" text="LocalWORK starts and stops it for you. Recommended." />
+            <Choice on={path === "strata"} onClick={() => setPath("strata")} title="Yes, Strata or PolyStrata is installed" text="LocalWORK starts and stops it for you. Recommended." />
             <Choice on={path === "server"} onClick={() => setPath("server")} title="Yes, I run my own model server" text="Strata, LM Studio, Ollama or any OpenAI-compatible server on this PC. You start it yourself." />
             <Choice on={path === "setup"} onClick={() => setPath("setup")} title="No, help me set one up" text="Step-by-step Strata install. It downloads the model once (about 70 GB)." />
           </>
         )}
         {step === 2 && path === "strata" && (
           <>
-            <h2 className="text-lg font-medium mb-1">Connect Strata</h2>
-            <p className="text-sm text-muted mb-3">Choose the Strata folder (the one with START-HERE.bat). The model you set up there is picked automatically.</p>
-            <Line ok={!!hw?.strata_found} label="Strata" value={hw?.strata_found ? hw.strata_root : `Not found at ${hw?.strata_root ?? "…"}`} />
+            <h2 className="text-lg font-medium mb-1">Connect Strata or PolyStrata</h2>
+            <p className="text-sm text-muted mb-3">Choose the Strata or PolyStrata folder (the one with START-HERE.bat). The model you set up there is picked automatically. With several models, switch between them later from the model menu.</p>
+            <Line ok={!!hw?.strata_found} label={hw?.engine ?? "Strata"} value={hw?.strata_found ? hw.strata_root : `Not found at ${hw?.strata_root ?? "…"}`} />
             <Line ok={!!hw?.model_config_found} label="Model" value={hw?.model_config_found ? "Selected" : "Not selected yet"} />
             <div className="flex flex-wrap gap-2 mt-2">
               <button onClick={pickStrata} className={small}>Choose Strata folder…</button>
@@ -188,6 +190,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
               </li>
               <li>Come back here, press <b>Choose Strata folder</b>, and pick that folder.</li>
             </ol>
+            <p className="text-xs text-muted mt-2">Want models other than Qwen? <button className="underline inline-flex items-center gap-1" onClick={() => openUrl(POLY_URL)}>PolyStrata <ExternalLink size={11} /></button> is a Strata fork that also runs GLM, DeepSeek, LFM, Gemma and others. Install it the same way (its START-HERE.bat lets you pick models), then choose its folder here.</p>
             <div className="flex flex-wrap gap-2 mt-3">
               <button onClick={async () => { await pickStrata(); setPath("strata"); }} className={small}>Choose Strata folder…</button>
               <button className={small} onClick={() => copy(`Please install Strata (${STRATA_URL}) on this Windows PC by following its docs/AI_SETUP.md. Then tell me the folder path.`, "instructions for an AI assistant")}><Copy size={13} />Copy instructions for an AI helper</button>

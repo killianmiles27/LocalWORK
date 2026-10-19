@@ -5,6 +5,7 @@ mod desktop;
 mod http;
 mod paths;
 mod plugins;
+mod pluginstore;
 mod policy;
 mod rollback;
 mod runconfig;
@@ -15,6 +16,7 @@ mod sshpolicy;
 mod store;
 mod strata;
 mod supervisor;
+mod updates;
 mod voice;
 
 use serde_json::{json, Value};
@@ -78,6 +80,26 @@ fn plugin_remove(id: String) -> Result<(), String> {
 #[tauri::command(async)]
 fn plugin_settings_set(id: String, values: Value) -> Result<Value, String> {
     plugins::set_settings(&id, &values)
+}
+
+#[tauri::command(async)]
+fn store_sources() -> Vec<String> {
+    pluginstore::sources()
+}
+
+#[tauri::command(async)]
+fn store_sources_set(list: Vec<String>) -> Result<Vec<String>, String> {
+    pluginstore::set_sources(list)
+}
+
+#[tauri::command(async)]
+fn store_list(source: String) -> Result<Value, String> {
+    pluginstore::list(&source)
+}
+
+#[tauri::command(async)]
+fn store_install(source: String, dir: String) -> Result<Value, String> {
+    pluginstore::install(&source, &dir)
 }
 
 #[tauri::command(async)]
@@ -243,6 +265,7 @@ fn agent_send(app: AppHandle, s: State<App>, id: String, text: String) -> Result
     a.set_auto_edit(enabled);
     {
         let c = s.db.lock().unwrap();
+        setup::note_chat_sent(&c, &id);
         store::add_msg(&c, &id, "user", &json!({"text": text}));
         if let Some((title, _, _)) = store::conv_info(&c, &id) {
             if title == "New conversation" {
@@ -462,6 +485,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let st = app.state::<App>().strata.clone();
             let _ = strata::start(&handle, &st);
+            updates::on_launch(&handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -472,7 +496,7 @@ pub fn run() {
             documents::documents_list, documents::document_preview, documents::document_open,
             documents::document_revisions, documents::document_export,
             documents::document_save_visual, documents::document_save, documents::document_office_edit,
-            setup::hardware_check, setup::set_strata_root, setup::probe_model_server, setup::set_model_server, setup::use_own_strata, setup::set_model_config, setup::set_web_access, setup::strata_update_check, setup::strata_update_apply,
+            setup::hardware_check, setup::set_strata_root, setup::probe_model_server, setup::set_model_server, setup::use_own_strata, setup::set_model_config, setup::set_web_access, updates::app_update_check, updates::app_update_install, updates::auto_update_get, updates::auto_update_set, setup::offline_get, setup::set_offline, setup::chat_offline_get, setup::chat_offline_set, setup::strata_update_check, setup::strata_update_apply,
             rollback::rollback_list,
             rollback::rollback_to,
             model_status,
@@ -505,7 +529,7 @@ pub fn run() {
             voice::voice_transcribe,
             voice::voice_tidy,
             plugins_list, plugin_set_enabled, status_items, system_stats, power_stats,
-            plugin_import, plugin_export, plugin_remove, plugin_settings_set, plugins_folder, modes_list, effort_set, mode_switch
+            plugin_import, plugin_export, plugin_remove, plugin_settings_set, plugins_folder, store_sources, store_sources_set, store_list, store_install, modes_list, effort_set, mode_switch
         ])
         .build(tauri::generate_context!())
         .expect("error while building app")

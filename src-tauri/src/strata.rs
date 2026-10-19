@@ -6,6 +6,7 @@ use rand::Rng;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -37,6 +38,21 @@ impl Strata {
 }
 
 pub type Shared = Arc<Mutex<Strata>>;
+
+/// Context size the running server reports on /health (`max_context`). Strata and PolyStrata both
+/// report it, and PolyStrata may size it per model, so compaction trusts it over the config file.
+static LIVE_CTX: AtomicU64 = AtomicU64::new(0);
+
+/// Remember `max_context` from a Strata/PolyStrata /health body. Other servers leave it unset.
+fn note_health(body: &str) {
+    if let Some(n) = parse_max_context(body) {
+        LIVE_CTX.store(n, Ordering::Relaxed);
+    }
+}
+
+fn parse_max_context(body: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(body).ok()?.get("max_context")?.as_u64().filter(|n| *n >= 4096)
+}
 
 fn set(app: &AppHandle, s: &Shared, state: &str, detail: &str) {
     let st = {
@@ -87,6 +103,7 @@ fn connect_external(app: &AppHandle, s: &Shared) -> Result<(), String> {
         g.status.port = port;
         g.gen
     };
+    LIVE_CTX.store(0, Ordering::Relaxed);
     set(app, s, "starting", "Connecting to your model server…");
     let (app2, s2) = (app.clone(), s.clone());
     std::thread::spawn(move || monitor(app2, s2, gen, port, bearer, 0));
@@ -125,6 +142,7 @@ pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
     }
     let model_name = config.get("model_name").and_then(|x| x.as_str()).unwrap_or("strata").to_string();
 
+    LIVE_CTX.store(0, Ordering::Relaxed);
     let port = http::free_port();
     let key: String = rand::thread_rng().sample_iter(&rand::distributions::Alphanumeric).take(40).map(char::from).collect();
     let log = std::fs::File::create(paths::data_dir().join("logs").join("strata-server.log")).map_err(|e| e.to_string())?;
@@ -194,6 +212,9 @@ fn monitor(app: AppHandle, s: Shared, gen: u64, port: u16, key: String, pid: u32
         if pid == 0 {
             // A server the user runs: it has no common /health (Ollama), so /v1/models is the check.
             let found = probe(port, Some(&key));
+            if let Some((200, body)) = http::get(port, "/health", None, Duration::from_secs(2)) {
+                note_health(&body);
+            }
             if state == "starting" {
                 match found {
                     Ok(model) => {
@@ -217,7 +238,11 @@ fn monitor(app: AppHandle, s: Shared, gen: u64, port: u16, key: String, pid: u32
             }
             continue;
         }
-        let healthy = matches!(http::get(port, "/health", None, Duration::from_secs(2)), Some((200, _)));
+        let health = http::get(port, "/health", None, Duration::from_secs(2));
+        let healthy = matches!(health, Some((200, _)));
+        if let Some((200, body)) = &health {
+            note_health(body);
+        }
         if state == "starting" {
             if healthy {
                 // Ownership check: /health is public, /v1/models needs our random key.
@@ -247,6 +272,7 @@ fn monitor(app: AppHandle, s: Shared, gen: u64, port: u16, key: String, pid: u32
 }
 
 pub fn stop(app: Option<&AppHandle>, s: &Shared) {
+    LIVE_CTX.store(0, Ordering::Relaxed);
     let child = {
         let mut g = s.lock().unwrap();
         g.gen += 1;
@@ -270,8 +296,13 @@ pub fn stop(app: Option<&AppHandle>, s: &Shared) {
 }
 
 /// Model + machine details for the Settings panel. The API key stays on this side; only data goes out.
-/// Context window of the configured model (its `--max-context`), 32768 if the config does not say.
+/// Context window: what the running Strata/PolyStrata server reports, else the config's `--max-context`
+/// (or `--ctx`), else 32768.
 pub fn context_window() -> u64 {
+    let live = LIVE_CTX.load(Ordering::Relaxed);
+    if live >= 4096 {
+        return live;
+    }
     if external() {
         return setting("serverContext", "32768").parse::<u64>().ok().filter(|n| *n >= 4096).unwrap_or(32768);
     }
@@ -280,7 +311,7 @@ pub fn context_window() -> u64 {
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| v.get("args").and_then(|a| a.as_array()).cloned())
         .and_then(|a| {
-            let i = a.iter().position(|x| x.as_str() == Some("--max-context"))?;
+            let i = a.iter().position(|x| matches!(x.as_str(), Some("--max-context" | "--ctx")))?;
             a.get(i + 1)?.as_str()?.parse::<u64>().ok()
         })
         .filter(|n| *n >= 4096)
@@ -403,6 +434,14 @@ fn cpu_stats(s: &Shared) -> (String, f32, Option<f64>) {
 mod telemetry_tests {
     use super::{current_tokens_per_second, finite_positive, last_tokens_per_second};
     use serde_json::json;
+
+    #[test]
+    fn reads_max_context_from_health() {
+        assert_eq!(super::parse_max_context(r#"{"status":"ok","max_context":131072,"service":"strata"}"#), Some(131072));
+        assert_eq!(super::parse_max_context(r#"{"status":"ok"}"#), None);
+        assert_eq!(super::parse_max_context(r#"{"max_context":512}"#), None);
+        assert_eq!(super::parse_max_context("not json"), None);
+    }
 
     #[test]
     fn telemetry_reads_live_and_last_rates_and_rejects_non_finite_values() {

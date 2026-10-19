@@ -13,7 +13,7 @@ Code: `src-tauri/src/plugins.rs` (loading, modes, effort), `src/StatusItems.tsx`
 | 1 | `<app resources>/plugins` | bundled (empty in official builds; for custom builds) |
 | 2 | `%LOCALAPPDATA%/Workbench/plugins` | user (installed with Import, or copied in) |
 
-A later folder overrides an earlier plugin with the same `id`. The app ships without plugins. `plugins/` in this repository is the public gallery: each folder is one plugin, and releases package them as zips (see *Sharing plugins* below). Keep personal plugins (your model paths, your profiles) in a separate private repository; [MAINTAINING.md](MAINTAINING.md) describes that setup.
+A later folder overrides an earlier plugin with the same `id`. The app ships without plugins. The official plugins live in [LocalWORK-plugins](https://github.com/killianmiles27/LocalWORK-plugins), one folder per plugin, and Settings → Plugins → *Get plugins* installs from it (see *Sharing plugins* below). Keep personal plugins (your model paths, your profiles) in a separate private repository; [MAINTAINING.md](MAINTAINING.md) describes that setup.
 
 ## plugin.json
 
@@ -78,16 +78,17 @@ Run configs that sit in `<strataRoot>/profiles` but that no plugin names are sti
 - The editor cannot change `exe`, `cwd`, `lib_dirs` or `env`.
 - *Save as new* writes `<profiles>/<name>.json` and gives the copy its own engine log.
 
-## The gallery plugins
+## The official plugins
 
-- `plugins/system-stats` shows CPU, RAM, GPU and VRAM readouts. A sensor the machine cannot read shows a dash. Many desktops (AMD Ryzen in particular) expose no CPU temperature to Windows without a kernel driver, so there the CPU temperature shows a dash.
-- `plugins/power-cost` shows what each task costs in electricity. GPU watts are measured with `nvidia-smi`; the CPU's share is its rated watts scaled by its load; the rest of the machine is a fixed figure you set. It is an estimate, not a meter reading. Off by default.
+- `system-stats` shows CPU, RAM, GPU and VRAM readouts. A sensor the machine cannot read shows a dash. Many desktops (AMD Ryzen in particular) expose no CPU temperature to Windows without a kernel driver, so there the CPU temperature shows a dash.
+- `power-cost` shows what each task costs in electricity. GPU watts are measured with `nvidia-smi`; the CPU's share is its rated watts scaled by its load; the rest of the machine is a fixed figure you set. It is an estimate, not a meter reading. Off by default.
 
 ## Sharing plugins
 
 - **Import:** Settings → Plugins → *Import .zip…* or *Import folder…*. The zip or folder can hold one plugin (its `plugin.json` at the top or in one subfolder) or a pack: several subfolders, each with a `plugin.json`. Importing replaces an installed copy with the same `id`.
 - **Export:** each plugin's *Export* button writes a zip that Import accepts.
-- **Publish:** add the folder to `plugins/` in this repository, with the folder name equal to the `id`. `scripts/package-plugins.ps1` writes `dist-plugins/<id>_<version>.zip` for each plugin and `LocalWORK-recommended-plugins_<app version>.zip` with all of them, for the release.
+- **Get plugins:** Settings → Plugins → *Get plugins* lists every folder with a `plugin.json` in the GitHub repositories you add (`owner/repo`, a repository link, or a `/tree/<branch>/<folder>` link). The official repository is listed by default. *Install* downloads the repository from GitHub and imports that folder like *Import folder…*; when the repository has a higher `version` than the installed copy, the button reads *Update*. Plugins that start programs arrive turned off. The list of repositories is saved as `pluginSources` in `settings.json`. Nothing is fetched while offline mode is on.
+- **Publish:** put the plugin in a public GitHub repository, one folder per plugin with the folder name equal to the `id`, and share the link. For an official plugin, open a pull request on [LocalWORK-plugins](https://github.com/killianmiles27/LocalWORK-plugins). `scripts/package-plugins.ps1` (reading a checkout of that repository) writes `dist-plugins/<id>_<version>.zip` for each plugin and `LocalWORK-recommended-plugins_<app version>.zip` with all of them, for the release.
 
 ## Checklist for a new plugin
 

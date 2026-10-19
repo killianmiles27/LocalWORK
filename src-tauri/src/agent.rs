@@ -517,7 +517,13 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 tool_args.insert(call_id.clone(), json!({"name": name, "args": args}));
                 let auto_edit = *agent.auto_edit.lock().unwrap();
                 let remembered = agent.inner.lock().unwrap().remembered.clone();
-                match policy::decide(&name, &cat, &args, &agent.workspace, auto_edit, &remembered) {
+                let offline = crate::setup::is_network_tool(&name) && crate::setup::chat_is_offline(&db.lock().unwrap(), &conv);
+                let decision = if offline {
+                    policy::Decision::Deny("This chat is in offline mode, so tools that reach the internet or other machines are turned off".into())
+                } else {
+                    policy::decide(&name, &cat, &args, &agent.workspace, auto_edit, &remembered)
+                };
+                match decision {
                     policy::Decision::Allow => {
                         if let Err(reason) = preserve_document(&agent.workspace, &cat, &name, &args, false) {
                             write_line(&mut agent.inner.lock().unwrap(), &json!({"type":"tool_deny", "call_id":call_id, "reason":reason}));

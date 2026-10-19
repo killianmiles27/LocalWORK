@@ -71,6 +71,17 @@ export default function App() {
   const [ctx, setCtx] = useState<{ used: number | null; window: number }>({ used: null, window: 32768 });
   const modeKey = useRef("default|default");
   // Set while a chat's first reply has not produced anything yet; drives the countdown.
+  const [offline, setOffline] = useState<{ chat: boolean; global: boolean; kept?: boolean }>({ chat: false, global: false });
+  const refreshOffline = (id: string | null) => {
+    if (!id) { invoke<boolean>("offline_get").then(g => setOffline({ chat: false, global: g })).catch(() => {}); return; }
+    invoke<{ chat: boolean; global: boolean }>("chat_offline_get", { conv: id }).then(o => { if (curRef.current === id) setOffline(o); }).catch(() => {});
+  };
+  useEffect(() => {
+    refreshOffline(cur);
+    const on = () => refreshOffline(curRef.current);
+    window.addEventListener("offline-changed", on);
+    return () => window.removeEventListener("offline-changed", on);
+  }, [cur]);
   const [firstWait, setFirstWait] = useState<{ conv: string; t0: number; key: string; est: number | null } | null>(null);
   const firstWaitRef = useRef(firstWait);
   firstWaitRef.current = firstWait;
@@ -338,7 +349,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
       if (epoch !== navigation.current) return;
       if (first) setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
       if (!queued) { setFiles([]); if (override === undefined) setInput(""); }
-      await invoke("agent_send", { id, text: message }); await reload(id); refreshConvs();
+      await invoke("agent_send", { id, text: message }); await reload(id); refreshConvs(); refreshOffline(id);
     } catch (e) { if (epoch === navigation.current) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); } }
   }
   async function compact() {
@@ -452,12 +463,20 @@ Attached (read with read_attachment): ${attached.join(", ")}`
           {!sidebarOpen && <button onClick={toggleSidebar} title="Show chats" aria-label="Show chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink transition-colors shrink-0"><PanelLeftOpen size={16} /></button>}
           <span className="truncate text-muted pointer-events-none">{curConv?.title}</span>
           {cur && <button onClick={() => exportChat(cur)} title="Export as Markdown" aria-label="Export as Markdown" className="ml-auto shrink-0 grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink"><Download size={16} /></button>}
+          {(offline.global || offline.chat) && <span title={offline.global ? "Offline mode is on in Settings" : "This chat is kept offline"} className="shrink-0 rounded-full border border-line px-2 py-0.5 text-xs text-muted">Offline</span>}
           {cur && <button onClick={() => setWorkspaceOpen(!workspaceOpen)} aria-label="Files & visuals" title="Files" aria-expanded={workspaceOpen} className="shrink-0 inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted hover:bg-panel"><PanelRight size={16} />Files</button>}
         </header>
         <div className={"flex flex-col flex-1 min-h-0 " + (!msgs.length && !live.busy ? "justify-center pb-[10vh]" : "")}>
             <div className={"relative min-h-0 " + (msgs.length || live.busy ? "flex-1" : "h-20 shrink-0")}>
             <div ref={scrollRef} onScroll={onScroll} className={"absolute inset-0 " + (msgs.length || live.busy ? "overflow-auto" : "overflow-hidden")}>
               <div className={"mx-auto max-w-3xl px-6 py-6 space-y-5"}>
+                {cur && offline.chat && !offline.global && !offline.kept && (
+                  <div role="status" className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-sm">
+                    <span className="flex-1 min-w-[12rem]">This chat ran in offline mode. Keep it offline, or let it use the internet now?</span>
+                    <button onClick={() => setOffline(o => ({ ...o, kept: true }))} className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-panel-2">Keep offline</button>
+                    <button onClick={() => { const id = cur; invoke("chat_offline_set", { conv: id, on: false }).then(() => refreshOffline(id)).catch(e => setErr(String(e))); }} className="rounded-lg bg-accent text-accent-fg px-2.5 py-1 text-xs">Allow internet</button>
+                  </div>
+                )}
                 {msgs.length === 0 && !live.busy && <h1 className="flex items-center justify-center gap-3 text-2xl tracking-tight"><Logo size={30} />What should we work on?</h1>}
                 {group(msgs).map((g) => g.kind === "tools"
                   ? <ToolGroup key={g.items[0].id} items={g.items} />

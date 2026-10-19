@@ -2,7 +2,7 @@
 
 A Windows desktop assistant for working with files, researching on the web, and creating documents with a model running on your own computer.
 
-LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference, a local agent for tool use, and a background Chromium browser for interactive websites. There is no hosted model service or subscription built into the app. You install the model separately.
+LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference (or [PolyStrata](https://github.com/VecSzn/PolyStrata) for models beyond Qwen), a local agent for tool use, and a background Chromium browser for interactive websites. There is no hosted model service or subscription built into the app. You install the model separately.
 
 **Yes, this is vibe-coded slop.** It was built heavily with AI assistance and is still a work in progress. Expect bugs, especially on long tasks, and check generated work before relying on it. Windows x64 is the supported target.
 
@@ -15,12 +15,12 @@ LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference, a loc
 - Local voice transcription through whisper.cpp.
 - Optional SSH access to servers you add yourself.
 - Context usage estimates, automatic compaction, and a Stop button.
-- Plugins for model modes, skills, status readouts and tools, imported and exported as zips. See the [plugin gallery](plugins/README.md).
+- Plugins for model modes, skills, status readouts and tools, imported and exported as zips. Install them from Settings → Plugins → *Get plugins*, which lists the [official plugins](https://github.com/killianmiles27/LocalWORK-plugins) and any GitHub plugin repository you add.
 - Office templates: attach a company template or example document, and results come back in that format.
 
 ## Getting started
 
-Start with the [setup guide](docs/SETUP.md). It covers Strata, model configuration, building the app, and the first-run wizard. Once installed, see the [usage guide](docs/USAGE.md). Optional extras, such as a CPU/GPU bar and an electricity cost per task, are [plugins](plugins/README.md). Running a customized copy on several PCs is covered in [MAINTAINING.md](docs/MAINTAINING.md).
+Start with the [setup guide](docs/SETUP.md). It covers Strata, model configuration, building the app, and the first-run wizard. Once installed, see the [usage guide](docs/USAGE.md). Optional extras, such as a CPU/GPU bar and an electricity cost per task, are [plugins](https://github.com/killianmiles27/LocalWORK-plugins). Running a customized copy on several PCs is covered in [MAINTAINING.md](docs/MAINTAINING.md).
 
 The repository contains source and build scripts. Model weights and runtime executables are not checked in. An app build needs the pinned tools described in [vendor/README.md](vendor/README.md).
 
