@@ -19,7 +19,7 @@ try {
   await page.addInitScript(() => {
     let callbackId = 0;
     const callbacks = {}, events = {};
-    window.fixture = { sends: [], saves: [], content: "Participants: 24", failSend: false };
+    window.fixture = { sends: [], saves: [], content: "Participants: 24", budget: "Budget: 600", failSend: false };
     window.emitFixture = (event, payload) => (events[event] ?? []).forEach(id => callbacks[id]?.({ event, payload }));
     window.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
@@ -38,8 +38,8 @@ try {
         if (cmd === "context_usage") return { used: 0, window: 32768 };
         if (cmd === "chat_offline_get") return { chat: false, global: false };
         if (cmd === "documents_list") return [{ path: "brief.docx", kind: "docx", name: "brief.docx", size: 100, modified: 1 }];
-        if (cmd === "document_preview") return { path: "brief.docx", kind: "docx", format: "html", content: `<p data-path="/body/p[1]">${window.fixture.content}</p>` };
-        if (cmd === "document_office_edit") { window.fixture.saves.push(args); window.fixture.content = args.after; return; }
+        if (cmd === "document_preview") return { path: "brief.docx", kind: "docx", format: "html", content: `<p data-path="/body/p[1]">${window.fixture.content}</p><p data-path="/body/p[2]">${window.fixture.budget}</p>` };
+        if (cmd === "document_office_edit") { window.fixture.saves.push(args); if (args.node === "/body/p[2]") window.fixture.budget = args.after; else window.fixture.content = args.after; return; }
         if (cmd === "agent_send") { window.fixture.sends.push(args); if (window.fixture.failSend) throw Error("Fixture model unavailable"); return; }
         if (cmd.startsWith("plugin:")) return;
         return null;
@@ -63,15 +63,31 @@ try {
   await page.waitForFunction(() => !document.body.textContent.includes("Earlier version · Save a copy to recover it"));
   await field.waitFor();
   await page.locator("textarea").first().fill("Keep this draft");
+  const checkRelated = panel.getByRole("button", { name: "Check related files", exact: true });
   await field.fill("Participants: 26");
   await panel.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await page.waitForFunction(() => window.fixture.saves.length === 1);
+  await checkRelated.waitFor();
+  await page.waitForTimeout(2200);
+  assert.equal(await page.evaluate(() => window.fixture.sends.length), 0, "saving must not start the AI");
+  assert.equal(await frame.locator("body").evaluate(el => el.style.zoom), "1.1");
+  await frame.locator('[data-path="/body/p[2]"]').fill("Budget: 604");
+  await panel.getByRole("button", { name: "Zoom out", exact: true }).click();
+  await field.fill("Participants: 27");
+  await panel.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await page.waitForFunction(() => window.fixture.saves.length === 3);
+  await panel.getByText("2 saved changes · AI check is optional", { exact: true }).waitFor();
+  await checkRelated.click();
   await page.waitForFunction(() => window.fixture.sends.length === 1);
   const sent = await page.evaluate(() => window.fixture.sends[0]);
   assert.equal(sent.id, "a");
-  assert.match(sent.text, /Participants: 26/);
-  assert.match(sent.text, /automatically update clear dependencies/);
+  assert.match(sent.text, /Participants: 24/);
+  assert.match(sent.text, /Participants: 27/);
+  assert.match(sent.text, /Budget: 604/);
+  assert.doesNotMatch(sent.text, /Participants: 26/);
+  assert.match(sent.text, /Check related project files/);
   assert.equal(await page.locator("textarea").first().inputValue(), "Keep this draft");
-  assert.equal(await frame.locator("body").evaluate(el => el.style.zoom), "1.1");
+  assert.equal(await checkRelated.count(), 0);
   await field.press("Control+0");
   await page.waitForFunction(() => document.querySelector('button[aria-label="Reset document zoom"]')?.textContent === "100%");
   await field.evaluate(el => {
@@ -80,36 +96,35 @@ try {
     el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
   await panel.getByRole("dialog", { name: "Comment for the assistant" }).waitFor();
-  await page.evaluate(() => window.emitFixture("agent-event", { conv: "a", ev: { type: "stream_end" } }));
-  await page.evaluate(() => window.emitFixture("model-status", { state: "stopped", port: 1, model: "fixture", detail: "" }));
-  await field.fill("Participants: 27");
-  await panel.getByRole("button", { name: "Zoom out", exact: true }).click();
-  await page.waitForFunction(() => window.fixture.saves.length === 2);
-  await page.getByText("Project b", { exact: true }).click();
-  await page.evaluate(() => window.emitFixture("model-status", { state: "ready", port: 1, model: "fixture", detail: "" }));
-  await page.waitForTimeout(2000);
-  assert.equal(await page.evaluate(() => window.fixture.sends.length), 1, "must not send project a edits in project b");
-  await page.getByText("Project a", { exact: true }).click();
-  await page.waitForFunction(() => window.fixture.sends.length === 2);
-  assert.equal(await page.evaluate(() => window.fixture.sends[1].id), "a");
-  await page.evaluate(() => {
-    window.fixture.failSend = true;
-    window.emitFixture("agent-event", { conv: "a", ev: { type: "stream_end" } });
-  });
+  await panel.getByRole("dialog").locator("input").press("Escape");
   await field.fill("Participants: 28");
   await panel.getByRole("button", { name: "Zoom out", exact: true }).click();
-  await page.waitForFunction(() => window.fixture.sends.length === 3);
+  await page.waitForFunction(() => window.fixture.saves.length === 4);
+  assert.equal(await checkRelated.isDisabled(), true, "cannot check while assistant is busy");
+  await page.evaluate(() => window.emitFixture("agent-event", { conv: "a", ev: { type: "stream_end" } }));
   await page.waitForTimeout(2200);
-  assert.equal(await page.evaluate(() => window.fixture.sends.length), 3, "failed sync must not loop");
+  assert.equal(await page.evaluate(() => window.fixture.sends.length), 1, "finishing a turn must not send pending edits");
+  await page.getByText("Project b", { exact: true }).click();
   await page.evaluate(() => window.emitFixture("model-status", { state: "stopped", port: 1, model: "fixture", detail: "" }));
   await page.waitForTimeout(100);
-  await page.evaluate(() => {
-    window.fixture.failSend = false;
-    window.emitFixture("model-status", { state: "ready", port: 1, model: "fixture", detail: "" });
-  });
-  await page.waitForFunction(() => window.fixture.sends.length === 4);
+  await page.evaluate(() => window.emitFixture("model-status", { state: "ready", port: 1, model: "fixture", detail: "" }));
+  assert.equal(await checkRelated.count(), 0, "another chat must not expose project a's pending edits");
+  await page.getByText("Project a", { exact: true }).click();
+  await checkRelated.waitFor();
+  await page.waitForTimeout(2200);
+  assert.equal(await page.evaluate(() => window.fixture.sends.length), 1, "navigation/model recovery must not start checks");
+  await page.evaluate(() => { window.fixture.failSend = true; });
+  await checkRelated.click();
+  await page.waitForFunction(() => window.fixture.sends.length === 2);
+  await checkRelated.waitFor();
+  await page.waitForTimeout(2200);
+  assert.equal(await page.evaluate(() => window.fixture.sends.length), 2, "failed check must wait for another click");
+  await page.evaluate(() => { window.fixture.failSend = false; });
+  await checkRelated.click();
+  await page.waitForFunction(() => window.fixture.sends.length === 3);
+  assert.equal(await page.evaluate(() => window.fixture.sends[2].id), "a");
   assert.deepEqual(errors, []);
-  console.log("PASS: direct typing, dependency turn, composer preservation, zoom, AI notes, chat isolation and bounded failure recovery");
+  console.log("PASS: edits stay local; explicit batched checks, composer preservation, zoom, notes, chat isolation and manual retry");
 } finally {
   await browser?.close();
   await server.close();

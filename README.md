@@ -12,7 +12,7 @@ LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference (or [P
 
 - Chats tied to a working folder, with file attachments and saved conversation history.
 - A searchable chat sidebar grouped by date, with pin and rename. You can edit an earlier message or regenerate the last reply, and keyboard shortcuts cover the common actions.
-- Word, Excel, and PowerPoint creation through OfficeCLI, with directly editable previews, document zoom, revision history, and automatic checks for related project-file updates after saved edits.
+- Word, Excel, and PowerPoint creation through OfficeCLI, with directly editable previews, document zoom, revision history, and an optional Check related files button after saved edits.
 - Web search, page reading, browser interaction, and screenshots.
 - Tables, charts, diagrams, and small interactive HTML documents.
 - Local voice transcription through whisper.cpp.

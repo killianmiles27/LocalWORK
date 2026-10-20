@@ -68,9 +68,9 @@ export default function App() {
   const [activity, setActivity] = useState<Activity | undefined>();
   const callFiles = useRef(new Map<string, string>());
   const userEdits = useRef(new Map<string, Set<string>>());
-  const pendingSync = useRef(new Map<string, { changes: DocumentChange[]; readyAt: number; failed?: boolean }>());
-  const [editTick, setEditTick] = useState(0);
-  const syncModelState = useRef(status.state);
+  const pendingSync = useRef(new Map<string, DocumentChange[]>());
+  const [, setEditTick] = useState(0);
+  const sendingRelated = useRef(false);
   const [browserTick, setBrowserTick] = useState(0);
   const [workspaceRequest, setWorkspaceRequest] = useState<{ path?: string; visual?: string; browser?: boolean; nonce: number }>();
   const [wizard, setWizard] = useState(false);
@@ -362,8 +362,6 @@ Attached (read with read_attachment): ${attached.join(", ")}`
       if (first) setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
       if (!queued) { setFiles([]); if (override === undefined) setInput(""); }
       await invoke("agent_send", { id, text: message }); await reload(id); refreshConvs(); refreshOffline(id);
-      const retry = pendingSync.current.get(id);
-      if (retry?.failed) { retry.failed = false; retry.readyAt = Date.now() + 1800; setEditTick(n => n + 1); }
       return true;
     } catch (e) {
       if (editConv && edited.length) userEdits.current.set(editConv, new Set([...(userEdits.current.get(editConv) ?? []), ...edited]));
@@ -374,37 +372,27 @@ Attached (read with read_attachment): ${attached.join(", ")}`
   function savedDocument(id: string, path: string, change?: Omit<DocumentChange, "path">) {
     const paths = userEdits.current.get(id) ?? new Set<string>();
     paths.add(path); userEdits.current.set(id, paths);
-    const pending = pendingSync.current.get(id);
-    pendingSync.current.set(id, { changes: mergeChanges(pending?.changes ?? [], { path, ...change }), readyAt: Date.now() + 1800 });
+    pendingSync.current.set(id, mergeChanges(pendingSync.current.get(id) ?? [], { path, ...change }));
     setEditTick(n => n + 1);
   }
-  // Wait for a pause in saved edits and let explicit messages finish first. Each batch is sent
-  // once, in its own chat, without consuming the composer's draft or attachments.
-  useEffect(() => {
-    if (status.state === "ready" && syncModelState.current !== "ready") {
-      for (const pending of pendingSync.current.values()) pending.failed = false;
-      setEditTick(n => n + 1);
-    }
-    syncModelState.current = status.state;
-  }, [status.state]);
-  useEffect(() => {
-    if (!cur || live.busy || queue.length || status.state !== "ready") return;
-    const pending = pendingSync.current.get(cur);
-    if (!pending || pending.failed) return;
-    const timer = setTimeout(async () => {
-      if (curRef.current !== cur || pendingSync.current.get(cur) !== pending) return;
-      pendingSync.current.delete(cur);
-      const message = documentSyncMessage(pending.changes);
-      if (!message) return;
+  // Only the file-pane button dispatches a check. Saves, navigation, ordinary messages and
+  // model recovery leave the batch alone until the user chooses to send it.
+  async function checkRelated(id: string) {
+    if (curRef.current !== id || live.busy || queue.length || !modelReady || sendingRelated.current) return;
+    const changes = pendingSync.current.get(id) ?? [];
+    const message = documentSyncMessage(changes);
+    if (!message) return;
+    sendingRelated.current = true;
+    pendingSync.current.delete(id);
+    setEditTick(n => n + 1);
+    try {
       const sent = await send(message, []);
       if (!sent) {
-        const newer = pendingSync.current.get(cur);
-        pendingSync.current.set(cur, { changes: (newer?.changes ?? []).reduce(mergeChanges, pending.changes), readyAt: Date.now() + 1800, failed: !newer });
-        // Retain for the next user action/readiness change; never spin on a failed model.
+        pendingSync.current.set(id, (pendingSync.current.get(id) ?? []).reduce(mergeChanges, changes));
+        setEditTick(n => n + 1);
       }
-    }, Math.max(0, pending.readyAt - Date.now()));
-    return () => clearTimeout(timer);
-  }, [cur, editTick, live.busy, queue.length, status.state]);
+    } finally { sendingRelated.current = false; }
+  }
   async function compact() {
     if (!cur || live.busy || !modelReady) return;
     if (!msgs.some((m) => m.role === "assistant")) { setErr("Nothing to compact yet."); return; }
@@ -661,7 +649,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
             </div>
         </div>
       </main>
-    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} browserTick={browserTick} activity={activity} canSend={modelReady} onSend={t => send(t)} onUserEdit={(p, change) => savedDocument(cur, p, change)} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
+    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} browserTick={browserTick} activity={activity} canSend={modelReady} relatedChanges={pendingSync.current.get(cur)?.length ?? 0} canCheckRelated={modelReady && !live.busy && !queue.length} onCheckRelated={() => checkRelated(cur)} onSend={t => send(t)} onUserEdit={(p, change) => savedDocument(cur, p, change)} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
       </div>
     {closeBlocked > 0 && (
       <div className="fixed inset-0 z-50 grid place-items-center bg-black/30" onClick={() => setCloseBlocked(0)}>

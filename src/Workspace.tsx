@@ -18,7 +18,7 @@ type Note = { quote: string; where: string; comment: string };
 type Picked = { text: string; where: string; top: number; left: number };
 type Props = {
   id: string; refresh: number; visuals: VisualItem[]; requested?: { path?: string; visual?: string; browser?: boolean; nonce: number }; browserTick: number;
-  activity?: Activity; canSend: boolean;
+  activity?: Activity; canSend: boolean; relatedChanges: number; canCheckRelated: boolean; onCheckRelated: () => void;
   onClose: () => void; onDraft: (text: string) => void; onSend: (text: string) => void; onUserEdit: (path: string, change?: { node: string; before: string; after: string }) => void;
 };
 
@@ -57,7 +57,7 @@ function notesMessage(file: string, notes: Note[]): string {
     "\nChange only these parts and keep everything else as it is.";
 }
 
-export default function Workspace({ id, refresh, visuals, requested, browserTick, activity, canSend, onClose, onDraft, onSend, onUserEdit }: Props) {
+export default function Workspace({ id, refresh, visuals, requested, browserTick, activity, canSend, relatedChanges, canCheckRelated, onCheckRelated, onClose, onDraft, onSend, onUserEdit }: Props) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [{ selection, revision }, setChoice] = useState({ selection: "", revision: "" });
   const setSelection = (selection: string) => setChoice(current => current.selection === selection ? current : { selection, revision: "" });
@@ -345,6 +345,12 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
           </div>
         )}
       </div>
+      {relatedChanges > 0 && <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-line px-3 py-2 text-xs">
+        <span className="text-muted">{relatedChanges} saved {relatedChanges === 1 ? "change" : "changes"} · AI check is optional</span>
+        <button onClick={async () => { await edits.current; onCheckRelated(); }} disabled={!canCheckRelated || working || editing || officeActive || pendingOfficeEdits.current > 0}
+          title={officeActive || pendingOfficeEdits.current > 0 ? "Click away from the document to finish saving first" : "Ask the assistant to check related project files when you are ready"}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 hover:border-accent disabled:opacity-40"><Sparkles size={13} />Check related files</button>
+      </div>}
       {notes.length > 0 && (
         <footer className="shrink-0 border-t border-line bg-panel/40 px-3 py-2 text-sm">
           <div className="mb-1.5 flex items-center gap-2 text-xs text-muted"><MessageSquarePlus size={13} /><span className="flex-1">{notes.length} {notes.length === 1 ? "note" : "notes"} for the assistant</span><button onClick={() => setNotes([])} className="hover:text-ink">Clear</button></div>

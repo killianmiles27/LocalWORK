@@ -21,6 +21,7 @@ test("successive edits retain the original value and only the latest replacement
 test("undo to the saved value does not trigger a dependency turn", () => {
   const changes = mergeChanges([{ path: "brief.docx", node: "/body/p[2]", before: "24", after: "25" }],
     { path: "brief.docx", node: "/body/p[2]", before: "25", after: "24" });
+  assert.equal(changes.length, 0);
   assert.equal(documentSyncMessage(changes), "");
 });
 
