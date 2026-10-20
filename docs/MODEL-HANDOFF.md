@@ -26,6 +26,8 @@ Native no-op responses can occur during a long first user turn. The patched agen
 
 Shell tasks receive `LOCALWORK_PYTHON`, the same configured interpreter used by Workbench MCP. This avoids guessing which ambient `python` installation to use. It does not install extra libraries or alter the user's PATH.
 
+Shell command children have closed stdin so they cannot block on or consume the agent's protocol input. Output-limit recovery keeps tools available for at most two attempts. A recovery request uses disabled thinking and low reasoning effort; the saved profile and ordinary request settings are unchanged. Repeated reasoning detection is limited to unsigned native local text streams, before tool calls have been issued. If recovery cannot progress, the host displays an incomplete notice and retains completed writes.
+
 ## Testing
 
 scripts/e2e/check-agent-context.py exercises the real agent against an isolated HTTP model fixture. scripts/e2e/run-all.ps1 uses a stub model by default; -RealStrata explicitly opts into model/GPU use. Deterministic browser probes verify tool behavior, not reasoning quality.

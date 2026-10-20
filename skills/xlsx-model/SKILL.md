@@ -20,3 +20,7 @@ For an attached workbook, inspect its sheet names, headers and formulas, then ma
 ```
 
 Replace the example sheet, ranges, labels and aggregation with values verified from the workbook. Use formulas over source ranges; expand the summary rows only to the number of categories requested. Batch operation results are summarized by the tool; if one fails, fix the first reported operation and rerun the batch.
+
+## Reliable analysis and scratch work
+
+Use the workbook runtime, formulas, or a small program to inspect and aggregate data; do not mentally enumerate hundreds of cells. Preserve the source and distinguish facts directly present in it from estimates or assumptions. Never infer a currency the source does not state. For household projections, treat sinking-fund contributions as cashflow allocations and keep them distinct from savings or net-worth growth. Use a unique workspace-local scratch path for temporary work; never delete a shared fixed temporary file.

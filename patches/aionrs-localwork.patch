@@ -1004,7 +1004,7 @@ index 66df192..8f41028 100644
      }
  
 diff --git a/crates/aion-agent/src/engine.rs b/crates/aion-agent/src/engine.rs
-index 3bf6767..c5d8702 100644
+index 3bf6767..ef4c5dc 100644
 --- a/crates/aion-agent/src/engine.rs
 +++ b/crates/aion-agent/src/engine.rs
 @@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
@@ -1016,7 +1016,319 @@ index 3bf6767..c5d8702 100644
  use crate::compact::emergency::is_at_emergency_limit;
  use crate::compact::estimate::{estimate_tokens_from_tool_image, estimate_tokens_from_tool_result};
  use crate::compact::micro::{microcompact, should_microcompact};
-@@ -1124,12 +1124,32 @@ impl AgentEngine {
+@@ -21,14 +21,16 @@ use crate::output::OutputSink;
+ use crate::plan::prompt::plan_mode_instructions;
+ use crate::plan::state::PlanState;
+ use crate::session::{Session, SessionManager};
+-use crate::stream::StreamOutcome;
++use crate::stream::{ReasoningRepetition, StreamOutcome};
+ use crate::tool_call::{
+     DEFAULT_MAX_TOOL_CALL_FAILURE, DEFAULT_MAX_TOOL_CALL_MALFORMED, ToolCallFailureFingerprint,
+     ToolCallMalformedFingerprint, merge_tool_results, tool_call_failure_fingerprint, tool_call_malformed_fingerprint,
+     tool_call_malformed_reason,
+ };
+ use crate::tool_policy::ToolPolicy;
+-use crate::turn::{FinalizationReason, ToolLoopWarning, TurnGuardAction, TurnGuards, TurnKind, TurnOutcome};
++use crate::turn::{
++    FinalizationReason, RecoveryReason, ToolLoopWarning, TurnGuardAction, TurnGuards, TurnKind, TurnOutcome,
++};
+ use aion_compact::CompactLevel;
+ use aion_config::compact::CompactConfig;
+ use aion_config::compat::ProviderCompat;
+@@ -95,6 +97,8 @@ pub struct AgentEngine {
+     /// every message appended via `push_history`, including late
+     /// `abort_current_turn` tool results.
+     current_turn_id: Option<String>,
++    /// Latest successful plan status for this run, independent of compacted history.
++    current_run_plan_unfinished: Option<bool>,
+     /// Maximum output tokens requested from the provider per turn.
+     max_tokens: Option<u32>,
+     /// Optional cap on counted model turns within a single run.
+@@ -210,6 +214,7 @@ impl AgentEngine {
+             msg_id: String::new(),
+             pending_turn_id: None,
+             current_turn_id: None,
++            current_run_plan_unfinished: None,
+             max_turns_per_run: config.max_turns,
+             max_tool_call_malformed_turns: config
+                 .max_tool_call_malformed_turns
+@@ -307,6 +312,7 @@ impl AgentEngine {
+             msg_id: String::new(),
+             pending_turn_id: None,
+             current_turn_id: None,
++            current_run_plan_unfinished: None,
+             max_turns_per_run: config.max_turns,
+             max_tool_call_malformed_turns: config
+                 .max_tool_call_malformed_turns
+@@ -494,6 +500,7 @@ impl AgentEngine {
+ 
+     async fn run_inner(&mut self, content_blocks: Vec<ContentBlock>, msg_id: &str) -> Result<AgentResult, AgentError> {
+         self.msg_id = msg_id.to_string();
++        self.current_run_plan_unfinished = None;
+         self.current_turn_id = Some(
+             self.pending_turn_id
+                 .take()
+@@ -511,6 +518,10 @@ impl AgentEngine {
+             self.max_tool_call_malformed_turns,
+             self.max_tool_call_failure_turns,
+         );
++        let mut next_kind = TurnKind::Normal;
++        let mut generation_recoveries = 0;
++        let mut plan_retry_used = false;
++        let mut rounds_without_plan_update = 0;
+         loop {
+             if let Some(limit) = guards.turn_budget_reached() {
+                 self.save_session();
+@@ -527,7 +538,8 @@ impl AgentEngine {
+                 });
+             }
+ 
+-            let outcome = self.run_turn(TurnKind::Normal).await?;
++            let outcome = self.run_turn(next_kind).await?;
++            next_kind = TurnKind::Normal;
+             guards.record_counted_turn();
+ 
+             let tool_calls = match TurnOutcome::from_stream(outcome) {
+@@ -541,6 +553,17 @@ impl AgentEngine {
+                     let assistant_content = build_assistant_content(&outcome);
+                     self.push_history(Role::Assistant, assistant_content);
+                     self.save_session();
++                    if self.current_plan_unfinished() {
++                        if !plan_retry_used {
++                            plan_retry_used = true;
++                            self.output.emit_info(
++                                "Generation recovery: the plan has unfinished work; continuing with tools available.",
++                            );
++                            next_kind = TurnKind::Recovery(RecoveryReason::UnfinishedPlan);
++                            continue;
++                        }
++                        return Ok(self.incomplete_run("The run ended with unfinished plan steps. Requested deliverables may still be missing or unverified.", guards.counted_turns(), StopReason::MaxTurns));
++                    }
+                     return Ok(AgentResult {
+                         text: outcome.assistant_text,
+                         stop_reason: outcome.stop_reason,
+@@ -549,17 +572,36 @@ impl AgentEngine {
+                     });
+                 }
+                 TurnOutcome::Truncated(outcome) => {
+-                    let assistant_content = build_assistant_content(&outcome);
+-                    self.push_history(Role::Assistant, assistant_content);
++                    // Keep emitted reasoning in the host's debug transcript, but do not
++                    // feed the same unsigned scratch loop into the next generation.
++                    let mut content = build_assistant_content(&outcome);
++                    content.retain(|b| !matches!(b, ContentBlock::Thinking { signature: None, .. }));
++                    if content.is_empty() {
++                        content.push(ContentBlock::Text {
++                            text:
++                                "[Generation interrupted before a completed action; resume from verified tool results.]"
++                                    .into(),
++                        });
++                    }
++                    self.push_history(Role::Assistant, content);
++                    self.refresh_local_context_estimate();
+                     self.save_session();
+-                    return self
+-                        .finalize_once(
+-                            FinalizationReason::MaxTokens,
+-                            outcome.assistant_text,
+-                            guards.counted_turns(),
+-                            StopReason::MaxTokens,
+-                        )
+-                        .await;
++                    if generation_recoveries >= 2 {
++                        return Ok(self.incomplete_run("Generation repeatedly stalled or reached its output limit. Completed files are preserved; remaining work is unfinished.", guards.counted_turns(), StopReason::MaxTokens));
++                    }
++                    generation_recoveries += 1;
++                    let reason = if outcome.reasoning_repeated {
++                        RecoveryReason::RepeatedReasoning
++                    } else {
++                        RecoveryReason::OutputLimit
++                    };
++                    self.output.emit_info(if outcome.reasoning_repeated {
++                        "Generation recovery: repeated reasoning detected; continuing with tools available."
++                    } else {
++                        "Generation recovery: response output limit reached; continuing with tools available."
++                    });
++                    next_kind = TurnKind::Recovery(reason);
++                    continue;
+                 }
+                 TurnOutcome::EmptyFinal(outcome) => {
+                     let retry_allowed = guards.allow_empty_final_retry();
+@@ -607,6 +649,22 @@ impl AgentEngine {
+                 all_tool_results_error,
+             } = self.execute_tool_round(&tool_calls).await?;
+ 
++            if self.record_current_plan(&tool_calls, &tool_results) {
++                rounds_without_plan_update = 0;
++            } else if self.current_plan_unfinished()
++                && tool_results
++                    .iter()
++                    .any(|b| matches!(b, ContentBlock::ToolResult { is_error: false, .. }))
++            {
++                rounds_without_plan_update += 1;
++                if rounds_without_plan_update >= 3 {
++                    // A transient nudge in the next ordinary request costs no
++                    // extra model call and never infers completion itself.
++                    next_kind = TurnKind::Recovery(RecoveryReason::UnfinishedPlan);
++                    rounds_without_plan_update = 0;
++                }
++            }
++
+             // Apply any context modifiers from skill executions before the next turn.
+             self.apply_context_modifiers(&tool_modifiers);
+ 
+@@ -675,8 +733,16 @@ impl AgentEngine {
+             messages,
+             tools,
+             max_tokens: self.max_tokens,
+-            thinking: self.thinking.clone(),
+-            reasoning_effort: self.reasoning_effort.clone(),
++            thinking: if matches!(kind, TurnKind::Recovery(_)) {
++                Some(ThinkingConfig::Disabled)
++            } else {
++                self.thinking.clone()
++            },
++            reasoning_effort: if matches!(kind, TurnKind::Recovery(_)) {
++                Some("low".into())
++            } else {
++                self.reasoning_effort.clone()
++            },
+         }
+     }
+ 
+@@ -895,6 +961,54 @@ impl AgentEngine {
+         .await
+     }
+ 
++    fn incomplete_run(&mut self, why: &str, turns: usize, stop_reason: StopReason) -> AgentResult {
++        let message = format!("Run incomplete: {why}");
++        self.output.emit_info(&message);
++        self.save_session();
++        AgentResult {
++            text: message,
++            stop_reason,
++            usage: self.total_usage.clone(),
++            turns,
++        }
++    }
++
++    fn current_plan_unfinished(&self) -> bool {
++        self.current_run_plan_unfinished.unwrap_or(false)
++    }
++
++    fn record_current_plan(&mut self, calls: &[ContentBlock], results: &[ContentBlock]) -> bool {
++        let mut updated = false;
++        for block in calls {
++            if let ContentBlock::ToolUse { id, name, input, .. } = block {
++                if name.rsplit("__").next() != Some("update_plan") {
++                    continue;
++                }
++                let succeeded = results.iter().any(
++                    |b| matches!(b, ContentBlock::ToolResult { tool_use_id, is_error: false, .. } if tool_use_id == id),
++                );
++                if !succeeded {
++                    continue;
++                }
++                let args = input.get("arguments").unwrap_or(input);
++                if let Some(steps) = args.get("steps").and_then(|v| v.as_array()) {
++                    updated = true;
++                    self.current_run_plan_unfinished = Some(
++                        steps
++                            .iter()
++                            .filter(|s| {
++                                s.get("text")
++                                    .and_then(|v| v.as_str())
++                                    .is_some_and(|t| !t.trim().is_empty())
++                            })
++                            .any(|s| s.get("status").and_then(|v| v.as_str()) != Some("done")),
++                    );
++                }
++            }
++        }
++        updated
++    }
++
+     async fn finalize_once(
+         &mut self,
+         reason: FinalizationReason,
+@@ -902,8 +1016,17 @@ impl AgentEngine {
+         counted_turns: usize,
+         fallback_stop_reason: StopReason,
+     ) -> Result<AgentResult, AgentError> {
++        let fallback_stop_reason = if self.current_plan_unfinished() {
++            StopReason::MaxTurns
++        } else {
++            fallback_stop_reason
++        };
+         let outcome = self.run_turn(TurnKind::Finalization(reason)).await?;
+-        let combined_text = format!("{}{}", prefix_text, outcome.assistant_text);
++        let combined_text = if prefix_text.trim().is_empty() {
++            outcome.assistant_text.clone()
++        } else {
++            format!("{}\n\n{}", prefix_text, outcome.assistant_text)
++        };
+         let is_success = outcome.tool_calls.is_empty()
+             && outcome.stop_reason == StopReason::EndTurn
+             && !outcome.assistant_text.trim().is_empty();
+@@ -912,9 +1035,20 @@ impl AgentEngine {
+             let assistant_content = build_assistant_content(&outcome);
+             self.push_history(Role::Assistant, assistant_content);
+             self.save_session();
++            let incomplete = self.current_plan_unfinished()
++                || matches!(reason, FinalizationReason::ToolFailure | FinalizationReason::TurnBudget);
++            if incomplete {
++                self.output.emit_info("Run incomplete: the task stopped before all requested work was verified. Review the remaining plan steps and the latest tool results.");
++            }
+             return Ok(AgentResult {
+                 text: combined_text,
+-                stop_reason: StopReason::EndTurn,
++                stop_reason: if self.current_plan_unfinished() {
++                    StopReason::MaxTurns
++                } else if incomplete {
++                    fallback_stop_reason
++                } else {
++                    StopReason::EndTurn
++                },
+                 usage: self.total_usage.clone(),
+                 turns: counted_turns,
+             });
+@@ -965,6 +1099,8 @@ impl AgentEngine {
+         let mut tool_calls: Vec<ContentBlock> = Vec::new();
+         let mut stop_reason = StopReason::EndTurn;
+         let mut usage = TokenUsage::default();
++        let mut repetition = ReasoningRepetition::default();
++        let mut reasoning_repeated = false;
+ 
+         while let Some(event) = rx.recv().await {
+             match event {
+@@ -994,6 +1130,18 @@ impl AgentEngine {
+                 LlmEvent::ThinkingDelta(text) => {
+                     self.output.emit_thinking(&text, &self.msg_id);
+                     thinking_text.push_str(&text);
++                    // Native local text models use unsigned reasoning. Do not cut
++                    // signed/opaque provider histories or an already-issued tool call.
++                    if self.provider.native_compaction_enabled()
++                        && thinking_signature.is_none()
++                        && provider_items.is_empty()
++                        && tool_calls.is_empty()
++                        && repetition.observe(&thinking_text)
++                    {
++                        reasoning_repeated = true;
++                        stop_reason = StopReason::MaxTokens;
++                        break;
++                    }
+                 }
+                 LlmEvent::ThinkingSignature(signature) => {
+                     thinking_signature = Some(signature);
+@@ -1022,6 +1170,7 @@ impl AgentEngine {
+             tool_calls,
+             stop_reason,
+             usage,
++            reasoning_repeated,
+         })
+     }
+ 
+@@ -1124,12 +1273,32 @@ impl AgentEngine {
  
      /// Run the multi-level compaction pipeline before each API call.
      ///
@@ -1054,7 +1366,7 @@ index 3bf6767..c5d8702 100644
              let result = microcompact(&mut self.messages, &self.compact_config);
              if result.cleared_count > 0 {
                  self.output.emit_info(&format!(
-@@ -1165,24 +1185,62 @@ impl AgentEngine {
+@@ -1165,24 +1334,62 @@ impl AgentEngine {
          if should_compact && !self.compact_state.is_circuit_broken(&self.compact_config) {
              let provider = Arc::clone(&self.provider);
              let mut compact_messages = self.messages.clone();
@@ -1122,7 +1434,7 @@ index 3bf6767..c5d8702 100644
                      self.save_session();
                      compacted = true;
                  }
-@@ -1191,6 +1249,11 @@ impl AgentEngine {
+@@ -1191,6 +1398,11 @@ impl AgentEngine {
                  }
                  Err(e) => {
                      self.output.emit_error(&format!("Autocompact failed: {}", e));
@@ -1134,7 +1446,7 @@ index 3bf6767..c5d8702 100644
                  }
              }
          } else if should_compact {
-@@ -1217,14 +1280,20 @@ impl AgentEngine {
+@@ -1217,14 +1429,20 @@ impl AgentEngine {
              }
          }
  
@@ -1161,7 +1473,7 @@ index 3bf6767..c5d8702 100644
              });
          }
  
-@@ -1436,10 +1505,16 @@ impl AgentEngine {
+@@ -1436,10 +1654,16 @@ impl AgentEngine {
          // the command is not modified during execution.
          let cmd_ptr = cmd as *const dyn SlashCommand;
  
@@ -1180,10 +1492,34 @@ index 3bf6767..c5d8702 100644
              model: &self.model,
              output: self.output.as_ref(),
 diff --git a/crates/aion-agent/src/engine_test.rs b/crates/aion-agent/src/engine_test.rs
-index ce0f213..40e2e09 100644
+index ce0f213..ea8dc68 100644
 --- a/crates/aion-agent/src/engine_test.rs
 +++ b/crates/aion-agent/src/engine_test.rs
-@@ -1130,6 +1130,339 @@ mod tests_compact {
+@@ -57,6 +57,7 @@ mod tests_set_config {
+             msg_id: String::new(),
+             pending_turn_id: None,
+             current_turn_id: None,
++            current_run_plan_unfinished: None,
+             max_turns_per_run: Some(10),
+             max_tool_call_malformed_turns: 3,
+             max_tool_call_failure_turns: 3,
+@@ -435,6 +436,7 @@ mod tests_phase6 {
+             msg_id: String::new(),
+             pending_turn_id: None,
+             current_turn_id: None,
++            current_run_plan_unfinished: None,
+             max_turns_per_run: Some(10),
+             max_tool_call_malformed_turns: 3,
+             max_tool_call_failure_turns: 3,
+@@ -722,6 +724,7 @@ mod tests_compact {
+             msg_id: String::new(),
+             pending_turn_id: None,
+             current_turn_id: None,
++            current_run_plan_unfinished: None,
+             max_turns_per_run: Some(10),
+             max_tool_call_malformed_turns: 3,
+             max_tool_call_failure_turns: 3,
+@@ -1130,6 +1133,380 @@ mod tests_compact {
          ));
      }
  
@@ -1262,6 +1598,47 @@ index ce0f213..40e2e09 100644
 +        engine.context_state.replace_with_provider_usage(8000);
 +        engine
 +    }
++    #[test]
++    fn current_plan_guard_survives_history_replacement_and_ignores_failed_updates() {
++        let mut engine = native_engine();
++        let call = ContentBlock::ToolUse {
++            id: "plan".into(),
++            name: "update_plan".into(),
++            input: json!({"steps":[{"text":"Create and verify files","status":"doing"}]}),
++            extra: None,
++        };
++        engine.record_current_plan(
++            &[call],
++            &[ContentBlock::ToolResult {
++                tool_use_id: "plan".into(),
++                content: "Shown".into(),
++                is_error: false,
++            }],
++        );
++        engine.messages = vec![Message::new(
++            Role::User,
++            vec![ContentBlock::Text {
++                text: "compacted checkpoint".into(),
++            }],
++        )];
++        assert!(engine.current_plan_unfinished());
++        let failed = ContentBlock::ToolUse {
++            id: "plan-fail".into(),
++            name: "update_plan".into(),
++            input: json!({"steps":[{"text":"Create and verify files","status":"done"}]}),
++            extra: None,
++        };
++        engine.record_current_plan(
++            &[failed],
++            &[ContentBlock::ToolResult {
++                tool_use_id: "plan-fail".into(),
++                content: "failed".into(),
++                is_error: true,
++            }],
++        );
++        assert!(engine.current_plan_unfinished());
++    }
++
 +    #[tokio::test]
 +    async fn native_auto_preserves_tool_content_and_canonical_ids() {
 +        let mut engine = native_engine();
@@ -1523,6 +1900,197 @@ index ce0f213..40e2e09 100644
      // -- Emergency check fires when at limit --
  
      #[tokio::test]
+@@ -1478,6 +1855,7 @@ mod tests_plan_mode {
+             msg_id: String::new(),
+             pending_turn_id: None,
+             current_turn_id: None,
++            current_run_plan_unfinished: None,
+             max_turns_per_run: Some(10),
+             max_tool_call_malformed_turns: 3,
+             max_tool_call_failure_turns: 3,
+@@ -1700,6 +2078,7 @@ mod tests_handle_command {
+             msg_id: String::new(),
+             pending_turn_id: None,
+             current_turn_id: None,
++            current_run_plan_unfinished: None,
+             max_turns_per_run: Some(10),
+             max_tool_call_malformed_turns: 3,
+             max_tool_call_failure_turns: 3,
+@@ -2034,7 +2413,7 @@ mod tests_handle_command {
+ 
+         assert_eq!(failed_executions.load(Ordering::SeqCst), 3);
+         assert_eq!(successful_executions.load(Ordering::SeqCst), 3);
+-        assert_eq!(result.stop_reason, StopReason::EndTurn);
++        assert_eq!(result.stop_reason, StopReason::MaxTurns);
+         assert_eq!(result.turns, 3);
+         assert!(result.text.contains("tool is blocked"));
+ 
+@@ -2520,14 +2899,15 @@ mod tests_loop_helpers {
+ 
+     #[test]
+     fn turn_kind_max_tokens_prompt_names_truncation() {
+-        let kind = TurnKind::Finalization(FinalizationReason::MaxTokens);
++        let kind = TurnKind::Recovery(crate::turn::RecoveryReason::OutputLimit);
+         let prompt = kind
+             .control_prompt()
+             .expect("max token continuation must have a prompt");
+ 
+-        assert_eq!(kind.diagnostic_phase(), "max_tokens_finalization");
+-        assert!(prompt.contains("previous response was cut off"));
+-        assert!(prompt.contains("Finish the answer"));
++        assert_eq!(kind.diagnostic_phase(), "generation_recovery");
++        assert!(prompt.contains("output limit"));
++        assert!(prompt.contains("tools available"));
++        assert!(!kind.disable_tools());
+     }
+ 
+     #[test]
+@@ -2558,6 +2938,7 @@ mod tests_loop_helpers {
+         StreamOutcome {
+             assistant_text: assistant_text.to_string(),
+             thinking_text: String::new(),
++            reasoning_repeated: false,
+             thinking_signature: None,
+             provider_items: Vec::new(),
+             tool_calls,
+@@ -2726,6 +3107,7 @@ mod tests_tool_policy_enforcement {
+             msg_id: "test-message".to_string(),
+             pending_turn_id: None,
+             current_turn_id: None,
++            current_run_plan_unfinished: None,
+             max_tokens: Some(4096),
+             max_turns_per_run: Some(10),
+             max_tool_call_malformed_turns: 3,
+diff --git a/crates/aion-agent/src/stream.rs b/crates/aion-agent/src/stream.rs
+index 18f95e7..746a707 100644
+--- a/crates/aion-agent/src/stream.rs
++++ b/crates/aion-agent/src/stream.rs
+@@ -12,4 +12,49 @@ pub(crate) struct StreamOutcome {
+     pub(crate) tool_calls: Vec<ContentBlock>,
+     pub(crate) stop_reason: StopReason,
+     pub(crate) usage: TokenUsage,
++    pub(crate) reasoning_repeated: bool,
++}
++
++/// Check a bounded recent suffix periodically, not on every token. Three copies
++/// of a long passage indicate stalled reasoning rather than a useful recap.
++#[derive(Default)]
++pub(crate) struct ReasoningRepetition {
++    checked_at: usize,
++}
++impl ReasoningRepetition {
++    pub(crate) fn observe(&mut self, text: &str) -> bool {
++        if text.len() < 8192 || text.len().saturating_sub(self.checked_at) < 512 {
++            return false;
++        }
++        self.checked_at = text.len();
++        let mut start = text.len().saturating_sub(1024);
++        while !text.is_char_boundary(start) {
++            start += 1;
++        }
++        let needle = &text[start..];
++        let mut from = start.saturating_sub(32768);
++        while !text.is_char_boundary(from) {
++            from += 1;
++        }
++        text[from..start].match_indices(needle).take(2).count() >= 2
++    }
++}
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn stops_long_repetition_but_not_unique_or_short_reasoning() {
++        let paragraph = "Plan the same formulas again without executing a tool. ".repeat(30);
++        let mut guard = ReasoningRepetition::default();
++        assert!(!guard.observe(&paragraph));
++        assert!(guard.observe(&paragraph.repeat(6)));
++        let unique = (0..3000)
++            .map(|n| format!("different evidence {n}; "))
++            .collect::<String>();
++        assert!(!ReasoningRepetition::default().observe(&unique));
++    }
++    #[test]
++    fn checks_utf8_boundaries_safely() {
++        assert!(ReasoningRepetition::default().observe(&"计算→résumé unique paragraph. ".repeat(500)));
++    }
+ }
+diff --git a/crates/aion-agent/src/turn.rs b/crates/aion-agent/src/turn.rs
+index 28c4fb5..2cbb468 100644
+--- a/crates/aion-agent/src/turn.rs
++++ b/crates/aion-agent/src/turn.rs
+@@ -36,7 +36,6 @@ impl TurnOutcome {
+ pub(crate) enum FinalizationReason {
+     TurnBudget,
+     ToolFailure,
+-    MaxTokens,
+     EmptyFinal,
+ }
+ 
+@@ -49,9 +48,6 @@ impl FinalizationReason {
+             FinalizationReason::ToolFailure => {
+                 "Tool execution repeatedly failed without making progress. Review the latest tool errors and try again after resolving the blocker."
+             }
+-            FinalizationReason::MaxTokens => {
+-                "The response was cut off by the token limit and could not be completed automatically."
+-            }
+             FinalizationReason::EmptyFinal => "The model finished without visible answer text after one retry.",
+         }
+     }
+@@ -60,9 +56,17 @@ impl FinalizationReason {
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(crate) enum TurnKind {
+     Normal,
++    Recovery(RecoveryReason),
+     Finalization(FinalizationReason),
+ }
+ 
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(crate) enum RecoveryReason {
++    OutputLimit,
++    RepeatedReasoning,
++    UnfinishedPlan,
++}
++
+ impl TurnKind {
+     pub(crate) fn disable_tools(self) -> bool {
+         matches!(self, Self::Finalization(_))
+@@ -71,15 +75,21 @@ impl TurnKind {
+     pub(crate) fn control_prompt(self) -> Option<&'static str> {
+         match self {
+             Self::Normal => None,
++            Self::Recovery(RecoveryReason::OutputLimit) => Some(
++                "The last generation reached its output limit before completing an action. Continue the original task with tools available. Use verified tool results, update the plan, and execute the next small action now. Do not repeat the analysis or manually enumerate a large batch; generate repetitive edits with a short program or smaller batches. Do not claim uncreated deliverables are finished.",
++            ),
++            Self::Recovery(RecoveryReason::RepeatedReasoning) => Some(
++                "The last generation repeated the same reasoning without making progress. Stop replanning and execute the next concrete tool action for the original task. Use a short program for repetitive edits. Update the plan from confirmed results. Tools remain available; finish and verify the requested deliverables before the final reply.",
++            ),
++            Self::Recovery(RecoveryReason::UnfinishedPlan) => Some(
++                "Your current plan still has unfinished steps. Continue the authorized task now with tools available. Mark completed steps using confirmed results, create and verify the remaining deliverables, and update the plan before replying. If a genuine blocker prevents progress, explain it plainly and leave those steps unfinished. Do not promise to perform the work in a later turn.",
++            ),
+             Self::Finalization(FinalizationReason::TurnBudget) => {
+                 Some("Do not call any more tools. Use the tool results already provided and give the final answer now.")
+             }
+             Self::Finalization(FinalizationReason::ToolFailure) => Some(
+                 "Tool execution repeatedly failed without making progress. Do not call any more tools. Summarize what was completed, explain the concrete blocker using the latest tool results, and state what the user should change or provide next. Do not mention internal retry counters.",
+             ),
+-            Self::Finalization(FinalizationReason::MaxTokens) => Some(
+-                "The previous response was cut off by the token limit. Finish the answer now. Do not call any tools.",
+-            ),
+             Self::Finalization(FinalizationReason::EmptyFinal) => Some(
+                 "The previous assistant response finished without visible answer text. Provide a concise visible answer now. Do not send reasoning only. Do not call any tools.",
+             ),
+@@ -89,9 +99,9 @@ impl TurnKind {
+     pub(crate) fn diagnostic_phase(self) -> &'static str {
+         match self {
+             Self::Normal => "normal",
++            Self::Recovery(_) => "generation_recovery",
+             Self::Finalization(FinalizationReason::TurnBudget) => "turn_budget_finalization",
+             Self::Finalization(FinalizationReason::ToolFailure) => "tool_failure_finalization",
+-            Self::Finalization(FinalizationReason::MaxTokens) => "max_tokens_finalization",
+             Self::Finalization(FinalizationReason::EmptyFinal) => "empty_final_retry",
+         }
+     }
 diff --git a/crates/aion-agent/tests/autocompact_test.rs b/crates/aion-agent/tests/autocompact_test.rs
 index 0104c6a..828d762 100644
 --- a/crates/aion-agent/tests/autocompact_test.rs
@@ -1554,6 +2122,205 @@ index 0104c6a..828d762 100644
  }
  
  // ── TC-2.4-09: Summary formatting (normal) ──────────────────────────────────
+diff --git a/crates/aion-agent/tests/engine_test.rs b/crates/aion-agent/tests/engine_test.rs
+index 11809dc..ce01058 100644
+--- a/crates/aion-agent/tests/engine_test.rs
++++ b/crates/aion-agent/tests/engine_test.rs
+@@ -378,7 +378,7 @@ async fn duplicate_tool_names_emit_distinct_tool_use_ids() {
+ // ---------------------------------------------------------------------------
+ // test_engine_max_tokens_handling
+ //
+-// Verifies that a MaxTokens stop reason triggers one tool-disabled
++// Verifies that a MaxTokens stop reason triggers one tool-enabled
+ // continuation request and accumulates usage from both model calls.
+ // ---------------------------------------------------------------------------
+ #[tokio::test]
+@@ -423,14 +423,14 @@ async fn test_engine_max_tokens_handling() {
+         .expect("engine should succeed");
+ 
+     assert_eq!(result.stop_reason, StopReason::EndTurn);
+-    assert_eq!(result.text, "partial finished");
+-    assert_eq!(result.turns, 1);
++    assert_eq!(result.text, "finished");
++    assert_eq!(result.turns, 2);
+     assert_eq!(result.usage.input_tokens, 220);
+     assert_eq!(result.usage.output_tokens, 110);
+ 
+     let recorded = requests.lock().unwrap();
+     assert_eq!(recorded.len(), 2);
+-    assert_eq!(recorded[1].tool_count, 0);
++    assert!(recorded[1].tool_count > 0);
+     let last_message = recorded[1]
+         .messages
+         .last()
+@@ -439,7 +439,7 @@ async fn test_engine_max_tokens_handling() {
+     assert!(
+         matches!(
+             &last_message.content[..],
+-            [ContentBlock::Text { text }] if text.contains("previous response was cut off")
++            [ContentBlock::Text { text }] if text.contains("output limit")
+         ),
+         "finalization prompt should explain the max tokens continuation"
+     );
+@@ -623,7 +623,7 @@ async fn empty_final_falls_back_after_one_empty_retry() {
+ }
+ 
+ #[tokio::test]
+-async fn max_tokens_continuation_does_not_increment_reported_turns() {
++async fn max_tokens_recovery_counts_turns_and_honors_budget() {
+     let provider = Arc::new(MockLlmProvider::with_turns(vec![
+         vec![
+             LlmEvent::TextDelta("partial ".to_string()),
+@@ -641,7 +641,7 @@ async fn max_tokens_continuation_does_not_increment_reported_turns() {
+         ],
+     ]));
+     let mut config = test_config();
+-    config.max_turns = Some(1);
++    config.max_turns = Some(2);
+     let registry = ToolRegistry::new();
+     let output = silent_output();
+ 
+@@ -651,13 +651,13 @@ async fn max_tokens_continuation_does_not_increment_reported_turns() {
+         .await
+         .expect("engine should succeed");
+ 
+-    assert_eq!(result.text, "partial finished");
++    assert_eq!(result.text, "finished");
+     assert_eq!(result.stop_reason, StopReason::EndTurn);
+-    assert_eq!(result.turns, 1);
++    assert_eq!(result.turns, 2);
+ }
+ 
+ #[tokio::test]
+-async fn max_tokens_finalization_tool_call_falls_back_without_persisting_tool_use() {
++async fn max_tokens_recovery_executes_and_persists_paired_tool_call() {
+     let dir = tempdir().expect("tempdir should be created");
+     let provider = Arc::new(FullRecordingRequestProvider::new(vec![
+         vec![
+@@ -669,7 +669,7 @@ async fn max_tokens_finalization_tool_call_falls_back_without_persisting_tool_us
+         ],
+         vec![
+             LlmEvent::ToolUse {
+-                id: "bad-tool".to_string(),
++                id: "recovered-tool".to_string(),
+                 name: "mock_tool".to_string(),
+                 input: json!({}),
+                 extra: None,
+@@ -679,6 +679,13 @@ async fn max_tokens_finalization_tool_call_falls_back_without_persisting_tool_us
+                 usage: TokenUsage::default(),
+             },
+         ],
++        vec![
++            LlmEvent::TextDelta("File created and verified".into()),
++            LlmEvent::Done {
++                stop_reason: StopReason::EndTurn,
++                usage: TokenUsage::default(),
++            },
++        ],
+     ]));
+     let requests = provider.requests();
+ 
+@@ -699,34 +706,34 @@ async fn max_tokens_finalization_tool_call_falls_back_without_persisting_tool_us
+         .await
+         .expect("engine should fall back successfully");
+ 
+-    assert_eq!(result.stop_reason, StopReason::MaxTokens);
+-    assert_eq!(result.turns, 1);
++    assert_eq!(result.stop_reason, StopReason::EndTurn);
++    assert_eq!(result.turns, 3);
+     assert!(
+         !result.text.trim().is_empty(),
+         "fallback result text should be non-empty"
+     );
+ 
+     let recorded = requests.lock().unwrap();
+-    assert_eq!(recorded.len(), 2);
++    assert_eq!(recorded.len(), 3);
+     assert!(
+         recorded[0].tool_count > 0,
+         "normal request should include registered tools"
+     );
+-    assert_eq!(recorded[1].tool_count, 0);
++    assert!(recorded[1].tool_count > 0);
+     drop(recorded);
+ 
+     let session = SessionManager::new(dir.path().to_path_buf(), 10)
+         .load("latest")
+         .expect("session should be loadable");
+     assert!(
+-        !session.messages.iter().any(|message| {
++        session.messages.iter().any(|message| {
+             message.role == Role::Assistant
+                 && message
+                     .content
+                     .iter()
+-                    .any(|block| matches!(block, ContentBlock::ToolUse { id, .. } if id == "bad-tool"))
++                    .any(|block| matches!(block, ContentBlock::ToolUse { id, .. } if id == "recovered-tool"))
+         }),
+-        "invalid finalization tool call must not be persisted"
++        "recovered complete tool call must be persisted"
+     );
+     assert!(
+         !session
+@@ -735,7 +742,7 @@ async fn max_tokens_finalization_tool_call_falls_back_without_persisting_tool_us
+             .flat_map(|message| &message.content)
+             .any(|block| matches!(
+                 block,
+-                ContentBlock::Text { text } if text.contains("previous response was cut off")
++                ContentBlock::Text { text } if text.contains("last generation reached its output limit")
+             )),
+         "temporary finalization control prompt must not be persisted"
+     );
+@@ -942,7 +949,8 @@ async fn test_engine_max_turns_runs_one_grace_finalization() {
+         .await
+         .expect("engine should succeed with grace finalization");
+ 
+-    assert_eq!(result.stop_reason, StopReason::EndTurn);
++    // A grace explanation does not turn an interrupted task into successful completion.
++    assert_eq!(result.stop_reason, StopReason::MaxTurns);
+     assert_eq!(result.text, "Final from existing tool result");
+     assert_eq!(result.turns, 1);
+ 
+@@ -1025,7 +1033,8 @@ async fn repeated_tool_call_failure_turns_finalize_without_more_tools() {
+         .await
+         .expect("engine should finalize repeated tool-call-failure loops");
+ 
+-    assert_eq!(result.stop_reason, StopReason::EndTurn);
++    // A grace explanation does not turn an interrupted task into successful completion.
++    assert_eq!(result.stop_reason, StopReason::MaxTurns);
+     assert_eq!(result.text, "The tool is blocked by permission settings.");
+     assert_eq!(result.turns, 3);
+ 
+@@ -1071,7 +1080,8 @@ async fn repeated_tool_call_failure_threshold_one_finalizes_immediately() {
+         .await
+         .expect("engine should finalize repeated tool-call-failure loops");
+ 
+-    assert_eq!(result.stop_reason, StopReason::EndTurn);
++    // A grace explanation does not turn an interrupted task into successful completion.
++    assert_eq!(result.stop_reason, StopReason::MaxTurns);
+     assert_eq!(result.text, "The tool failed because permission was denied.");
+     assert_eq!(result.turns, 1);
+ 
+@@ -1109,7 +1119,8 @@ async fn repeated_tool_call_failure_disabled_runs_grace_finalization() {
+         .await
+         .expect("engine should stop cleanly");
+ 
+-    assert_eq!(result.stop_reason, StopReason::EndTurn);
++    // A grace explanation does not turn an interrupted task into successful completion.
++    assert_eq!(result.stop_reason, StopReason::MaxTurns);
+     assert_eq!(result.text, "Final after tool-call failures");
+     assert_eq!(result.turns, 2);
+ 
+@@ -1270,7 +1281,8 @@ async fn repeated_tool_call_malformed_disabled_runs_grace_finalization() {
+         .await
+         .expect("engine should stop cleanly");
+ 
+-    assert_eq!(result.stop_reason, StopReason::EndTurn);
++    // A grace explanation does not turn an interrupted task into successful completion.
++    assert_eq!(result.stop_reason, StopReason::MaxTurns);
+     assert_eq!(result.text, "Final after malformed attempts");
+     assert_eq!(result.turns, 2);
+ 
 diff --git a/crates/aion-config/src/compat.rs b/crates/aion-config/src/compat.rs
 index 4bb44d7..da65e7f 100644
 --- a/crates/aion-config/src/compat.rs
@@ -1832,6 +2599,50 @@ index 24569c9..3ae3dc0 100644
      #[test]
      fn proxy_deferred_true_returns_true() {
          let proxy = make_proxy(true);
+diff --git a/crates/aion-process/src/runner.rs b/crates/aion-process/src/runner.rs
+index d6eb015..8cd1453 100644
+--- a/crates/aion-process/src/runner.rs
++++ b/crates/aion-process/src/runner.rs
+@@ -40,6 +40,7 @@ impl CommandRunner {
+ 
+     pub async fn run(mut self) -> Result<CommandResult> {
+         self.command
++            .stdin(Stdio::null())
+             .stdout(Stdio::piped())
+             .stderr(Stdio::piped())
+             .kill_on_drop(true);
+diff --git a/crates/aion-process/src/runner_test.rs b/crates/aion-process/src/runner_test.rs
+index e136572..2b5c27c 100644
+--- a/crates/aion-process/src/runner_test.rs
++++ b/crates/aion-process/src/runner_test.rs
+@@ -8,6 +8,27 @@ mod tests {
+ 
+     use super::CommandRunner;
+ 
++    #[tokio::test]
++    async fn runner_closes_child_stdin_at_eof() {
++        #[cfg(windows)]
++        let script = "$input = [Console]::In.ReadToEnd(); Write-Output ('stdin_eof=' + ($input.Length -eq 0))";
++        #[cfg(not(windows))]
++        let script = "cat; printf 'stdin_eof\\n'";
++
++        let result = tokio::time::timeout(Duration::from_secs(2), CommandRunner::new(shell_command(script)).run())
++            .await
++            .expect("child should observe stdin EOF promptly")
++            .expect("runner should complete");
++
++        assert!(!result.timed_out);
++        assert_eq!(result.exit_code, Some(0));
++        assert!(
++            String::from_utf8_lossy(&result.stdout).contains("stdin_eof"),
++            "stdout was: {}",
++            String::from_utf8_lossy(&result.stdout)
++        );
++    }
++
+     #[tokio::test]
+     async fn runner_preserves_stdout_emitted_before_timeout() {
+         #[cfg(windows)]
 diff --git a/crates/aion-providers/src/composed.rs b/crates/aion-providers/src/composed.rs
 index f4bcb01..da8adf2 100644
 --- a/crates/aion-providers/src/composed.rs
@@ -2482,6 +3293,255 @@ index 0000000..1e0d807
 +    let mut p = provider(false);
 +    p.drop_request = true;
 +    assert!(within_turn(&p, &messages, "test", &config(), 0).await.is_err());
++}
+diff --git a/crates/aion-agent/tests/generation_recovery_test.rs b/crates/aion-agent/tests/generation_recovery_test.rs
+new file mode 100644
+index 0000000..cb968ed
+--- /dev/null
++++ b/crates/aion-agent/tests/generation_recovery_test.rs
+@@ -0,0 +1,243 @@
++mod common;
++use aion_agent::engine::AgentEngine;
++use aion_agent::output::null_sink::NullSink;
++use aion_providers::{LlmProvider, ProviderError};
++use aion_tools::registry::ToolRegistry;
++use aion_types::llm::{LlmEvent, LlmRequest, ThinkingConfig};
++use aion_types::message::{ContentBlock, StopReason, TokenUsage};
++use async_trait::async_trait;
++use common::{MockTool, test_config};
++use serde_json::json;
++use std::collections::VecDeque;
++use std::sync::{Arc, Mutex};
++use tokio::sync::mpsc;
++struct Provider {
++    turns: Mutex<VecDeque<Vec<LlmEvent>>>,
++    requests: Mutex<Vec<LlmRequest>>,
++    native: bool,
++}
++#[async_trait]
++impl LlmProvider for Provider {
++    fn native_compaction_enabled(&self) -> bool {
++        self.native
++    }
++    async fn stream(&self, request: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError> {
++        self.requests.lock().unwrap().push(request.clone());
++        let events = self
++            .turns
++            .lock()
++            .unwrap()
++            .pop_front()
++            .ok_or_else(|| ProviderError::Parse("unexpected extra generation".into()))?;
++        let (tx, rx) = mpsc::channel(events.len() + 1);
++        for event in events {
++            tx.send(event).await.unwrap();
++        }
++        Ok(rx)
++    }
++}
++fn done(reason: StopReason) -> LlmEvent {
++    LlmEvent::Done {
++        stop_reason: reason,
++        usage: TokenUsage::default(),
++    }
++}
++fn answer(text: &str) -> Vec<LlmEvent> {
++    vec![LlmEvent::TextDelta(text.into()), done(StopReason::EndTurn)]
++}
++fn plan(id: &str, status: &str) -> Vec<LlmEvent> {
++    vec![
++        LlmEvent::ToolUse {
++            id: id.into(),
++            name: "update_plan".into(),
++            input: json!({"steps":[{"text":"Create and verify requested files","status":status}]}),
++            extra: None,
++        },
++        done(StopReason::ToolUse),
++    ]
++}
++fn engine(turns: Vec<Vec<LlmEvent>>, native: bool) -> (AgentEngine, Arc<Provider>) {
++    let provider = Arc::new(Provider {
++        turns: Mutex::new(turns.into()),
++        requests: Mutex::new(vec![]),
++        native,
++    });
++    let mut config = test_config();
++    config.max_turns = Some(20);
++    config.session.enabled = false;
++    config.compact.enabled = false;
++    let mut tools = ToolRegistry::new();
++    tools.register(Box::new(MockTool::new("update_plan", "Shown to user", false)));
++    tools.register(Box::new(MockTool::new("write_file", "Created and verified", false)));
++    (
++        AgentEngine::new_with_provider(
++            provider.clone(),
++            config,
++            tools,
++            Arc::new(NullSink),
++            std::env::temp_dir(),
++        ),
++        provider,
++    )
++}
++#[tokio::test]
++async fn repeated_reasoning_is_interrupted_then_executes_tool_with_tools_enabled() {
++    let repeated = "Repeat the same proposed batch without taking action. ".repeat(250);
++    let (mut engine, p) = engine(
++        vec![
++            vec![LlmEvent::ThinkingDelta(repeated.clone()), done(StopReason::EndTurn)],
++            vec![
++                LlmEvent::ToolUse {
++                    id: "write-1".into(),
++                    name: "write_file".into(),
++                    input: json!({}),
++                    extra: None,
++                },
++                done(StopReason::ToolUse),
++            ],
++            answer("Files created and verified"),
++        ],
++        true,
++    );
++    let result = engine.run("Create the requested files", "test").await.unwrap();
++    assert_eq!(result.text, "Files created and verified");
++    assert_eq!(result.turns, 3);
++    let reqs = p.requests.lock().unwrap();
++    assert!(!reqs[1].tools.is_empty());
++    assert!(matches!(reqs[1].thinking, Some(ThinkingConfig::Disabled)));
++    assert!(!serde_json::to_string(&reqs[1].messages).unwrap().contains(&repeated));
++    assert!(
++        reqs[2]
++            .messages
++            .iter()
++            .flat_map(|m| &m.content)
++            .any(|b| matches!(b,ContentBlock::ToolResult{tool_use_id,is_error:false,..} if tool_use_id=="write-1"))
++    );
++}
++#[tokio::test]
++async fn repeated_output_limits_stop_after_two_recoveries_without_forced_final_answer() {
++    let (mut engine, p) = engine(
++        (0..3)
++            .map(|_| {
++                vec![
++                    LlmEvent::ThinkingDelta("Still planning".into()),
++                    done(StopReason::MaxTokens),
++                ]
++            })
++            .collect(),
++        false,
++    );
++    let result = engine.run("Create files", "test").await.unwrap();
++    assert_eq!(result.stop_reason, StopReason::MaxTokens);
++    assert!(result.text.starts_with("Run incomplete:"));
++    assert_eq!(p.requests.lock().unwrap().len(), 3);
++    assert!(p.requests.lock().unwrap().iter().all(|r| !r.tools.is_empty()));
++}
++#[tokio::test]
++async fn unfinished_current_plan_gets_one_tool_enabled_retry_then_can_complete() {
++    let (mut engine, p) = engine(
++        vec![
++            plan("plan-1", "doing"),
++            answer("I will create files next"),
++            plan("plan-2", "done"),
++            answer("Completed and verified"),
++        ],
++        false,
++    );
++    let result = engine.run("Create files", "test").await.unwrap();
++    assert_eq!(result.stop_reason, StopReason::EndTurn);
++    let reqs = p.requests.lock().unwrap();
++    assert_eq!(reqs.len(), 4);
++    assert!(!reqs[2].tools.is_empty());
++    assert!(
++        serde_json::to_string(reqs[2].messages.last().unwrap())
++            .unwrap()
++            .contains("unfinished steps")
++    );
++}
++#[tokio::test]
++async fn unfinished_plan_cannot_be_reported_as_success_and_does_not_force_later_unrelated_work() {
++    let (mut engine, p) = engine(
++        vec![
++            plan("plan-1", "doing"),
++            answer("Files pending"),
++            answer("Files still pending"),
++            answer("The requested explanation"),
++        ],
++        false,
++    );
++    let first = engine.run("Create files", "first").await.unwrap();
++    assert_eq!(first.stop_reason, StopReason::MaxTurns);
++    assert!(first.text.starts_with("Run incomplete:"));
++    let second = engine
++        .run("Pause that work. Just explain the format.", "second")
++        .await
++        .unwrap();
++    assert_eq!(second.stop_reason, StopReason::EndTurn);
++    assert_eq!(second.text, "The requested explanation");
++    assert_eq!(p.requests.lock().unwrap().len(), 4);
++}
++
++#[tokio::test]
++async fn empty_finalization_with_unfinished_plan_cannot_return_success() {
++    let (mut engine, _) = engine(
++        vec![
++            plan("plan-1", "doing"),
++            vec![done(StopReason::EndTurn)],
++            vec![done(StopReason::EndTurn)],
++            answer("Still cannot finish"),
++        ],
++        false,
++    );
++    let result = engine.run("Create files", "test").await.unwrap();
++    assert_eq!(result.stop_reason, StopReason::MaxTurns);
++}
++
++#[tokio::test]
++async fn all_empty_finalization_with_unfinished_plan_cannot_return_success() {
++    let (mut engine, _) = engine(
++        vec![
++            plan("plan-1", "doing"),
++            vec![done(StopReason::EndTurn)],
++            vec![done(StopReason::EndTurn)],
++            vec![done(StopReason::EndTurn)],
++        ],
++        false,
++    );
++    let result = engine.run("Create files", "test").await.unwrap();
++    assert_eq!(result.stop_reason, StopReason::MaxTurns);
++}
++
++#[tokio::test]
++async fn successful_tool_rounds_nudge_stale_plan_without_marking_it_done() {
++    let work = |n| {
++        vec![
++            LlmEvent::ToolUse {
++                id: format!("work-{n}"),
++                name: "write_file".into(),
++                input: json!({"part":n}),
++                extra: None,
++            },
++            done(StopReason::ToolUse),
++        ]
++    };
++    let (mut engine, p) = engine(
++        vec![
++            plan("plan-1", "doing"),
++            work(1),
++            work(2),
++            work(3),
++            plan("plan-2", "done"),
++            answer("Verified complete"),
++        ],
++        false,
++    );
++    engine.run("Create files", "test").await.unwrap();
++    let reqs = p.requests.lock().unwrap();
++    assert!(
++        serde_json::to_string(reqs[4].messages.last().unwrap())
++            .unwrap()
++            .contains("unfinished steps")
++    );
++    assert!(matches!(reqs[4].thinking, Some(ThinkingConfig::Disabled)));
 +}
 diff --git a/crates/aion-providers/src/native_compaction.rs b/crates/aion-providers/src/native_compaction.rs
 new file mode 100644

@@ -17,7 +17,7 @@ LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference (or [P
 - Tables, charts, diagrams, and small interactive HTML documents.
 - Local voice transcription through whisper.cpp.
 - Optional SSH access to servers you add yourself.
-- Context usage estimates, automatic compaction, and a Stop button.
+- Context usage estimates, automatic compaction, bounded recovery from interrupted generation, and a Stop button. Unfinished plans remain visibly paused.
 - Markdown chat downloads include saved thinking and tool diagnostics. Live thinking follows new output until you scroll up.
 - Plugins for model modes, skills, status readouts and tools, imported and exported as zips. Install them from Settings → Plugins → *Get plugins*, which lists the [official plugins](https://github.com/killianmiles27/LocalWORK-plugins) and any GitHub plugin repository you add.
 - Office templates: attach a company template or example document, and results come back in that format.

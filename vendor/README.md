@@ -6,6 +6,8 @@ versions. Keep the exact patched source checkout for the release notice inventor
 It also preserves MCP tool error flags and checkpoints completed work inside a long
 first user turn when native compaction cannot split older turns. Candidate histories
 are checked through the native service before being saved.
+The patch also closes shell-child stdin, keeps tools available during bounded
+generation recovery, and checks unfinished plans before accepting a final reply.
 See docs/SETUP.md and docs/release.md for build and redistribution steps. Existing
 Whisper/browser files are checked for availability/version when reused; that is
 not a full tamper-detection check of every installed executable or npm file.

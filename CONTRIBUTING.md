@@ -19,7 +19,10 @@ Browser lifecycle and app acceptance tests need the pinned runtime resources:
 python scripts/tests/browser_windows.py
 python scripts/e2e/check-agent-context.py --work ../.e2e-runs
 python scripts/e2e/check-agent-long-turn.py --work ../.e2e-runs
+python scripts/e2e/check-agent-python.py --work ../.e2e-runs --python '<configured-python>'
+python scripts/e2e/check-agent-recovery.py --work ../.e2e-runs --python '<configured-python>' --officecli vendor/officecli.exe --scenario output-limit --scenario repeated-reasoning --scenario always-truncated --scenario unfinished-plan
 node scripts/tests/thinking.browser.mjs
+node scripts/tests/plan.browser.mjs
 pwsh -NoProfile -File scripts/e2e/run-all.ps1 -Exe ./src-tauri/target/release/localwork.exe -Only T-A1,T-A2,T-C1 -Iterations 1 -KeepWork
 ```
 

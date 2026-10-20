@@ -82,6 +82,10 @@ If native compaction cannot shorten a long first request, the agent can checkpoi
 
 The live thinking panel follows new text automatically. Scrolling up inside it pauses following; returning to its bottom resumes it. This works independently of scrolling the main chat.
 
+An output limit is separate from a full context window. If a response reaches that limit, or a supported native local model repeats a long reasoning passage, LocalWORK can retry twice with tools still available and reduced reasoning for the recovery request. The original request and confirmed tool results remain available. Recovery notices separate interrupted text from the resumed response; repeated failure ends with an explicit incomplete notice.
+
+The assistant must update plan steps using confirmed results. Before accepting a final answer, a plan with unfinished steps gets one opportunity to finish the work or update its status. If work remains unfinished, the plan reads **Plan paused** when the run stops; it is never automatically marked complete. A later unrelated question does not restart that old task.
+
 Use **Stop** to interrupt a run. Completed writes are not undone. Review the working folder before restarting a task that was interrupted during an edit or download.
 
 ## Voice and SSH

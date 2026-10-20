@@ -171,7 +171,15 @@ export default function App() {
             setWorkspaceRefresh(n => n + 1); setActivity(a => a && { ...a, busy: false }); callFiles.current.clear();
             setLive({ text: "", thinking: "", busy: false }); reload(conv); refreshConvs(); refreshCtx(conv); break;
           case "context_usage": setCtx({ used: ev.used, window: ev.window }); break;
-          case "info": refreshCtx(conv); break;
+          case "info":
+            refreshCtx(conv);
+            if (text(ev.message).startsWith("Generation recovery:")) {
+              // The host has saved the previous fragment before the recovery notice.
+              // Start the resumed answer in a fresh live buffer while keeping this turn active.
+              setLive({ text: "", thinking: "", busy: true });
+              reload(conv);
+            } else if (text(ev.message).startsWith("Run incomplete:")) reload(conv);
+            break;
           case "title": refreshConvs(); break;
         }
       }),
@@ -485,6 +493,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
   }, [msgs, cur]);
 
   const blocks = group(msgs);
+  const currentPlan = latestPlan(msgs);
   const lastUser = [...msgs].reverse().find(m => m.role === "user");
   const canRewind = !!cur && !live.busy && modelReady;
   const sidebarOpen = sidebarPref && winW >= (workspaceOpen && cur ? 1280 : 760);
@@ -572,7 +581,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
             <div className="@container shrink-0 px-6 pb-4">
               <div className="relative mx-auto max-w-3xl">
                 {cur && !workspaceOpen && browserTick > 0 && <BrowserPeek key={cur} id={cur} tick={browserTick} onOpen={() => { setWorkspaceRequest({ browser: true, nonce: Date.now() }); setWorkspaceOpen(true); }} />}
-                {cur && <PlanDock plan={latestPlan(msgs)} busy={live.busy} />}
+                {cur && <PlanDock plan={currentPlan} busy={live.busy && currentPlan?.currentTurn !== false} />}
                 {cur && (() => { const q = openQuestion(msgs); return q && <QuestionCard q={q} canSend={modelReady} busy={live.busy} onAnswer={(t) => send(t)} />; })()}
                 {queue.length > 0 && (
                   <div className="mb-2 space-y-1" aria-label="Queued messages">

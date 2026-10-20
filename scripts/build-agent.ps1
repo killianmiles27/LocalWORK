@@ -1,4 +1,4 @@
-# Build the pinned agent with LocalWORK's small, reviewable compaction patch.
+# Build the pinned agent with LocalWORK's compaction and recovery patch.
 [CmdletBinding()]
 param([string]$SourceDirectory)
 $ErrorActionPreference = 'Stop'
@@ -30,6 +30,10 @@ try {
     if ($LASTEXITCODE) { throw 'Automatic compaction integration tests failed.' }
     cargo test --locked -p aion-mcp --lib
     if ($LASTEXITCODE) { throw 'MCP tool-error propagation tests failed.' }
+    cargo test --locked -p aion-process
+    if ($LASTEXITCODE) { throw 'Noninteractive command-runner tests failed.' }
+    cargo test --locked -p aion-agent --test engine_test --test generation_recovery_test
+    if ($LASTEXITCODE) { throw 'Generation recovery integration tests failed.' }
     cargo build --locked --release -p aion-cli
     if ($LASTEXITCODE) { throw 'Agent release build failed.' }
     $built = Join-Path (Get-Location).Path 'target\release\aionrs.exe'

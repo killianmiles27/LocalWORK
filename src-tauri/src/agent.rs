@@ -492,6 +492,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
     let vendor = paths::vendor_dir();
     let mut text = String::new();
     let mut thinking = String::new();
+    let mut last_run_notice: Option<String> = None;
     let mut tool_args: HashMap<String, Value> = HashMap::new();
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
@@ -500,6 +501,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
         if agent.stopping.load(Ordering::SeqCst) { continue; }
         let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match ty {
+            "stream_start" => last_run_notice = None,
             "ready" => {
                 {
                     let c = db.lock().unwrap();
@@ -602,7 +604,14 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
             }
             "info" => {
                 let m = ev.get("message").and_then(|v| v.as_str()).unwrap_or("");
-                if m.starts_with("Autocompact: summarized") || m.starts_with("Context compacted") {
+                if m.starts_with("Generation recovery:") || m.starts_with("Run incomplete:") {
+                    // Keep restarted model output in a distinct assistant message and make the boundary visible.
+                    flush_text(&db, &conv, &mut text, &mut thinking);
+                    if last_run_notice.as_deref() != Some(m) {
+                        store::add_msg(&db.lock().unwrap(), &conv, "notice", &json!({"text": m}));
+                        last_run_notice = Some(m.to_string());
+                    }
+                } else if m.starts_with("Autocompact: summarized") || m.starts_with("Context compacted") {
                     store::add_msg(&db.lock().unwrap(), &conv, "notice", &json!({"text": "Earlier messages were summarized to free up space."}));
                     // After a manual /compact the agent is idle: ask for the new size ("Context Usage" info).
                     if m.starts_with("Context compacted") {
