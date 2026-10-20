@@ -37,7 +37,13 @@ Say you've got a spreadsheet with fifteen years of your finances in it. Would yo
 
 The model runs on your PC, so your files stay on your PC. There's no account, no subscription, no usage limits and no ads. You hand it a folder or some files, tell it what you want, and it does the work: reading the files, running the numbers, and writing the documents. You watch it happen in a pane next to the chat, and you can click into the result and edit it yourself.
 
-It runs models through [Strata](https://github.com/Niko1221/Strata) (or [PolyStrata](https://github.com/VecSzn/PolyStrata) for models beyond Qwen), which can run really big models, around 125 billion parameters, on a regular gaming PC. For a lot of everyday stuff it holds its own against the free chatbots you already use. It is not going to beat the big paid ones at everything, and I'm not going to pretend it does.
+What LocalWORK itself adds:
+
+- **Real Office work.** Word, Excel and PowerPoint files built and edited in place, with previews you can type into, revision history, template matching, and spreadsheet tools that keep track of where the numbers came from. This is the main point of the app.
+- **One install, no Docker.** A normal Windows installer. It starts the model for you, waits until it's ready, and unloads it when you're idle.
+- **Built for local models.** Local models are slower and make more mistakes than the big cloud ones, so a lot of the work went into keeping long tasks on track: recovering cut-off replies, catching loops, and checking the finished files.
+
+The model side is someone else's work. LocalWORK runs models through [Strata](https://github.com/Niko1221/Strata) by Niko1221 (or [PolyStrata](https://github.com/VecSzn/PolyStrata) for models beyond Qwen). Strata is the reason a model around 125 billion parameters fits on a regular gaming PC at all, so the credit for that goes to them. The Office editing runs on [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI), and the agent is a patched copy of [aionrs](https://github.com/iOfficeAI/aionrs), both by iOfficeAI. For a lot of everyday stuff the result holds its own against the free chatbots you already use. It is not going to beat the big paid ones at everything, and I'm not going to pretend it does.
 
 **Full honesty: this is vibe-coded slop.** I built it with a lot of help from AI, it's still alpha, and there are bugs, especially on long tasks. Check what it makes before you rely on it. If something breaks, please [open an issue](https://github.com/killianmiles27/LocalWORK/issues). If you want to fix it yourself, pull requests are very welcome.
 
