@@ -51,6 +51,14 @@ Use npm ci, scripts/fetch-vendor.ps1, scripts/build-agent.ps1, and scripts/insta
 - Loop guards live in server.py and the system prompt together: load_skill dedupes per chat (force:true reloads); identical idempotent calls (web_search, web_fetch, read_attachment, memory_search) return a short note on the 2nd call and a refusal from the 3rd; all tool output is capped at 24,000 characters. Errors are not counted.
 - The brand mark is defined in three places that must stay in step: scripts/make-icons.py (icons), public/icon.svg and src/Logo.tsx. The mark carries no letters, so a rename does not need new art.
 
+## Reusable execution tools
+
+- workbench-mcp/tabular.py owns bounded CSV/TSV/XLSX/JSON table inspection, aggregation and comparison. Header selection and date parsing are explicit. Saved results under workspace .localwork-data have source fingerprints and query provenance; never treat XLSX caches as evaluated values. office_ranges.py reads bounded ranges through OfficeCLI evaluation into reusable datasets. Source mutation invalidates comparisons.
+- office_recipes.py validates recipes without mutating files; efficiency_tools.py safely creates/copies a new target and dispatches one batch through the existing OfficeCLI wrapper. Existing targets are refused, partial failures are reported and preserved. Formula templates substitute row coordinates only, never execute code. Source tables, schemas and content drive recipes; no benchmark/domain presets are shipped.
+- Detail lives in the on-demand office-recipes skill; the system prompt routes to tools rather than carrying Office syntax examples. Spreadsheet attachment dispatch uses compact inspection by default; explicit start retains legacy raw extraction. Existing generic custom Office operations remain available.
+- Successful update_plan stage execution is an explicit per-run hint, independent of plan text. Only normal native-provider requests lower effort, retaining configured thinking. Analysis/verification/missing or unknown stage, tool errors and new turns restore defaults. Recovery overrides remain bounded and unchanged. Stage state survives history compaction without changing profiles.
+- Request metrics are info events, persisted as diagnostic messages and exported but hidden from chat rendering/model history. Agent measurements separate compaction, request wall and first-event waits; provider-reported numeric timings are retained only when available. Host tool durations include approval/host overhead. No extra model or polling requests are made for these measurements.
+
 ## Checks
 
 See CONTRIBUTING.md for commands and docs/PUBLIC_READINESS.md for the latest audit. Most tests need no GPU. Windows browser tests require pinned Chromium; CDP acceptance uses isolated app data and stub inference by default. A guided website run or stub suite is not a broad real-model benchmark. Do not hide timed-out or skipped model trials.

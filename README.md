@@ -12,13 +12,14 @@ LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference (or [P
 
 - Chats tied to a working folder, with file attachments and saved conversation history.
 - A searchable chat sidebar grouped by date, with pin and rename. You can edit an earlier message or regenerate the last reply, and keyboard shortcuts cover the common actions.
+- Compact CSV/TSV/Excel inspection, reusable aggregates and evaluated-value comparisons, plus validated Word and Excel construction recipes.
 - Word, Excel, and PowerPoint creation through OfficeCLI, with directly editable previews, document zoom, revision history, and an optional Check related files button after saved edits.
 - Web search, page reading, browser interaction, and screenshots.
 - Tables, charts, diagrams, and small interactive HTML documents.
 - Local voice transcription through whisper.cpp.
 - Optional SSH access to servers you add yourself.
 - Context usage estimates, automatic compaction, bounded recovery from interrupted generation, and a Stop button. Unfinished plans remain visibly paused.
-- Markdown chat downloads include saved thinking and tool diagnostics. Live thinking follows new output until you scroll up.
+- Markdown chat downloads include saved thinking, tool durations and per-request timing/token diagnostics. Live thinking follows new output until you scroll up.
 - Plugins for model modes, skills, status readouts and tools, imported and exported as zips. Install them from Settings → Plugins → *Get plugins*, which lists the [official plugins](https://github.com/killianmiles27/LocalWORK-plugins) and any GitHub plugin repository you add.
 - Office templates: attach a company template or example document, and results come back in that format.
 

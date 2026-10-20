@@ -142,7 +142,8 @@ class StubModel(BaseHTTPRequestHandler):
         delta = {"tool_calls": [{"index": 0, "id": message["tool_calls"][0]["id"], "type": "function",
                                   "function": message["tool_calls"][0]["function"]}]} if message.get("tool_calls") else {"content": message.get("content", "")}
         chunks = [{"choices": [{"index": 0, "delta": delta}]},
-                  {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}], "usage": usage}]
+                  {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}], "usage": usage,
+                   "timings": {"prompt_n": 400, "prompt_ms": 1.2, "predicted_n": 20, "predicted_ms": 4.0, "predicted_per_second": 5000, "cache_n": 0}}]
         for chunk in chunks:
             self.wfile.write(("data: " + json.dumps(chunk, separators=(",", ":")) + "\n\n").encode())
         self.wfile.write(b"data: [DONE]\n\n")
@@ -256,6 +257,12 @@ def run_scenario(args, scenario, root):
         send({"type": "message", "msg_id": f"recovery-{scenario}",
               "content": f"{TASK_MARKER}: create summary.xlsx with formula and chart plus report.docx. Use only synthetic monthly budget data (rent 1200, food 450, transit 120), explicitly say units and no currency is specified. Make a plan and verify both deliverables."})
         wait_for(lambda event: event.get("type") == "stream_end" and event.get("msg_id") == f"recovery-{scenario}")
+        metrics = [json.loads(event["message"].removeprefix("Request metrics: ")) for event in events
+                   if event.get("type") == "info" and str(event.get("message", "")).startswith("Request metrics: ")]
+        if not any("request_wall_ms" in metric for metric in metrics):
+            raise AssertionError("rebuilt agent did not emit per-request wall/token diagnostics")
+        if not any(metric.get("phase") == "provider_timing" and metric.get("timings", {}).get("prompt_ms") == 1.2 for metric in metrics):
+            raise AssertionError("rebuilt agent discarded provider-reported prompt/decode timings")
         if args.keep:
             (case / "events.json").write_text(json.dumps(events, indent=2), encoding="utf-8")
             (case / "model-requests.json").write_text(json.dumps(server.requests, indent=2), encoding="utf-8")

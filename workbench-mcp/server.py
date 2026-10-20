@@ -6,16 +6,22 @@ OFFICECLI = os.environ.get("OFFICECLI_EXE", "officecli.exe")
 CREATE_NO_WINDOW = 0x08000000
 MAX_INLINE_COMMANDS_UTF16_UNITS = 24000
 
-TOOLS = [
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from efficiency_tools import TOOLS as EFFICIENCY_TOOLS, dispatch as efficiency_dispatch
+
+TOOLS = EFFICIENCY_TOOLS + [
     {
         "name": "officecli",
         "description": "Create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files with OfficeCLI. "
                        "Pass the CLI arguments as a list, e.g. [\"create\",\"report.docx\"], [\"view\",\"report.docx\"], "
                        "[\"validate\",\"report.xlsx\"]. For a combined verification in one model tool call, pass [\"verify\",\"file.docx\"] (also .xlsx/.pptx); this app wrapper runs validate, issues, outline and text views, plus ordinary Word stats. Add \"--page-count\" as a third argument only when page count is required; Word repagination is bounded to 20 seconds. This is an app wrapper, not a native OfficeCLI command. "
-                       "For batch edits, pass args [\"batch\",\"file.docx\"] and the command array in the separate commands argument; legacy --input <json-file> also works. Paths are relative to the workspace. This is a tool, not a shell command.",
+                       "Read evaluated Excel ranges in one call with args [\"read-ranges\",\"file.xlsx\"], ranges:[\"/Sheet1/A1:C20\"]; returns reusable datasets for tabular compare. First row is headers unless columns is supplied. For batch edits, pass args [\"batch\",\"file.docx\"] and the command array in the separate commands argument; legacy --input <json-file> also works. Paths are relative to the workspace. This is a tool, not a shell command.",
         "inputSchema": {"type": "object", "properties": {
                             "args": {"type": "array", "items": {"type": "string"}},
-                            "commands": {"type": "array", "items": {"type": "object"}, "description": "Inline OfficeCLI batch command objects. Use only with args [\"batch\",\"file.docx\"]."}},
+                            "commands": {"type": "array", "items": {"type": "object"}, "description": "Inline OfficeCLI batch command objects. Use only with args [\"batch\",\"file.docx\"]."},
+                            "ranges": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+                            "columns": {"type": "array", "items": {"type": "string"}}},
                         "required": ["args"]},
     },
     {
@@ -64,7 +70,7 @@ TOOLS = [
     },
     {
         "name": "read_attachment",
-        "description": "Read a file the user attached (listed in the message as attachments/<name>) as text: PDF, Word, Excel, PowerPoint, CSV, text, HTML. Long files come back in ranges: pass start to continue.",
+        "description": "Read a file the user attached (listed in the message as attachments/<name>) as text: PDF, Word, Excel, PowerPoint, CSV, text, HTML. Spreadsheets return a compact profile by default; use tabular for rows/aggregates. Other long files return text ranges; pass start to continue.",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"}, "max_chars": {"type": "integer"}}, "required": ["path"]},
     },
     {
@@ -126,7 +132,7 @@ TOOLS = [
     {
         "name": "update_plan",
         "description": "For multi-step work: publish or update your plan. steps: [{text, status: todo|doing|done}]. Call again as steps change.",
-        "inputSchema": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {"text": {"type": "string"}, "status": {"type": "string", "enum": ["todo", "doing", "done"]}}, "required": ["text"]}}}, "required": ["steps"]},
+        "inputSchema": {"type": "object", "properties": {"stage": {"type": "string", "enum": ["analysis", "execution", "verification"], "description": "Execution uses low reasoning for an established procedure; analysis/verification restore configured effort. Omit when unsure."}, "steps": {"type": "array", "items": {"type": "object", "properties": {"text": {"type": "string"}, "status": {"type": "string", "enum": ["todo", "doing", "done"]}}, "required": ["text"]}}}, "required": ["steps"]},
     },
     {
         "name": "ask_user",
@@ -237,6 +243,9 @@ def guarded_call(name, args):
 
 
 def call_tool(name, args):
+    if name in ("tabular", "office_recipe"):
+        return efficiency_dispatch(name, args, call_tool, OFFICECLI)
+
     if name == "render_ui":
         state = args.get("state")
         if state is not None and not isinstance(state, dict):
@@ -279,6 +288,9 @@ def call_tool(name, args):
                 break
         return "\n".join(rows[:300]) or "(empty workspace)"
     if name == "read_attachment":
+        if str(args["path"]).lower().endswith((".xlsx", ".csv", ".tsv")) and "start" not in args:
+            from tabular import handle
+            return json.dumps(handle({"action": "inspect", "path": args["path"]}), ensure_ascii=False, allow_nan=False)
         import attachments
         return attachments.read_attachment(args["path"], args.get("start", 0), args.get("max_chars", 12000))
     if name in ("show_chart", "show_table", "show_diagram", "publish_artifact", "update_plan"):
@@ -323,6 +335,11 @@ def call_tool(name, args):
             a = a.split()
         if not isinstance(a, list) or not a:
             raise ValueError("args must be a non-empty list of strings")
+        if a[0] == "read-ranges":
+            from office_ranges import read_ranges
+            if len(a) != 2:
+                raise ValueError("read-ranges requires one workbook path")
+            return json.dumps(read_ranges({**args, "path": a[1]}, OFFICECLI), ensure_ascii=False)
         inline_commands = args.get("commands")
         temp_input = None
         created_temp_dir = False

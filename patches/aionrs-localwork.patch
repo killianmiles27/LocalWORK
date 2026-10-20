@@ -1004,10 +1004,14 @@ index 66df192..8f41028 100644
      }
  
 diff --git a/crates/aion-agent/src/engine.rs b/crates/aion-agent/src/engine.rs
-index 3bf6767..ef4c5dc 100644
+index 3bf6767..fb28c7a 100644
 --- a/crates/aion-agent/src/engine.rs
 +++ b/crates/aion-agent/src/engine.rs
-@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
+@@ -2,10 +2,11 @@ use std::mem::replace;
+ use std::path::PathBuf;
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::{Arc, Mutex};
++use std::time::Instant;
  
  use crate::cache_diagnostics::{CacheBreakDetector, CacheDiagnostic, CacheStats};
  use crate::commands::{CommandContext, CommandRegistry, CommandResult, SlashCommand, default_registry};
@@ -1016,7 +1020,7 @@ index 3bf6767..ef4c5dc 100644
  use crate::compact::emergency::is_at_emergency_limit;
  use crate::compact::estimate::{estimate_tokens_from_tool_image, estimate_tokens_from_tool_result};
  use crate::compact::micro::{microcompact, should_microcompact};
-@@ -21,14 +21,16 @@ use crate::output::OutputSink;
+@@ -21,14 +22,16 @@ use crate::output::OutputSink;
  use crate::plan::prompt::plan_mode_instructions;
  use crate::plan::state::PlanState;
  use crate::session::{Session, SessionManager};
@@ -1035,40 +1039,54 @@ index 3bf6767..ef4c5dc 100644
  use aion_compact::CompactLevel;
  use aion_config::compact::CompactConfig;
  use aion_config::compat::ProviderCompat;
-@@ -95,6 +97,8 @@ pub struct AgentEngine {
+@@ -45,7 +48,7 @@ use aion_types::skill_types::{ContextModifier, PlanModeTransition, effort_to_str
+ use aion_types::tool::ToolDef;
+ use anyhow::{Error as AnyhowError, Result as AnyhowResult};
+ use chrono::Utc;
+-use serde_json::to_string;
++use serde_json::{json, to_string};
+ use tokio::sync::mpsc::Receiver;
+ use tracing::{Instrument, debug, error, info, info_span, warn};
+ use uuid::Uuid;
+@@ -95,6 +98,10 @@ pub struct AgentEngine {
      /// every message appended via `push_history`, including late
      /// `abort_current_turn` tool results.
      current_turn_id: Option<String>,
 +    /// Latest successful plan status for this run, independent of compacted history.
 +    current_run_plan_unfinished: Option<bool>,
++    /// Latest successful stage hint for this run; cleared at each user request.
++    current_run_execution_stage: ExecutionStage,
      /// Maximum output tokens requested from the provider per turn.
      max_tokens: Option<u32>,
      /// Optional cap on counted model turns within a single run.
-@@ -210,6 +214,7 @@ impl AgentEngine {
+@@ -210,6 +217,8 @@ impl AgentEngine {
              msg_id: String::new(),
              pending_turn_id: None,
              current_turn_id: None,
 +            current_run_plan_unfinished: None,
++            current_run_execution_stage: ExecutionStage::default(),
              max_turns_per_run: config.max_turns,
              max_tool_call_malformed_turns: config
                  .max_tool_call_malformed_turns
-@@ -307,6 +312,7 @@ impl AgentEngine {
+@@ -307,6 +316,8 @@ impl AgentEngine {
              msg_id: String::new(),
              pending_turn_id: None,
              current_turn_id: None,
 +            current_run_plan_unfinished: None,
++            current_run_execution_stage: ExecutionStage::default(),
              max_turns_per_run: config.max_turns,
              max_tool_call_malformed_turns: config
                  .max_tool_call_malformed_turns
-@@ -494,6 +500,7 @@ impl AgentEngine {
+@@ -494,6 +505,8 @@ impl AgentEngine {
  
      async fn run_inner(&mut self, content_blocks: Vec<ContentBlock>, msg_id: &str) -> Result<AgentResult, AgentError> {
          self.msg_id = msg_id.to_string();
 +        self.current_run_plan_unfinished = None;
++        self.current_run_execution_stage = ExecutionStage::default();
          self.current_turn_id = Some(
              self.pending_turn_id
                  .take()
-@@ -511,6 +518,10 @@ impl AgentEngine {
+@@ -511,6 +524,10 @@ impl AgentEngine {
              self.max_tool_call_malformed_turns,
              self.max_tool_call_failure_turns,
          );
@@ -1079,7 +1097,7 @@ index 3bf6767..ef4c5dc 100644
          loop {
              if let Some(limit) = guards.turn_budget_reached() {
                  self.save_session();
-@@ -527,7 +538,8 @@ impl AgentEngine {
+@@ -527,7 +544,8 @@ impl AgentEngine {
                  });
              }
  
@@ -1089,7 +1107,7 @@ index 3bf6767..ef4c5dc 100644
              guards.record_counted_turn();
  
              let tool_calls = match TurnOutcome::from_stream(outcome) {
-@@ -541,6 +553,17 @@ impl AgentEngine {
+@@ -541,6 +559,17 @@ impl AgentEngine {
                      let assistant_content = build_assistant_content(&outcome);
                      self.push_history(Role::Assistant, assistant_content);
                      self.save_session();
@@ -1107,7 +1125,7 @@ index 3bf6767..ef4c5dc 100644
                      return Ok(AgentResult {
                          text: outcome.assistant_text,
                          stop_reason: outcome.stop_reason,
-@@ -549,17 +572,36 @@ impl AgentEngine {
+@@ -549,17 +578,36 @@ impl AgentEngine {
                      });
                  }
                  TurnOutcome::Truncated(outcome) => {
@@ -1154,10 +1172,14 @@ index 3bf6767..ef4c5dc 100644
                  }
                  TurnOutcome::EmptyFinal(outcome) => {
                      let retry_allowed = guards.allow_empty_final_retry();
-@@ -607,6 +649,22 @@ impl AgentEngine {
+@@ -607,6 +655,29 @@ impl AgentEngine {
                  all_tool_results_error,
              } = self.execute_tool_round(&tool_calls).await?;
  
++            let tool_round_failed = tool_results
++                .iter()
++                .any(|block| matches!(block, ContentBlock::ToolResult { is_error: true, .. }));
++
 +            if self.record_current_plan(&tool_calls, &tool_results) {
 +                rounds_without_plan_update = 0;
 +            } else if self.current_plan_unfinished()
@@ -1173,11 +1195,14 @@ index 3bf6767..ef4c5dc 100644
 +                    rounds_without_plan_update = 0;
 +                }
 +            }
++            if tool_round_failed {
++                self.current_run_execution_stage = ExecutionStage::default();
++            }
 +
              // Apply any context modifiers from skill executions before the next turn.
              self.apply_context_modifiers(&tool_modifiers);
  
-@@ -675,8 +733,16 @@ impl AgentEngine {
+@@ -675,8 +746,21 @@ impl AgentEngine {
              messages,
              tools,
              max_tokens: self.max_tokens,
@@ -1190,13 +1215,74 @@ index 3bf6767..ef4c5dc 100644
 +            },
 +            reasoning_effort: if matches!(kind, TurnKind::Recovery(_)) {
 +                Some("low".into())
++            } else if kind == TurnKind::Normal
++                && self.provider.native_compaction_enabled()
++                && self.current_run_execution_stage == ExecutionStage::Execution
++            {
++                Some("low".into())
 +            } else {
 +                self.reasoning_effort.clone()
 +            },
          }
      }
  
-@@ -895,6 +961,54 @@ impl AgentEngine {
+@@ -880,10 +964,52 @@ impl AgentEngine {
+             // Run multi-level compaction before each API call.
+             // On the first model turn context_tokens is 0 so neither
+             // autocompact nor emergency will fire.
+-            self.run_compaction().await?;
++            let compaction_ms = self.run_compaction_duration().await?;
+             let request = self.build_request(kind);
+-            let mut rx = self.provider.stream(&request).await?;
+-            let outcome = self.consume_stream(&mut rx).await?;
++            let request_started = Instant::now();
++            let stream_result = self.provider.stream(&request).await.map_err(AgentError::from);
++            let mut rx = match stream_result {
++                Ok(rx) => rx,
++                Err(error) => {
++                    self.emit_request_metrics(
++                        kind,
++                        request.reasoning_effort.as_deref(),
++                        compaction_ms,
++                        request_started.elapsed().as_millis() as u64,
++                        None,
++                        None,
++                        true,
++                    );
++                    self.current_run_execution_stage = ExecutionStage::default();
++                    return Err(error);
++                }
++            };
++            let (outcome, first_event_ms) = match self.consume_stream_timed(&mut rx, request_started).await {
++                Ok(value) => value,
++                Err(error) => {
++                    self.emit_request_metrics(
++                        kind,
++                        request.reasoning_effort.as_deref(),
++                        compaction_ms,
++                        request_started.elapsed().as_millis() as u64,
++                        None,
++                        None,
++                        true,
++                    );
++                    self.current_run_execution_stage = ExecutionStage::default();
++                    return Err(error);
++                }
++            };
++            let request_wall_ms = request_started.elapsed().as_millis() as u64;
++            self.emit_request_metrics(
++                kind,
++                request.reasoning_effort.as_deref(),
++                compaction_ms,
++                request_wall_ms,
++                first_event_ms,
++                Some(&outcome.usage),
++                false,
++            );
+             let has_provider_usage = self.record_turn_usage(&outcome.usage);
+             if !has_provider_usage {
+                 let assistant_content = build_assistant_content(&outcome);
+@@ -895,6 +1021,115 @@ impl AgentEngine {
          .await
      }
  
@@ -1230,6 +1316,12 @@ index 3bf6767..ef4c5dc 100644
 +                    continue;
 +                }
 +                let args = input.get("arguments").unwrap_or(input);
++                let stage = args
++                    .get("stage")
++                    .and_then(|v| v.as_str())
++                    .and_then(ExecutionStage::parse)
++                    .unwrap_or_default();
++                self.current_run_execution_stage = stage;
 +                if let Some(steps) = args.get("steps").and_then(|v| v.as_array()) {
 +                    updated = true;
 +                    self.current_run_plan_unfinished = Some(
@@ -1248,10 +1340,65 @@ index 3bf6767..ef4c5dc 100644
 +        updated
 +    }
 +
++    async fn run_compaction_duration(&mut self) -> Result<u64, AgentError> {
++        let started = Instant::now();
++        self.run_compaction().await?;
++        Ok(started.elapsed().as_millis() as u64)
++    }
++
++    fn emit_request_metrics(
++        &self,
++        kind: TurnKind,
++        effort: Option<&str>,
++        compaction_ms: u64,
++        request_wall_ms: u64,
++        first_event_ms: Option<u64>,
++        usage: Option<&TokenUsage>,
++        failed: bool,
++    ) {
++        let metric = Self::request_metrics_value(
++            kind,
++            effort,
++            compaction_ms,
++            request_wall_ms,
++            first_event_ms,
++            usage,
++            failed,
++        );
++        let message = format!("Request metrics: {metric}");
++        self.output.emit_info(&message);
++        info!(target: "aion_agent", "Request metrics: {}", metric);
++    }
++
++    fn request_metrics_value(
++        kind: TurnKind,
++        effort: Option<&str>,
++        compaction_ms: u64,
++        request_wall_ms: u64,
++        first_event_ms: Option<u64>,
++        usage: Option<&TokenUsage>,
++        failed: bool,
++    ) -> serde_json::Value {
++        let mut metric = json!({
++            "phase": kind.diagnostic_phase(),
++            "effective_reasoning_effort": effort,
++            "compaction_ms": compaction_ms,
++            "request_wall_ms": request_wall_ms,
++            "first_event_ms": first_event_ms,
++            "input_tokens": usage.map(|u| u.input_tokens),
++            "output_tokens": usage.map(|u| u.output_tokens),
++            "cache_read_tokens": usage.map(|u| u.cache_read_tokens),
++        });
++        if failed {
++            metric["outcome"] = json!("error");
++        }
++        metric
++    }
++
      async fn finalize_once(
          &mut self,
          reason: FinalizationReason,
-@@ -902,8 +1016,17 @@ impl AgentEngine {
+@@ -902,8 +1137,17 @@ impl AgentEngine {
          counted_turns: usize,
          fallback_stop_reason: StopReason,
      ) -> Result<AgentResult, AgentError> {
@@ -1270,7 +1417,7 @@ index 3bf6767..ef4c5dc 100644
          let is_success = outcome.tool_calls.is_empty()
              && outcome.stop_reason == StopReason::EndTurn
              && !outcome.assistant_text.trim().is_empty();
-@@ -912,9 +1035,20 @@ impl AgentEngine {
+@@ -912,9 +1156,20 @@ impl AgentEngine {
              let assistant_content = build_assistant_content(&outcome);
              self.push_history(Role::Assistant, assistant_content);
              self.save_session();
@@ -1292,16 +1439,40 @@ index 3bf6767..ef4c5dc 100644
                  usage: self.total_usage.clone(),
                  turns: counted_turns,
              });
-@@ -965,6 +1099,8 @@ impl AgentEngine {
+@@ -952,12 +1207,13 @@ impl AgentEngine {
+         })
+     }
+ 
+-    /// Drain one provider stream into a [`StreamOutcome`].
+-    ///
+-    /// Emits text/thinking/tool-call events to the output sink as they arrive
+-    /// and accumulates the assistant text, thinking block, tool calls, stop
+-    /// reason and usage for the caller. Returns early on `LlmEvent::Error`.
+-    async fn consume_stream(&self, rx: &mut Receiver<LlmEvent>) -> Result<StreamOutcome, AgentError> {
++    /// Drain one provider stream, recording latency until its first event.
++    /// Emits stream content as it arrives and returns early on `LlmEvent::Error`.
++    async fn consume_stream_timed(
++        &self,
++        rx: &mut Receiver<LlmEvent>,
++        request_started: Instant,
++    ) -> Result<(StreamOutcome, Option<u64>), AgentError> {
+         let mut assistant_text = String::new();
+         let mut thinking_text = String::new();
+         let mut thinking_signature: Option<String> = None;
+@@ -965,8 +1221,12 @@ impl AgentEngine {
          let mut tool_calls: Vec<ContentBlock> = Vec::new();
          let mut stop_reason = StopReason::EndTurn;
          let mut usage = TokenUsage::default();
 +        let mut repetition = ReasoningRepetition::default();
 +        let mut reasoning_repeated = false;
++        let mut first_event_ms = None;
  
          while let Some(event) = rx.recv().await {
++            first_event_ms.get_or_insert_with(|| request_started.elapsed().as_millis() as u64);
              match event {
-@@ -994,6 +1130,18 @@ impl AgentEngine {
+                 LlmEvent::TextDelta(text) => {
+                     self.output.emit_text_delta(&text, &self.msg_id);
+@@ -994,6 +1254,18 @@ impl AgentEngine {
                  LlmEvent::ThinkingDelta(text) => {
                      self.output.emit_thinking(&text, &self.msg_id);
                      thinking_text.push_str(&text);
@@ -1320,15 +1491,47 @@ index 3bf6767..ef4c5dc 100644
                  }
                  LlmEvent::ThinkingSignature(signature) => {
                      thinking_signature = Some(signature);
-@@ -1022,6 +1170,7 @@ impl AgentEngine {
-             tool_calls,
-             stop_reason,
-             usage,
-+            reasoning_repeated,
-         })
+@@ -1001,6 +1273,10 @@ impl AgentEngine {
+                 LlmEvent::ProviderItem { provider, item } => {
+                     provider_items.push(ContentBlock::ProviderItem { provider, item });
+                 }
++                LlmEvent::RequestTiming(timings) => {
++                    let metric = json!({"phase":"provider_timing","timings":timings});
++                    self.output.emit_info(&format!("Request metrics: {metric}"));
++                }
+                 LlmEvent::Done {
+                     stop_reason: sr,
+                     usage: u,
+@@ -1014,15 +1290,19 @@ impl AgentEngine {
+             }
+         }
+ 
+-        Ok(StreamOutcome {
+-            assistant_text,
+-            thinking_text,
+-            thinking_signature,
+-            provider_items,
+-            tool_calls,
+-            stop_reason,
+-            usage,
+-        })
++        Ok((
++            StreamOutcome {
++                assistant_text,
++                thinking_text,
++                thinking_signature,
++                provider_items,
++                tool_calls,
++                stop_reason,
++                usage,
++                reasoning_repeated,
++            },
++            first_event_ms,
++        ))
      }
  
-@@ -1124,12 +1273,32 @@ impl AgentEngine {
+     /// Fold one turn's token usage into the running totals and replace the
+@@ -1124,12 +1404,32 @@ impl AgentEngine {
  
      /// Run the multi-level compaction pipeline before each API call.
      ///
@@ -1366,7 +1569,7 @@ index 3bf6767..ef4c5dc 100644
              let result = microcompact(&mut self.messages, &self.compact_config);
              if result.cleared_count > 0 {
                  self.output.emit_info(&format!(
-@@ -1165,24 +1334,62 @@ impl AgentEngine {
+@@ -1165,24 +1465,62 @@ impl AgentEngine {
          if should_compact && !self.compact_state.is_circuit_broken(&self.compact_config) {
              let provider = Arc::clone(&self.provider);
              let mut compact_messages = self.messages.clone();
@@ -1434,7 +1637,7 @@ index 3bf6767..ef4c5dc 100644
                      self.save_session();
                      compacted = true;
                  }
-@@ -1191,6 +1398,11 @@ impl AgentEngine {
+@@ -1191,6 +1529,11 @@ impl AgentEngine {
                  }
                  Err(e) => {
                      self.output.emit_error(&format!("Autocompact failed: {}", e));
@@ -1446,7 +1649,7 @@ index 3bf6767..ef4c5dc 100644
                  }
              }
          } else if should_compact {
-@@ -1217,14 +1429,20 @@ impl AgentEngine {
+@@ -1217,14 +1560,20 @@ impl AgentEngine {
              }
          }
  
@@ -1473,7 +1676,7 @@ index 3bf6767..ef4c5dc 100644
              });
          }
  
-@@ -1436,10 +1654,16 @@ impl AgentEngine {
+@@ -1436,10 +1785,16 @@ impl AgentEngine {
          // the command is not modified during execution.
          let cmd_ptr = cmd as *const dyn SlashCommand;
  
@@ -1491,35 +1694,152 @@ index 3bf6767..ef4c5dc 100644
              provider: Arc::clone(&self.provider),
              model: &self.model,
              output: self.output.as_ref(),
+@@ -1664,6 +2019,30 @@ fn parse_command_input(input: &str) -> Option<ParsedSlashCommand<'_>> {
+     })
+ }
+ 
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum ExecutionStage {
++    Analysis,
++    Execution,
++    Verification,
++}
++
++impl Default for ExecutionStage {
++    fn default() -> Self {
++        Self::Analysis
++    }
++}
++
++impl ExecutionStage {
++    fn parse(value: &str) -> Option<Self> {
++        match value {
++            "analysis" => Some(Self::Analysis),
++            "execution" => Some(Self::Execution),
++            "verification" => Some(Self::Verification),
++            _ => None,
++        }
++    }
++}
++
+ #[cfg(test)]
+ #[path = "engine_test.rs"]
+ mod engine_test;
 diff --git a/crates/aion-agent/src/engine_test.rs b/crates/aion-agent/src/engine_test.rs
-index ce0f213..ea8dc68 100644
+index ce0f213..bee0514 100644
 --- a/crates/aion-agent/src/engine_test.rs
 +++ b/crates/aion-agent/src/engine_test.rs
-@@ -57,6 +57,7 @@ mod tests_set_config {
+@@ -57,6 +57,8 @@ mod tests_set_config {
              msg_id: String::new(),
              pending_turn_id: None,
              current_turn_id: None,
 +            current_run_plan_unfinished: None,
++            current_run_execution_stage: crate::engine::ExecutionStage::default(),
              max_turns_per_run: Some(10),
              max_tool_call_malformed_turns: 3,
              max_tool_call_failure_turns: 3,
-@@ -435,6 +436,7 @@ mod tests_phase6 {
+@@ -382,6 +384,82 @@ mod tests_set_config {
+     }
+ }
+ 
++#[cfg(test)]
++mod execution_stage_tests {
++    use crate::engine::ExecutionStage;
++
++    #[test]
++    fn stage_hints_accept_only_known_values_and_default_to_analysis() {
++        assert_eq!(ExecutionStage::default(), ExecutionStage::Analysis);
++        assert_eq!(ExecutionStage::parse("execution"), Some(ExecutionStage::Execution));
++        assert_eq!(
++            ExecutionStage::parse("verification"),
++            Some(ExecutionStage::Verification)
++        );
++        assert_eq!(ExecutionStage::parse("analysis"), Some(ExecutionStage::Analysis));
++        assert_eq!(ExecutionStage::parse("unknown"), None);
++    }
++
++    #[test]
++    fn request_metrics_payload_has_safe_timing_and_usage_fields() {
++        let usage = aion_types::message::TokenUsage {
++            input_tokens: 123,
++            output_tokens: 45,
++            cache_read_tokens: 67,
++            ..Default::default()
++        };
++        let value = crate::engine::AgentEngine::request_metrics_value(
++            crate::turn::TurnKind::Normal,
++            Some("low"),
++            4,
++            20,
++            Some(7),
++            Some(&usage),
++            false,
++        );
++
++        assert_eq!(value["phase"], "normal");
++        assert_eq!(value["effective_reasoning_effort"], "low");
++        assert_eq!(value["compaction_ms"], 4);
++        assert_eq!(value["request_wall_ms"], 20);
++        assert_eq!(value["first_event_ms"], 7);
++        assert_eq!(value["input_tokens"], 123);
++        assert_eq!(value["output_tokens"], 45);
++        assert_eq!(value["cache_read_tokens"], 67);
++        assert!(value.get("error").is_none());
++        assert!(value["first_event_ms"].as_u64().unwrap() <= value["request_wall_ms"].as_u64().unwrap());
++        assert_eq!(
++            value.as_object().unwrap().keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>(),
++            [
++                "cache_read_tokens",
++                "compaction_ms",
++                "effective_reasoning_effort",
++                "first_event_ms",
++                "input_tokens",
++                "output_tokens",
++                "phase",
++                "request_wall_ms",
++            ]
++            .into_iter()
++            .collect()
++        );
++
++        let failed = crate::engine::AgentEngine::request_metrics_value(
++            crate::turn::TurnKind::Recovery(crate::turn::RecoveryReason::OutputLimit),
++            Some("low"),
++            0,
++            3,
++            None,
++            None,
++            true,
++        );
++        assert_eq!(failed["outcome"], "error");
++        assert_eq!(failed["phase"], "generation_recovery");
++        assert!(failed["input_tokens"].is_null());
++        assert!(failed.get("error").is_none());
++    }
++}
++
+ // ---------------------------------------------------------------------------
+ // Phase 6 tests — apply_context_modifiers()
+ // ---------------------------------------------------------------------------
+@@ -435,6 +513,8 @@ mod tests_phase6 {
              msg_id: String::new(),
              pending_turn_id: None,
              current_turn_id: None,
 +            current_run_plan_unfinished: None,
++            current_run_execution_stage: crate::engine::ExecutionStage::default(),
              max_turns_per_run: Some(10),
              max_tool_call_malformed_turns: 3,
              max_tool_call_failure_turns: 3,
-@@ -722,6 +724,7 @@ mod tests_compact {
+@@ -722,6 +802,8 @@ mod tests_compact {
              msg_id: String::new(),
              pending_turn_id: None,
              current_turn_id: None,
 +            current_run_plan_unfinished: None,
++            current_run_execution_stage: crate::engine::ExecutionStage::default(),
              max_turns_per_run: Some(10),
              max_tool_call_malformed_turns: 3,
              max_tool_call_failure_turns: 3,
-@@ -1130,6 +1133,380 @@ mod tests_compact {
+@@ -1130,6 +1212,380 @@ mod tests_compact {
          ));
      }
  
@@ -1900,23 +2220,25 @@ index ce0f213..ea8dc68 100644
      // -- Emergency check fires when at limit --
  
      #[tokio::test]
-@@ -1478,6 +1855,7 @@ mod tests_plan_mode {
+@@ -1478,6 +1934,8 @@ mod tests_plan_mode {
              msg_id: String::new(),
              pending_turn_id: None,
              current_turn_id: None,
 +            current_run_plan_unfinished: None,
++            current_run_execution_stage: crate::engine::ExecutionStage::default(),
              max_turns_per_run: Some(10),
              max_tool_call_malformed_turns: 3,
              max_tool_call_failure_turns: 3,
-@@ -1700,6 +2078,7 @@ mod tests_handle_command {
+@@ -1700,6 +2158,8 @@ mod tests_handle_command {
              msg_id: String::new(),
              pending_turn_id: None,
              current_turn_id: None,
 +            current_run_plan_unfinished: None,
++            current_run_execution_stage: crate::engine::ExecutionStage::default(),
              max_turns_per_run: Some(10),
              max_tool_call_malformed_turns: 3,
              max_tool_call_failure_turns: 3,
-@@ -2034,7 +2413,7 @@ mod tests_handle_command {
+@@ -2034,7 +2494,7 @@ mod tests_handle_command {
  
          assert_eq!(failed_executions.load(Ordering::SeqCst), 3);
          assert_eq!(successful_executions.load(Ordering::SeqCst), 3);
@@ -1925,7 +2247,7 @@ index ce0f213..ea8dc68 100644
          assert_eq!(result.turns, 3);
          assert!(result.text.contains("tool is blocked"));
  
-@@ -2520,14 +2899,15 @@ mod tests_loop_helpers {
+@@ -2520,14 +2980,15 @@ mod tests_loop_helpers {
  
      #[test]
      fn turn_kind_max_tokens_prompt_names_truncation() {
@@ -1945,7 +2267,7 @@ index ce0f213..ea8dc68 100644
      }
  
      #[test]
-@@ -2558,6 +2938,7 @@ mod tests_loop_helpers {
+@@ -2558,6 +3019,7 @@ mod tests_loop_helpers {
          StreamOutcome {
              assistant_text: assistant_text.to_string(),
              thinking_text: String::new(),
@@ -1953,11 +2275,12 @@ index ce0f213..ea8dc68 100644
              thinking_signature: None,
              provider_items: Vec::new(),
              tool_calls,
-@@ -2726,6 +3107,7 @@ mod tests_tool_policy_enforcement {
+@@ -2726,6 +3188,8 @@ mod tests_tool_policy_enforcement {
              msg_id: "test-message".to_string(),
              pending_turn_id: None,
              current_turn_id: None,
 +            current_run_plan_unfinished: None,
++            current_run_execution_stage: crate::engine::ExecutionStage::default(),
              max_tokens: Some(4096),
              max_turns_per_run: Some(10),
              max_tool_call_malformed_turns: 3,
@@ -2691,7 +3014,7 @@ index 2c497e5..2ec371f 100644
  pub(crate) mod framing;
  pub mod openai;
 diff --git a/crates/aion-providers/src/openai.rs b/crates/aion-providers/src/openai.rs
-index 52cbb49..3a5bef0 100644
+index 52cbb49..37fcf9f 100644
 --- a/crates/aion-providers/src/openai.rs
 +++ b/crates/aion-providers/src/openai.rs
 @@ -4,6 +4,7 @@ use async_trait::async_trait;
@@ -2716,6 +3039,82 @@ index 52cbb49..3a5bef0 100644
      async fn stream(&self, request: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError> {
          self.inner.stream(request).await
      }
+@@ -131,6 +139,10 @@ pub(crate) fn parse_sse_chunk(data: &str, state: &mut StreamState, auto_tool_id:
+     };
+     state.diagnostics.observe_json(&json);
+ 
++    if let Some(timings) = json.get("timings").and_then(parse_request_timings) {
++        events.push(LlmEvent::RequestTiming(timings));
++    }
++
+     // Some gateways deliver terminal errors as a data frame in a 200-status
+     // stream (`data: {"error": ...}`). Record the error so the stream
+     // processor fails the stream instead of producing an empty outcome.
+@@ -264,6 +276,30 @@ pub(crate) fn parse_sse_chunk(data: &str, state: &mut StreamState, auto_tool_id:
+     events
+ }
+ 
++fn parse_request_timings(value: &Value) -> Option<Value> {
++    const FIELDS: [&str; 6] = [
++        "prompt_n",
++        "prompt_ms",
++        "predicted_n",
++        "predicted_ms",
++        "predicted_per_second",
++        "cache_n",
++    ];
++    let mut timings = serde_json::Map::new();
++    for field in FIELDS {
++        let Some(number) = value.get(field) else {
++            continue;
++        };
++        if number
++            .as_f64()
++            .is_some_and(|number| number.is_finite() && number >= 0.0)
++        {
++            timings.insert(field.to_string(), number.clone());
++        }
++    }
++    (!timings.is_empty()).then_some(Value::Object(timings))
++}
++
+ #[cfg(test)]
+ #[path = "openai_test.rs"]
+ mod openai_test;
+diff --git a/crates/aion-providers/src/openai_test.rs b/crates/aion-providers/src/openai_test.rs
+index a00734e..15b5f9b 100644
+--- a/crates/aion-providers/src/openai_test.rs
++++ b/crates/aion-providers/src/openai_test.rs
+@@ -4,6 +4,29 @@ use super::*;
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn request_timings_are_sanitized_and_emitted_as_diagnostic_events() {
++        let mut state = StreamState::new();
++        let events = parse_sse_chunk(
++            r#"{"choices":[],"timings":{"prompt_n":12,"prompt_ms":2.5,"predicted_n":7,"predicted_ms":9,"predicted_per_second":0.8,"cache_n":4,"secret":"omit","negative":-1,"wrong_type":"8"}}"#,
++            &mut state,
++            false,
++        );
++
++        assert_eq!(events.len(), 1);
++        let LlmEvent::RequestTiming(timings) = &events[0] else {
++            panic!("expected sanitized request timing event");
++        };
++        assert_eq!(timings["prompt_n"], 12);
++        assert_eq!(timings["prompt_ms"], 2.5);
++        assert_eq!(timings["predicted_n"], 7);
++        assert_eq!(timings["predicted_ms"], 9);
++        assert_eq!(timings["predicted_per_second"], 0.8);
++        assert_eq!(timings["cache_n"], 4);
++        assert_eq!(timings.as_object().unwrap().len(), 6);
++        assert!(state.pending_done.is_none());
++    }
++
+     // --- usage token parsing ---
+ 
+     #[test]
 diff --git a/crates/aion-providers/src/provider.rs b/crates/aion-providers/src/provider.rs
 index 5a48a0f..9b954d8 100644
 --- a/crates/aion-providers/src/provider.rs
@@ -2747,6 +3146,22 @@ index 5a48a0f..9b954d8 100644
      async fn stream(&self, request: &LlmRequest) -> Result<mpsc::Receiver<LlmEvent>, ProviderError>;
  }
  
+diff --git a/crates/aion-providers/src/stream_diagnostics.rs b/crates/aion-providers/src/stream_diagnostics.rs
+index a14a07f..3318bdc 100644
+--- a/crates/aion-providers/src/stream_diagnostics.rs
++++ b/crates/aion-providers/src/stream_diagnostics.rs
+@@ -264,7 +264,10 @@ impl OpenAiStreamDiagnostics {
+             LlmEvent::Done { .. } => {
+                 self.parsed_done_event_count = self.parsed_done_event_count.saturating_add(1);
+             }
+-            LlmEvent::ThinkingSignature(_) | LlmEvent::ProviderItem { .. } | LlmEvent::Error(_) => {}
++            LlmEvent::ThinkingSignature(_)
++            | LlmEvent::ProviderItem { .. }
++            | LlmEvent::RequestTiming(_)
++            | LlmEvent::Error(_) => {}
+         }
+     }
+ 
 diff --git a/crates/aion-types/src/compact.rs b/crates/aion-types/src/compact.rs
 index 1efc586..aac711b 100644
 --- a/crates/aion-types/src/compact.rs
@@ -2777,6 +3192,19 @@ index 1efc586..aac711b 100644
  /// How a compaction was triggered.
  #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
  #[serde(rename_all = "snake_case")]
+diff --git a/crates/aion-types/src/llm.rs b/crates/aion-types/src/llm.rs
+index a5edb5b..cca7db3 100644
+--- a/crates/aion-types/src/llm.rs
++++ b/crates/aion-types/src/llm.rs
+@@ -42,6 +42,8 @@ pub enum LlmEvent {
+     ThinkingSignature(String),
+     /// Opaque provider output item that must be persisted and replayed.
+     ProviderItem { provider: String, item: Value },
++    /// Sanitized provider request timing metadata; diagnostic only, never history.
++    RequestTiming(Value),
+     /// Response complete
+     Done { stop_reason: StopReason, usage: TokenUsage },
+     /// Error from the API
 diff --git a/crates/aion-agent/src/compact/checkpoint.rs b/crates/aion-agent/src/compact/checkpoint.rs
 new file mode 100644
 index 0000000..57ea90a
@@ -3296,13 +3724,13 @@ index 0000000..1e0d807
 +}
 diff --git a/crates/aion-agent/tests/generation_recovery_test.rs b/crates/aion-agent/tests/generation_recovery_test.rs
 new file mode 100644
-index 0000000..cb968ed
+index 0000000..d6f2fe9
 --- /dev/null
 +++ b/crates/aion-agent/tests/generation_recovery_test.rs
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,403 @@
 +mod common;
 +use aion_agent::engine::AgentEngine;
-+use aion_agent::output::null_sink::NullSink;
++use aion_agent::output::OutputSink;
 +use aion_providers::{LlmProvider, ProviderError};
 +use aion_tools::registry::ToolRegistry;
 +use aion_types::llm::{LlmEvent, LlmRequest, ThinkingConfig};
@@ -3316,7 +3744,20 @@ index 0000000..cb968ed
 +struct Provider {
 +    turns: Mutex<VecDeque<Vec<LlmEvent>>>,
 +    requests: Mutex<Vec<LlmRequest>>,
++    infos: Arc<Mutex<Vec<String>>>,
 +    native: bool,
++}
++
++struct RecordingSink(Arc<Mutex<Vec<String>>>);
++impl OutputSink for RecordingSink {
++    fn emit_text_delta(&self, _: &str, _: &str) {}
++    fn emit_thinking(&self, _: &str, _: &str) {}
++    fn emit_tool_call(&self, _: &str, _: &str, _: &str) {}
++    fn emit_tool_result(&self, _: &str, _: &str, _: bool, _: &str) {}
++    fn emit_stream_start(&self, _: &str) {}
++    fn emit_stream_end(&self, _: &str, _: usize, _: u64, _: u64, _: u64, _: u64) {}
++    fn emit_error(&self, _: &str) {}
++    fn emit_info(&self, message: &str) { self.0.lock().unwrap().push(message.to_string()); }
 +}
 +#[async_trait]
 +impl LlmProvider for Provider {
@@ -3348,39 +3789,186 @@ index 0000000..cb968ed
 +    vec![LlmEvent::TextDelta(text.into()), done(StopReason::EndTurn)]
 +}
 +fn plan(id: &str, status: &str) -> Vec<LlmEvent> {
++    plan_stage(id, status, None)
++}
++fn plan_stage(id: &str, status: &str, stage: Option<&str>) -> Vec<LlmEvent> {
++    let mut input = json!({"steps":[{"text":"Create and verify requested files","status":status}]});
++    if let Some(stage) = stage {
++        input["stage"] = json!(stage);
++    }
 +    vec![
 +        LlmEvent::ToolUse {
 +            id: id.into(),
 +            name: "update_plan".into(),
-+            input: json!({"steps":[{"text":"Create and verify requested files","status":status}]}),
++            input,
 +            extra: None,
 +        },
 +        done(StopReason::ToolUse),
 +    ]
 +}
 +fn engine(turns: Vec<Vec<LlmEvent>>, native: bool) -> (AgentEngine, Arc<Provider>) {
++    engine_with_write_error(turns, native, false)
++}
++fn engine_with_write_error(
++    turns: Vec<Vec<LlmEvent>>,
++    native: bool,
++    write_error: bool,
++) -> (AgentEngine, Arc<Provider>) {
++    let infos = Arc::new(Mutex::new(Vec::new()));
 +    let provider = Arc::new(Provider {
 +        turns: Mutex::new(turns.into()),
 +        requests: Mutex::new(vec![]),
++        infos: Arc::clone(&infos),
 +        native,
 +    });
 +    let mut config = test_config();
++    config.thinking = Some(ThinkingConfig::Enabled { budget_tokens: 4321 });
 +    config.max_turns = Some(20);
 +    config.session.enabled = false;
 +    config.compact.enabled = false;
 +    let mut tools = ToolRegistry::new();
 +    tools.register(Box::new(MockTool::new("update_plan", "Shown to user", false)));
-+    tools.register(Box::new(MockTool::new("write_file", "Created and verified", false)));
-+    (
-+        AgentEngine::new_with_provider(
++    tools.register(Box::new(MockTool::new("write_file", "Created and verified", write_error)));
++    let mut engine = AgentEngine::new_with_provider(
 +            provider.clone(),
 +            config,
 +            tools,
-+            Arc::new(NullSink),
++            Arc::new(RecordingSink(infos)),
 +            std::env::temp_dir(),
-+        ),
-+        provider,
-+    )
++        );
++    engine.set_initial_reasoning_effort(Some("high".into()));
++    (engine, provider)
++}
++
++fn work(id: &str) -> Vec<LlmEvent> {
++    vec![
++        LlmEvent::ToolUse {
++            id: id.into(),
++            name: "write_file".into(),
++            input: json!({}),
++            extra: None,
++        },
++        done(StopReason::ToolUse),
++    ]
++}
++
++fn request_metrics(infos: &[String]) -> Vec<serde_json::Value> {
++    infos
++        .iter()
++        .filter_map(|info| info.strip_prefix("Request metrics: "))
++        .map(|json| serde_json::from_str(json).unwrap())
++        .collect()
++}
++
++#[tokio::test]
++async fn execution_stage_lowers_effort_and_keeps_thinking_then_verification_restores_effort() {
++    let (mut engine, provider) = engine(
++        vec![
++            plan_stage("p1", "doing", Some("execution")),
++            work("write-1"),
++            plan_stage("p2", "done", Some("verification")),
++            answer("Files are complete"),
++        ],
++        true,
++    );
++
++    engine.run("Create files", "stage-test").await.unwrap();
++    let requests = provider.requests.lock().unwrap();
++    assert_eq!(requests.len(), 4);
++    assert_eq!(requests[0].reasoning_effort.as_deref(), Some("high"));
++    assert_eq!(requests[1].reasoning_effort.as_deref(), Some("low"));
++    assert!(matches!(requests[1].thinking, Some(ThinkingConfig::Enabled { budget_tokens: 4321 })));
++    assert_eq!(requests[2].reasoning_effort.as_deref(), Some("low"));
++    assert_eq!(requests[3].reasoning_effort.as_deref(), Some("high"));
++    assert!(matches!(requests[3].thinking, Some(ThinkingConfig::Enabled { budget_tokens: 4321 })));
++    drop(requests);
++    let metrics = request_metrics(&provider.infos.lock().unwrap());
++    assert_eq!(metrics.len(), 4);
++    for metric in metrics {
++        assert_eq!(metric["phase"], "normal");
++        assert!(metric["compaction_ms"].as_u64().is_some());
++        assert!(metric["request_wall_ms"].as_u64().is_some());
++        if let Some(first_event_ms) = metric["first_event_ms"].as_u64() {
++            assert!(first_event_ms <= metric["request_wall_ms"].as_u64().unwrap());
++        }
++        assert!(metric.get("messages").is_none());
++        assert!(metric.get("error").is_none());
++    }
++}
++
++#[tokio::test]
++async fn missing_or_unknown_stage_resets_to_default_after_successful_plan_update() {
++    for stage in [None, Some("unrecognized")] {
++        let (mut engine, provider) = engine(
++            vec![
++                plan_stage("p1", "doing", Some("execution")),
++                plan_stage("p2", "done", stage),
++                answer("Files are complete"),
++            ],
++            true,
++        );
++        engine.run("Create files", "stage-reset").await.unwrap();
++        let requests = provider.requests.lock().unwrap();
++        assert_eq!(requests[1].reasoning_effort.as_deref(), Some("low"));
++        assert_eq!(requests[2].reasoning_effort.as_deref(), Some("high"));
++    }
++}
++
++#[tokio::test]
++async fn tool_error_resets_execution_stage_and_new_run_starts_at_default() {
++    let (mut engine, provider) = engine_with_write_error(
++        vec![
++            plan_stage("p1", "done", Some("execution")),
++            work("write-fails"),
++            answer("The plan is complete"),
++            answer("Second request"),
++        ],
++        true,
++        true,
++    );
++    engine.run("First task", "first").await.unwrap();
++    engine.run("Second task", "second").await.unwrap();
++    let requests = provider.requests.lock().unwrap();
++    assert_eq!(requests[1].reasoning_effort.as_deref(), Some("low"));
++    assert_eq!(requests[2].reasoning_effort.as_deref(), Some("high"));
++    assert_eq!(requests[3].reasoning_effort.as_deref(), Some("high"));
++}
++
++#[tokio::test]
++async fn provider_stream_error_emits_failure_metrics_and_propagates() {
++    let (mut engine, provider) = engine(
++        vec![vec![LlmEvent::Error("provider failed".into())]],
++        true,
++    );
++
++    let result = engine.run("Create files", "provider-error").await;
++
++    assert!(result.is_err());
++    assert_eq!(provider.requests.lock().unwrap().len(), 1);
++    let metrics = request_metrics(&provider.infos.lock().unwrap());
++    assert_eq!(metrics.len(), 1);
++    assert_eq!(metrics[0]["phase"], "normal");
++    assert_eq!(metrics[0]["outcome"], "error");
++    assert!(metrics[0].get("error").is_none());
++}
++
++#[tokio::test]
++async fn provider_timing_event_is_emitted_separately_without_entering_history() {
++    let timings = json!({"prompt_n": 10, "prompt_ms": 2.5, "predicted_n": 3});
++    let (mut engine, provider) = engine(
++        vec![
++            vec![LlmEvent::RequestTiming(timings.clone()), LlmEvent::TextDelta("ok".into()), done(StopReason::EndTurn)],
++        ],
++        true,
++    );
++    engine.run("A short task", "timing").await.unwrap();
++
++    let metrics = request_metrics(&provider.infos.lock().unwrap());
++    let provider_timing = metrics.iter().find(|metric| metric["phase"] == "provider_timing").unwrap();
++    assert_eq!(provider_timing["timings"], timings);
++    let request_messages = serde_json::to_string(&provider.requests.lock().unwrap()[0].messages).unwrap();
++    assert!(!request_messages.contains("prompt_ms"));
++    assert!(!request_messages.contains("provider_timing"));
 +}
 +#[tokio::test]
 +async fn repeated_reasoning_is_interrupted_then_executes_tool_with_tools_enabled() {

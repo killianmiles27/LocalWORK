@@ -494,6 +494,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
     let mut thinking = String::new();
     let mut last_run_notice: Option<String> = None;
     let mut tool_args: HashMap<String, Value> = HashMap::new();
+    let mut tool_started: HashMap<String, std::time::Instant> = HashMap::new();
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
@@ -547,6 +548,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 let cat = tool.get("category").and_then(|v| v.as_str()).unwrap_or("mcp").to_string();
                 let args = tool.get("args").cloned().unwrap_or(Value::Null);
                 let call_id = ev.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                tool_started.insert(call_id.clone(), std::time::Instant::now());
                 tool_args.insert(call_id.clone(), json!({"name": name, "args": args}));
                 let auto_edit = *agent.auto_edit.lock().unwrap();
                 let remembered = agent.inner.lock().unwrap().remembered.clone();
@@ -586,6 +588,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 let call_id = ev.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                 let ta = tool_args.remove(call_id).unwrap_or(Value::Null);
                 let out = ev.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                let elapsed = tool_started.remove(call_id).map(|start| start.elapsed().as_millis() as u64);
                 let clipped: String = out.chars().take(6000).collect();
                 let c = db.lock().unwrap();
                 store::add_msg(
@@ -593,17 +596,24 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     &conv,
                     "tool",
                     &json!({"call_id": call_id, "name": ev.get("tool_name"), "status": ev.get("status"),
-                            "output": clipped, "output_type": ev.get("output_type"), "request": ta}),
+                            "output": clipped, "output_type": ev.get("output_type"), "request": ta, "request_elapsed_ms": elapsed}),
                 );
             }
             "tool_cancelled" => {
                 let call_id = ev.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                 let ta = tool_args.remove(call_id).unwrap_or(Value::Null);
+                tool_started.remove(call_id);
                 let c = db.lock().unwrap();
                 store::add_msg(&c, &conv, "tool", &json!({"call_id": call_id, "status": "cancelled", "output": ev.get("reason"), "request": ta}));
             }
             "info" => {
                 let m = ev.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(raw) = m.strip_prefix("Request metrics: ") {
+                    if let Ok(metrics) = serde_json::from_str::<Value>(raw) {
+                        store::add_msg(&db.lock().unwrap(), &conv, "diagnostic", &metrics);
+                    }
+                    continue; // Measurements are export-only, never an extra model/context request.
+                }
                 if m.starts_with("Generation recovery:") || m.starts_with("Run incomplete:") {
                     // Keep restarted model output in a distinct assistant message and make the boundary visible.
                     flush_text(&db, &conv, &mut text, &mut thinking);

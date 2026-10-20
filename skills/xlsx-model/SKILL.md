@@ -2,25 +2,8 @@
 name: xlsx-model
 description: Build spreadsheets with real formulas, clear headers and totals
 ---
-1. Plan the layout: one header row, one record per row, units in the header, inputs separate from calculations.
-2. Use formulas, never typed results: "formula":"C2-B2", totals as SUM(B2:B5). Percentages as a fraction with numberformat 0.0%. Money as #,##0.00.
-3. Bold header row, bold Total row. Create the cells in one batch (see the built-in Excel recipe).
-4. Verify: validate, then view the file as text and check that the computed values match what you expect by hand.
-5. Say in the answer which cells hold formulas so the user can change the inputs.
-
-For an attached workbook, inspect its sheet names, headers and formulas, then make a copy and preserve the original data. Do not rebuild a large source table cell by cell. Put only the requested rollup in a small summary table, with formulas that reference the copied source sheet, and chart that summary range. Example batch operations:
-
-```json
-[{"command":"add","parent":"/","type":"sheet","props":{"name":"Summary"}},
- {"command":"set","path":"/Summary/A1","props":{"value":"Month"}},
- {"command":"set","path":"/Summary/B1","props":{"value":"Total"}},
- {"command":"set","path":"/Summary/A2","props":{"value":"Jan"}},
- {"command":"set","path":"/Summary/B2","props":{"formula":"SUM('Source Data'!B2:B500)"}},
- {"command":"add","parent":"/Summary","type":"chart","props":{"chartType":"column","dataRange":"Summary!A1:B2","title":"Monthly total","anchor":"D2:J18"}}]
-```
-
-Replace the example sheet, ranges, labels and aggregation with values verified from the workbook. Use formulas over source ranges; expand the summary rows only to the number of categories requested. Batch operation results are summarized by the tool; if one fails, fix the first reported operation and rerun the batch.
-
-## Reliable analysis and scratch work
-
-Use the workbook runtime, formulas, or a small program to inspect and aggregate data; do not mentally enumerate hundreds of cells. Preserve the source and distinguish facts directly present in it from estimates or assumptions. Never infer a currency the source does not state. For household projections, treat sinking-fund contributions as cashflow allocations and keep them distinct from savings or net-worth growth. Use a unique workspace-local scratch path for temporary work; never delete a shared fixed temporary file.
+1. Load office-recipes. Start with tabular inspect for sheet names, headers, types and a small sample; aggregate named columns using explicit date formats when needed. Read only a bounded range for uncertainties. Do not write a ZIP parser or transcribe a table of expected results.
+2. Preserve the source. Build a compact summary in a copied workbook with office_recipe table, using the aggregate dataset for keys and a formula_columns template per calculated column. Formulas must reference the copied source. The template substitutes row numbers without handwritten cell lists or generator scripts. For unsupported/custom structures, use one OfficeCLI batch.
+3. Use appropriate numeric formats and units; percentages are fractions. Never invent a currency. Keep original source data and calculations separate.
+4. Independently verify: aggregate source data once, read the output's evaluated range using officecli read-ranges, then tabular compare the saved datasets with explicit keys/columns and tolerance. Cached XML values may be stale. Resolve every mismatch; do not substitute constants for broken formulas or claim file validation proves calculations.
+5. Verify the file, close it, show_document and identify formula locations. Keep the plan current at verified stages.

@@ -17,6 +17,7 @@ Browser lifecycle and app acceptance tests need the pinned runtime resources:
 
 ```powershell
 python scripts/tests/browser_windows.py
+python scripts/e2e/check-efficient-tools.py --work ../.e2e-runs
 python scripts/e2e/check-agent-context.py --work ../.e2e-runs
 python scripts/e2e/check-agent-long-turn.py --work ../.e2e-runs
 python scripts/e2e/check-agent-python.py --work ../.e2e-runs --python '<configured-python>'
@@ -25,6 +26,8 @@ node scripts/tests/thinking.browser.mjs
 node scripts/tests/plan.browser.mjs
 pwsh -NoProfile -File scripts/e2e/run-all.ps1 -Exe ./src-tauri/target/release/localwork.exe -Only T-A1,T-A2,T-C1 -Iterations 1 -KeepWork
 ```
+
+The efficient-tools fixture creates unrelated inventory and experiment files, evaluates live formulas, compares saved aggregates, verifies a chart and Word document, and requires real bundled OfficeCLI. It does not run a model or measure model-task speed.
 
 The acceptance harness uses isolated data and a tiny model stub by default. Passing it does not establish the real model's reasoning quality. Do not use personal documents, credentials, or live servers as fixtures. Report skipped checks and benchmark failures honestly.
 

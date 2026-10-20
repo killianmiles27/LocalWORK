@@ -102,6 +102,9 @@ pub fn chat_markdown(title: &str, msgs: &[Value]) -> String {
                     },
                     timestamp(m)
                 ));
+                if let Some(ms) = b["request_elapsed_ms"].as_u64() {
+                    out.push_str(&format!("> Request-to-result time: {ms} ms (includes approval and host overhead)\n"));
+                }
                 if !request.is_null() {
                     let args = if !request["args"].is_null() {
                         &request["args"]
@@ -123,6 +126,12 @@ pub fn chat_markdown(title: &str, msgs: &[Value]) -> String {
                     out.push_str(&code_block(&s(&b["output"])));
                     out.push_str("\n</details>\n");
                 }
+            }
+            "diagnostic" => {
+                out.push_str("\n<details>\n<summary>Request timing and tokens</summary>\n\n");
+                out.push_str(&code_block(&serde_json::to_string_pretty(b).unwrap_or_default()));
+                out.push_str("\n</details>\n");
+                continue;
             }
             "notice" => out.push_str(&format!("\n*{}*\n", s(&b["text"]).trim())),
             "error" => {
@@ -210,5 +219,21 @@ mod tests {
         assert!(md.contains("> Tool: `browser` (declined)"));
         assert!(md.contains("\nDone.\n"));
         assert!(md.contains("> Timestamp: 42 ms since Unix epoch"));
+    }
+
+    #[test]
+    fn exports_measurements_without_treating_wait_time_as_decode_speed() {
+        let msgs = vec![
+            json!({"role":"assistant","body":{"text":"First"}}),
+            json!({"role":"diagnostic","body":{"request_wall_ms":2300,"first_event_ms":1000,"output_tokens":20}}),
+            json!({"role":"tool","body":{"name":"tabular","request_elapsed_ms":31,"output":"ok"}}),
+            json!({"role":"assistant","body":{"text":"Finished"}}),
+        ];
+        let md = chat_markdown("Measurements", &msgs);
+        assert!(md.contains("<summary>Request timing and tokens</summary>"));
+        assert!(md.contains("\"request_wall_ms\": 2300"));
+        assert!(md.contains("31 ms (includes approval and host overhead)"));
+        assert_eq!(md.matches("## Assistant").count(), 1);
+        assert!(!md.contains("tokens per second"));
     }
 }

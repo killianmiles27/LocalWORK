@@ -172,6 +172,7 @@ export default function App() {
             setLive({ text: "", thinking: "", busy: false }); reload(conv); refreshConvs(); refreshCtx(conv); break;
           case "context_usage": setCtx({ used: ev.used, window: ev.window }); break;
           case "info":
+            if (text(ev.message).startsWith("Request metrics: ")) break;
             refreshCtx(conv);
             if (text(ev.message).startsWith("Generation recovery:")) {
               // The host has saved the previous fragment before the recovery notice.
@@ -694,6 +695,7 @@ type Block = { kind: "row"; m: Msg } | { kind: "tools"; items: Msg[] };
 function group(msgs: Msg[]): Block[] {
   const out: Block[] = [];
   for (const m of msgs) {
+    if (m.role === "diagnostic") continue;
     // Thinking-only steps have no visible text; letting them split tool runs would print one row per call.
     if (m.role === "assistant" && !text(m.body?.text).trim()) continue;
     const last = out[out.length - 1];

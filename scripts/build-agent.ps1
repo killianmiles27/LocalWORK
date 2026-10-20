@@ -1,4 +1,4 @@
-# Build the pinned agent with LocalWORK's compaction and recovery patch.
+# Build the pinned agent with LocalWORK's compaction, execution and recovery patch.
 [CmdletBinding()]
 param([string]$SourceDirectory)
 $ErrorActionPreference = 'Stop'
@@ -24,8 +24,8 @@ try {
     if ($LASTEXITCODE) { throw 'Compaction regression tests failed.' }
     cargo test --locked -p aion-agent --lib native_
     if ($LASTEXITCODE) { throw 'Native agent transaction tests failed.' }
-    cargo test --locked -p aion-providers native_compaction
-    if ($LASTEXITCODE) { throw 'Native provider compaction tests failed.' }
+    cargo test --locked -p aion-providers --lib
+    if ($LASTEXITCODE) { throw 'Provider compatibility and timing tests failed.' }
     cargo test --locked -p aion-agent --test autocompact_test
     if ($LASTEXITCODE) { throw 'Automatic compaction integration tests failed.' }
     cargo test --locked -p aion-mcp --lib

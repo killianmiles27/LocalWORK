@@ -88,7 +88,7 @@ fn officecli_paths(args: &Value, workspace: &Path) -> (Vec<PathBuf>, bool) {
 
 fn arg_paths(tool: &str, args: &Value, workspace: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    for k in ["file_path", "path", "filePath", "output", "file"] {
+    for k in ["file_path", "path", "filePath", "output", "file", "target", "source", "dataset", "dataset_path", "actual_path"] {
         if let Some(s) = args.get(k).and_then(|v| v.as_str()) {
             paths.push(resolve_arg_path(s, workspace));
             if !tool.to_ascii_lowercase().contains("officecli") {
@@ -239,6 +239,9 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         return crate::sshpolicy::decide(args);
     }
     if t.ends_with("assemble_document") || (t.ends_with("show_document") && !outside) {
+        return Decision::Allow;
+    }
+    if t.ends_with("tabular") && !outside {
         return Decision::Allow;
     }
     if t.contains("officecli") {

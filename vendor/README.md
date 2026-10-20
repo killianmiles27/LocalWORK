@@ -15,3 +15,5 @@ not a full tamper-detection check of every installed executable or npm file.
 `vendor\whisper` holds whisper.cpp's `whisper-cli.exe` (CPU build) and `ggml-small-q5_1.bin` (about 190 MB) for push-to-talk. The same script fetches both.
 
 The browser tool needs vendor\node (portable Node), vendor\playwright (@playwright/cli) and vendor\browsers (Chromium headless shell); fetch-vendor.ps1 installs all three.
+
+The agent patch also supports explicit execution-stage effort hints and per-request timing/token diagnostics. Provider timing metadata is separate from message content and never enters model history. The build script checks provider parsing and agent execution/recovery regressions before building.

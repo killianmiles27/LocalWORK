@@ -40,6 +40,16 @@ Include the result you want, the input files, important limits, and how you will
 
 The assistant can research, use websites, edit files, and create documents. It should verify its work, but you still need to review facts, calculations, citations, and layout. A file appearing in the panel does not establish that its content is correct.
 
+## Working efficiently with data and documents
+
+Spreadsheet attachments initially return a compact profile instead of a full cell dump. The assistant can inspect selected ranges, aggregate CSV/TSV/Excel tables and reuse saved results to build documents. Ambiguous dates require an explicit format; blank, nonnumeric or formula-error inputs are not silently summed as zero. Stored Excel formula caches may be stale; evaluated range reads and comparisons check calculations separately from file validity. Changes to a source invalidate saved comparisons.
+
+Reusable recipes create new Word reports or Excel tables/charts, optionally copying a source workbook. They refuse to overwrite an existing target. A one-page layout is a formatting preset; pagination still needs checking. Custom layouts and edits remain available through OfficeCLI. The recipes contain no task-specific categories, dates, recommendations or business rules.
+
+For planned work, the assistant can mark an established procedure as execution to use low reasoning effort on the native local provider. Analysis, verification, a tool error or a new task restores configured effort; model profiles are not edited. This is a hint, not a correctness guarantee.
+
+Chat downloads include per-request wall time, first streamed event wait, input/output/cache token counts and provider timing fields when supplied. A first event may contain an already completed tool call, so that wait is not labelled prompt-processing or decoding time. Tool request-to-result durations include approvals and host overhead. Missing measurements remain unknown. These diagnostics are stored locally and are not injected into the model's context.
+
 ## Automatic mode and approvals
 
 Automatic mode starts enabled and is saved across restarts. Routine edits, tool use, and ordinary workspace commands proceed without repeated prompts. Recognized destructive commands, credential entry, external submissions, and other consequential actions can still ask for approval.

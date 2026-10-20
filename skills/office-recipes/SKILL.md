@@ -1,0 +1,18 @@
+---
+name: office-recipes
+description: Prepare reusable Word document and Excel table recipes as validated OfficeCLI batches
+---
+
+Call the `office_recipe` tool directly. It validates inputs, creates a new target (or copies a distinct source workbook), and executes a batch. Existing targets are refused. Do not write a generator script or a scratch JSON batch for a supported recipe. For custom structures and edits use `officecli` batch with a separate `commands` array.
+
+Inspect data with `tabular` action `inspect`, then use action `aggregate` with `group_by` columns and `measures` such as `[{"column":"Quantity","op":"sum","as":"Quantity"}]`. Count uses `{"op":"count","as":"Records"}` and counts rows. A date grouping is `{"column":"Observed","transform":"year"}`; text dates outside ISO require an explicit strptime `date_format`. Never guess ambiguous dates. Keep the returned dataset_path; full results remain in that file even when the preview is shortened. Formulas in raw workbook XML are cached and not accepted as current calculations.
+
+For `action: "document"`, pass a workspace-relative `.docx` target, a title, and sections shaped as `{heading, paragraphs: [], bullets: []}`. Optional `layout` is `standard` or `one-page`; optional `font` defaults to Calibri. The one-page preset uses compact margins and reports an approximate word-budget warning. It never proves pagination: verify page count when the user requires it.
+
+For `action: "table"`, pass an `.xlsx` target, optional distinct `.xlsx` source, sheet name, and either `data: {columns: [..], rows: [[..]]}` or a relative JSON `dataset` path. Dataset rows may be arrays or objects keyed by column; this accepts the version 1 saved aggregate shape and parent-supplied range data. A cell object `{formula: "..."}` denotes a formula; other cell values remain literal. Use `formula_columns` for repeated live formulas, for example `{"Total":"SUMIF('Source Data'!$A$2:$A$100,A{row},'Source Data'!B$2:B$100)"}`; only `{row}`, `{first_data_row}`, and `{last_data_row}` are substituted. Copy a source workbook when a formula references one of its sheets. Optional `total_row: {label, numeric_columns: [..]}` adds SUM formulas. Optional `chart: {type, title, label_column, value_columns}` charts the supplied contiguous data range and anchors after the table. With a source workbook, recipes add a summary sheet and leave source contents alone. The tool copies source to target before adding the summary; choose an unused sheet name.
+
+Keep recipes generic and based on the supplied data. Do not invent units, categories, totals, currencies, or business rules. For independent numeric verification, call `officecli` with `args:["read-ranges","result.xlsx"]` and `ranges:["/Summary/A1:C20"]`. The first row supplies column names; supply `columns:[...]` when reading a range without headers. This uses evaluated values and returns dataset paths. Then call `tabular` action `compare` with the original aggregate's `dataset_path`, the evaluated dataset as `actual_path`, matching `keys` and numeric `columns`, and an explicit tolerance. Column names and key types must match. Resolve errors/missing values; never replace a broken formula with the expected constant. Changed source fingerprints invalidate saved results.
+
+Review the returned warnings and batch result, then verify the finished file against the user's request; validation alone does not prove content correctness.
+
+When using `update_plan`, use `stage: "execution"` only after the algorithm, input, and layout are decided. Use `analysis` or `verification` for those stages so configured reasoning effort is restored; never globally disable thinking.
