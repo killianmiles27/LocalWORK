@@ -1,6 +1,6 @@
 [package]
 name = "localwork"
-version = "0.1.2"
+version = "0.1.3"
 description = "Local Work-Style AI desktop app"
 license = "Apache-2.0"
 repository = "https://github.com/killianmiles27/LocalWORK"
