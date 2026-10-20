@@ -12,6 +12,8 @@ Keep task files together. For an existing document, work on a copy until you tru
 
 The sidebar groups chats into Pinned, Today, Yesterday, Previous 7 days, Previous 30 days and Older. Search chats at the top of the sidebar to match titles and message text. Hover over a chat to pin, rename, export or delete it. You can also double-click its title to rename it.
 
+Markdown downloads include saved thinking, tool arguments, stored tool output, statuses and timestamps. Thinking and tool details are collapsible in Markdown viewers that support HTML details. Tool output may already have been shortened when stored. Review the export before sharing it: it can contain local paths and file contents.
+
 ## Edit a message or regenerate a reply
 
 Hover over one of your messages and choose Edit. In an empty composer, Up arrow edits your last message. Sending the edited text removes that message and everything after it, and the chat continues from there. Regenerate on the last reply asks the same question again. Files the assistant already changed are not undone. Both actions wait until the current reply has finished, so stop it first if needed. Very long chats that were summarized cannot go back past the summary.
@@ -75,6 +77,10 @@ Browser profiles may contain login cookies. Treat the data folder as sensitive. 
 The context circle shows an estimate of the model's current context usage. An unavailable reading is shown as unknown. During generation, a displayed measurement may be from the preceding request.
 
 Automatic compaction summarizes earlier work at 80% of the selected context window. When the selected Strata server advertises native compaction, both the Compact button and automatic compaction use that endpoint. Recent complete turns and tool results are retained; older turns become a summary. Failed or cancelled compaction leaves the original history in place. Other servers use the generic checkpoint summarizer. A smaller summary leaves more room for the next steps, but details can be lost. If a task goes off track, stop it and give a specific correction or start a fresh chat with the relevant files.
+
+If native compaction cannot shorten a long first request, the agent can checkpoint earlier completed work within that request and continue. It preserves the user requests and the latest two complete assistant/tool exchanges, then checks the replacement with the native service before saving it. An incomplete summary or a replacement that still leaves too little reply space is rejected; the saved history is retained.
+
+The live thinking panel follows new text automatically. Scrolling up inside it pauses following; returning to its bottom resumes it. This works independently of scrolling the main chat.
 
 Use **Stop** to interrupt a run. Completed writes are not undone. Review the working folder before restarting a task that was interrupted during an edit or download.
 

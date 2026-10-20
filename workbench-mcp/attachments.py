@@ -1,5 +1,5 @@
 """read_attachment: turns an attached file into text, readable in ranges. Stdlib plus pypdf (already bundled in libs)."""
-import csv, io, os, re, sys, zipfile
+import csv, io, os, posixpath, re, sys, zipfile
 from xml.etree import ElementTree as ET
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "libs"))
@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 IMG = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 
@@ -35,16 +37,35 @@ def _xlsx(z):
     if "xl/sharedStrings.xml" in z.namelist():
         for si in ET.fromstring(z.read("xl/sharedStrings.xml")).iter(S + "si"):
             shared.append("".join(t.text or "" for t in si.iter(S + "t")))
-    sheets = sorted((n for n in z.namelist() if re.match(r"xl/worksheets/sheet\d+\.xml$", n)), key=lambda n: int(re.findall(r"\d+", n)[0]))
+    names = set(z.namelist())
+    sheets = []
+    if "xl/workbook.xml" in names and "xl/_rels/workbook.xml.rels" in names:
+        rels_root = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+        targets = {rel.get("Id"): rel.get("Target") for rel in rels_root.iter(REL + "Relationship")}
+        workbook = ET.fromstring(z.read("xl/workbook.xml"))
+        for sheet in workbook.iter(S + "sheet"):
+            target = targets.get(sheet.get(R + "id"))
+            if not target:
+                continue
+            path = posixpath.normpath(target.lstrip("/") if target.startswith("/") else posixpath.join("xl", target))
+            if path in names:
+                sheets.append((sheet.get("name") or path, path))
+    if not sheets:
+        sheets = [(f"Sheet {i}", n) for i, n in enumerate(
+            sorted((n for n in names if re.match(r"xl/worksheets/sheet\d+\.xml$", n)),
+                   key=lambda n: int(re.findall(r"\d+", n)[0])), 1)]
     out = []
-    for i, n in enumerate(sheets, 1):
-        out.append(f"--- Sheet {i} ---")
+    for sheet_name, n in sheets:
+        out.append(f"--- Sheet: {sheet_name} ---")
         for row in ET.fromstring(z.read(n)).iter(S + "row"):
             cells = []
             for c in row.iter(S + "c"):
                 v = c.find(S + "v")
                 f = c.find(S + "f")
                 val = "" if v is None else (shared[int(v.text)] if c.get("t") == "s" and v.text else (v.text or ""))
+                if c.get("t") == "inlineStr":
+                    inline = c.find(S + "is")
+                    val = "" if inline is None else "".join(t.text or "" for t in inline.iter(S + "t"))
                 if f is not None and f.text:
                     val = f"{val} (={f.text})"
                 cells.append(f"{c.get('r')}={val}")

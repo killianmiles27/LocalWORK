@@ -23,12 +23,34 @@ class OfficeCliBatch(unittest.TestCase):
         self.assertEqual(argv[1:3], ["batch", "sheet.xlsx"])
         self.assertEqual(argv[3], "--commands")
         self.assertEqual(json.loads(argv[4]), commands)
+        self.assertEqual(argv[-1], "--json")
+
+    def test_batch_returns_counts_instead_of_cell_logs(self):
+        payload = {"success": True, "data": {"results": [
+            {"index": i, "success": True, "output": f"Updated /Sheet1/A{i}: value=x"}
+            for i in range(1, 41)
+        ], "summary": {"total": 40, "executed": 40, "succeeded": 40, "failed": 0, "skipped": 0}}}
+        result = type("Result", (), {"stdout": json.dumps(payload), "stderr": "", "returncode": 0})()
+        with patch.object(server.subprocess, "run", return_value=result) as office:
+            output = server.call_tool("officecli", {"args": ["batch", "sheet.xlsx"]})
+        self.assertIn("40/40 operations succeeded", output)
+        self.assertNotIn("Updated /Sheet1", output)
+        self.assertIn("--json", office.call_args.args[0])
+
+    def test_batch_failure_keeps_first_operation_and_error(self):
+        payload = {"success": False, "data": {"results": [
+            {"index": 18, "success": False, "error": "Sheet not found: Nope", "item": {"command": "set", "path": "/Nope/A1"}}
+        ], "summary": {"total": 25, "executed": 25, "succeeded": 24, "failed": 1, "skipped": 0}}}
+        result = type("Result", (), {"stdout": json.dumps(payload), "stderr": "", "returncode": 1})()
+        with patch.object(server.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, r"24/25 succeeded.*operation 19 \(/Nope/A1\).*Sheet not found: Nope"):
+                server.call_tool("officecli", {"args": ["batch", "sheet.xlsx"]})
 
     def test_legacy_input_argument_still_passes_through(self):
         with patch.object(server.subprocess, "run", return_value=type("Result", (), {"stdout": "ok", "stderr": "", "returncode": 0})()) as office:
             server.call_tool("officecli", {"args": ["batch", "sheet.xlsx", "--input", "build.json"]})
 
-        self.assertEqual(office.call_args.args[0][1:], ["batch", "sheet.xlsx", "--input", "build.json"])
+        self.assertEqual(office.call_args.args[0][1:], ["batch", "sheet.xlsx", "--input", "build.json", "--json"])
 
     def test_inline_commands_require_batch_target_and_object_array(self):
         with self.assertRaisesRegex(ValueError, "paired"):

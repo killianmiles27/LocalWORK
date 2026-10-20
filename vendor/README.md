@@ -3,6 +3,9 @@ Binaries here are not committed (see .gitignore). Fetch tools with scripts/fetch
 The agent patch also pins security updates for its HTTP/QUIC/TLS dependencies in
 the upstream Cargo.lock. Rebuilding unpatched v0.2.11 restores known vulnerable
 versions. Keep the exact patched source checkout for the release notice inventory.
+It also preserves MCP tool error flags and checkpoints completed work inside a long
+first user turn when native compaction cannot split older turns. Candidate histories
+are checked through the native service before being saved.
 See docs/SETUP.md and docs/release.md for build and redistribution steps. Existing
 Whisper/browser files are checked for availability/version when reused; that is
 not a full tamper-detection check of every installed executable or npm file.

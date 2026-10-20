@@ -28,6 +28,8 @@ try {
     if ($LASTEXITCODE) { throw 'Native provider compaction tests failed.' }
     cargo test --locked -p aion-agent --test autocompact_test
     if ($LASTEXITCODE) { throw 'Automatic compaction integration tests failed.' }
+    cargo test --locked -p aion-mcp --lib
+    if ($LASTEXITCODE) { throw 'MCP tool-error propagation tests failed.' }
     cargo build --locked --release -p aion-cli
     if ($LASTEXITCODE) { throw 'Agent release build failed.' }
     $built = Join-Path (Get-Location).Path 'target\release\aionrs.exe'

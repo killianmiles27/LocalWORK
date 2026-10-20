@@ -21,6 +21,7 @@ import { BrowserPeek } from "./BrowserLive";
 import QuestionCard, { AskedLine, isAsk, openQuestion } from "./Question";
 import Logo from "./Logo";
 import FirstTokenCountdown, { ttftEstimate, ttftRecord } from "./FirstToken";
+import Thinking from "./Thinking";
 import { documentSyncMessage, mergeChanges, type DocumentChange } from "./documentSync";
 
 type Msg = { id: number; role: string; body: any; ts: number };
@@ -550,7 +551,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                         canAct={canRewind}
                         onEdit={g.m.role === "user" ? () => setEditing({ id: g.m.id, text: text(g.m.body?.text) }) : undefined}
                         onRegenerate={i === blocks.length - 1 && g.m.role === "assistant" && lastUser ? () => rewindTo(lastUser) : undefined} />)}
-                {live.thinking && <div className="text-xs text-muted italic whitespace-pre-wrap max-h-24 overflow-auto">{live.thinking}</div>}
+                {live.thinking && <Thinking text={live.thinking} />}
                 {live.text && <Assistant>{live.text}</Assistant>}
                 {live.busy && !live.text && !live.thinking && mine.length === 0 && firstWait?.conv === cur && <FirstTokenCountdown start={firstWait.t0} estimate={firstWait.est} />}
                 {live.busy && !live.text && mine.length === 0 && firstWait?.conv !== cur && (

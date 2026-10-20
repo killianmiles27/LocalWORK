@@ -22,6 +22,10 @@ The pinned agent source/patch/hash is recorded in vendor/manifest.json. Build it
 
 Compaction triggers at 80% of the configured window. Truncated checkpoint responses are rejected before history replacement. Context readings are approximate, and internal /context requests are serialized with messages because upstream does not queue concurrent requests reliably.
 
+Native no-op responses can occur during a long first user turn. The patched agent then checkpoints completed work in at most eight summary passes, preserving genuine user requests, system history and two latest complete assistant/tool exchanges. Summary fragments are supplied as data with tools disabled; prompt-too-long retries shrink fragments without discarding source text. The candidate is revalidated and token-counted through native compaction before any session replacement. Errors, cancellation, changed protected messages or insufficient reply capacity retain the original session. Native errors do not trigger this recovery path.
+
+Shell tasks receive `LOCALWORK_PYTHON`, the same configured interpreter used by Workbench MCP. This avoids guessing which ambient `python` installation to use. It does not install extra libraries or alter the user's PATH.
+
 ## Testing
 
 scripts/e2e/check-agent-context.py exercises the real agent against an isolated HTTP model fixture. scripts/e2e/run-all.ps1 uses a stub model by default; -RealStrata explicitly opts into model/GPU use. Deterministic browser probes verify tool behavior, not reasoning quality.

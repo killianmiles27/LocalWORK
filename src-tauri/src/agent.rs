@@ -50,6 +50,10 @@ fn write_line(inner: &mut Inner, v: &Value) {
     }
 }
 
+fn workbench_python_command(workbench: &Value) -> Option<&str> {
+    workbench.get("command").and_then(Value::as_str)
+}
+
 fn dispatch_next(inner: &mut Inner) {
     // aionrs handles approvals/Stop while running a message, but drops additional
     // Message commands. Serialize user turns and internal /context requests.
@@ -107,6 +111,13 @@ mod revision_tests {
         assert!(mutation_path("mcp", "workbench__officecli", &json!({"args":["view","deck.pptx","html"]})).is_none());
         assert!(mutation_path("mcp", "workbench__officecli", &json!({"args":["verify","report.docx"]})).is_none());
         assert!(mutation_path("exec", "ExecCommand", &json!({"command":"arbitrary script"})).is_none());
+    }
+
+    #[test]
+    fn configured_workbench_python_is_exposed_as_the_shell_runtime() {
+        let workbench = json!({"command":"D:/Strata/.venv/Scripts/python.exe"});
+        assert_eq!(workbench_python_command(&workbench), Some("D:/Strata/.venv/Scripts/python.exe"));
+        assert_eq!(workbench_python_command(&json!({"command":7})), None);
     }
 
     #[test]
@@ -294,13 +305,15 @@ pub fn get_or_start(
         .is_some_and(|(code, body)| code == 200 && native_compaction_supported(&body));
     write_compact_config(&workspace, native)?;
     let vendor = paths::vendor_dir();
-    if workbench_mcp(&vendor, conv).is_none() {
-        return Err("Workbench tools are missing. Choose a configured Strata folder in Settings and check that workbench-mcp/server.py is installed beside LocalWORK.".into());
-    }
+    let workbench = workbench_mcp(&vendor, conv)
+        .ok_or_else(|| "Workbench tools are missing. Choose a configured Strata folder in Settings and check that workbench-mcp/server.py is installed beside LocalWORK.".to_string())?;
+    let python_runtime = workbench_python_command(&workbench)
+        .ok_or_else(|| "The configured Workbench Python runtime is unavailable.".to_string())?;
     let exe = vendor.join("aionrs.exe");
     let mut cmd = Command::new(&exe);
     cmd.args(["--json-stream", "--provider", "openai", "--base-url", &format!("http://127.0.0.1:{port}/v1")])
         .env("API_KEY", &key)
+        .env("LOCALWORK_PYTHON", python_runtime)
         // 60 turns ran out on long browse-and-write tasks; hitting the budget forces a tool-less final answer.
         .args(["--model", &model, "--max-turns", "200", "--no-color"])
         // Without this aionrs asks for 20k output tokens, which cannot fit (or compact) in a 32k window.

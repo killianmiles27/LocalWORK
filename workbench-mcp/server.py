@@ -365,6 +365,9 @@ def call_tool(name, args):
                     raise
                 relative_input = os.path.relpath(temp_input, workspace)
                 a = [*a, "--input", relative_input]
+        is_batch = a[0] == "batch"
+        if is_batch and "--json" not in a:
+            a = [*a, "--json"]
         if a[0] == "verify":
             if len(a) not in (2, 3):
                 raise ValueError('verify expects ["verify","file.docx"] or ["verify","file.docx","--page-count"]')
@@ -428,6 +431,50 @@ def call_tool(name, args):
                     except OSError:
                         pass
         out = (r.stdout or "") + (r.stderr or "")
+        if is_batch:
+            try:
+                payload = json.loads(r.stdout or "")
+            except (TypeError, ValueError):
+                payload = None
+            if isinstance(payload, dict):
+                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                results = data.get("results") if isinstance(data.get("results"), list) else []
+                summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+                failed = [item for item in results if isinstance(item, dict) and item.get("success") is False]
+                succeeded = summary.get("succeeded", sum(1 for item in results if isinstance(item, dict) and item.get("success") is True))
+                total = summary.get("total", len(results))
+                skipped = summary.get("skipped", 0)
+                if payload.get("success") is False and not results:
+                    error = payload.get("error")
+                    detail = error.get("error", str(error)) if isinstance(error, dict) else str(error or "OfficeCLI batch failed")
+                    raise RuntimeError(f"officecli batch failed: {detail}")
+                warnings = []
+                if isinstance(data.get("warnings"), list):
+                    warnings.extend(str(warning) for warning in data["warnings"] if warning)
+                for item in results:
+                    if isinstance(item, dict):
+                        item_warnings = item.get("warnings", [])
+                        if isinstance(item_warnings, list):
+                            warnings.extend(str(warning) for warning in item_warnings if warning)
+                        elif item.get("warning"):
+                            warnings.append(str(item["warning"]))
+                if failed or r.returncode != 0 or payload.get("success") is False:
+                    first = failed[0] if failed else {}
+                    index = first.get("index")
+                    operation = first.get("item")
+                    detail = first.get("error") or first.get("output") or "OfficeCLI reported a batch failure"
+                    location = f"operation {int(index) + 1}" if isinstance(index, int) else "batch"
+                    if isinstance(operation, dict):
+                        path = operation.get("path") or operation.get("parent")
+                        if path:
+                            location += f" ({path})"
+                    raise RuntimeError(f"officecli batch: {succeeded}/{total} succeeded, {len(failed)} failed, {skipped} skipped; first failure at {location}: {detail}")
+                message = f"officecli batch: {succeeded}/{total} operations succeeded"
+                if skipped:
+                    message += f", {skipped} skipped"
+                if warnings:
+                    message += "; warnings: " + "; ".join(warnings[:3])
+                return message
         if r.returncode != 0:
             raise RuntimeError(f"officecli exited {r.returncode}\n{out[-4000:]}")
         return out[-20000:] or "OK"
