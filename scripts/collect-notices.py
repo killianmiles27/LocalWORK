@@ -193,6 +193,10 @@ def collect_npm_tree(
                 parent_info = {}
             if parent_info.get("version") == version and parent_info.get("license") == declared:
                 license_paths = top_license_files(parent)
+        # remark-math's published package omits the monorepo-root license. The cache
+        # manifest pins the text to the source revision in npm's 6.0.0 metadata.
+        if not license_paths and (name, version, declared) == ("remark-math", "6.0.0", "MIT"):
+            license_paths = [REPO / "third-party" / "upstream-cache" / "remark-math-6.0.0-LICENSE.txt"]
         add_package(records, ecosystem="npm", name=name, version=version,
                     license_spdx=str(declared) if declared else None,
                     source_path=f"{source_prefix}/{package_name}",

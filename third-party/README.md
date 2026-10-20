@@ -6,6 +6,7 @@ LocalWORK's root LICENSE applies to its original code. It does not replace the l
 - `dependency-notices.txt` contains full collected license/copyright texts, deduplicated by content hash, with component names and provenance.
 - `dependency-inventory.json` records versions, declarations, notice links, component availability and unresolved entries.
 - `upstream-cache/manifest.json` records exact upstream sources/revisions and SHA-256 hashes for license texts missing from published packages. Cached texts preserve their upstream copyright notices.
+- The remark-math 6.0.0 package omits its monorepo-root license; the cache retains that text from the exact source revision recorded in npm's release metadata.
 
 Regenerate the inventory from prepared runtime/build dependencies:
 

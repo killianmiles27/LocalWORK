@@ -5,7 +5,7 @@
   "componentSets": {
     "frontend": {
       "status": "available",
-      "installedPackages": 191,
+      "installedPackages": 199,
       "requiredForComplete": true
     },
     "browserTools": {
@@ -238,6 +238,18 @@
       "source": "src-tauri/Cargo.lock",
       "licenseText": [
         "third-party/dependency-notices.txt#license-42d3bf7e7d4d",
+        "third-party/dependency-notices.txt#license-a60eea817514"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "bumpalo",
+      "version": "3.20.3",
+      "licenseSpdx": "MIT OR Apache-2.0",
+      "source": "src-tauri/Cargo.lock",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-65f94e99ddaf",
         "third-party/dependency-notices.txt#license-a60eea817514"
       ],
       "missing": null
@@ -3817,6 +3829,17 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "zip",
+      "version": "4.6.1",
+      "licenseSpdx": "MIT",
+      "source": "src-tauri/Cargo.lock",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-04dc52136d82"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "cargo",
       "name": "zlib-rs",
       "version": "0.6.8",
       "licenseSpdx": "Zlib",
@@ -3834,6 +3857,17 @@
       "source": "src-tauri/Cargo.lock",
       "licenseText": [
         "third-party/dependency-notices.txt#license-23f18e03dc49"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "zopfli",
+      "version": "0.8.4",
+      "licenseSpdx": "Apache-2.0",
+      "source": "src-tauri/Cargo.lock",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-018b1cb87efd"
       ],
       "missing": null
     },
@@ -8145,6 +8179,17 @@
     },
     {
       "ecosystem": "npm",
+      "name": "@types/katex",
+      "version": "0.16.8",
+      "licenseSpdx": "MIT",
+      "source": "node_modules/@types/katex",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-c2cfccb812fe"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "npm",
       "name": "@types/mdast",
       "version": "4.0.4",
       "licenseSpdx": "MIT",
@@ -8338,6 +8383,17 @@
       "source": "node_modules/comma-separated-tokens",
       "licenseText": [
         "third-party/dependency-notices.txt#license-ca4662cb5d1b"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "npm",
+      "name": "commander",
+      "version": "8.3.0",
+      "licenseSpdx": "MIT",
+      "source": "node_modules/commander",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-04512a63dce4"
       ],
       "missing": null
     },
@@ -8673,6 +8729,17 @@
     },
     {
       "ecosystem": "npm",
+      "name": "katex",
+      "version": "0.16.47",
+      "licenseSpdx": "MIT",
+      "source": "node_modules/katex",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-766ccc1f306c"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "npm",
       "name": "lightningcss",
       "version": "1.32.0",
       "licenseSpdx": "MPL-2.0",
@@ -8860,6 +8927,17 @@
     },
     {
       "ecosystem": "npm",
+      "name": "mdast-util-math",
+      "version": "3.0.0",
+      "licenseSpdx": "MIT",
+      "source": "node_modules/mdast-util-math",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-536804b3adbf"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "npm",
       "name": "mdast-util-mdx-expression",
       "version": "2.0.1",
       "licenseSpdx": "MIT",
@@ -9029,6 +9107,17 @@
       "version": "2.1.0",
       "licenseSpdx": "MIT",
       "source": "node_modules/micromark-extension-gfm-task-list-item",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-536804b3adbf"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "npm",
+      "name": "micromark-extension-math",
+      "version": "3.1.0",
+      "licenseSpdx": "MIT",
+      "source": "node_modules/micromark-extension-math",
       "licenseText": [
         "third-party/dependency-notices.txt#license-536804b3adbf"
       ],
@@ -9434,6 +9523,17 @@
     },
     {
       "ecosystem": "npm",
+      "name": "remark-math",
+      "version": "6.0.0",
+      "licenseSpdx": "MIT",
+      "source": "node_modules/remark-math",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-cb992262f361"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "npm",
       "name": "remark-parse",
       "version": "11.0.0",
       "licenseSpdx": "MIT",
@@ -9577,6 +9677,17 @@
     },
     {
       "ecosystem": "npm",
+      "name": "temml",
+      "version": "0.14.0",
+      "licenseSpdx": "MIT",
+      "source": "node_modules/temml",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-12b4e5592a12"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "npm",
       "name": "tinyglobby",
       "version": "0.2.17",
       "licenseSpdx": "MIT",
@@ -9649,6 +9760,17 @@
       "source": "node_modules/unist-util-position",
       "licenseText": [
         "third-party/dependency-notices.txt#license-63cb98b3f6ab"
+      ],
+      "missing": null
+    },
+    {
+      "ecosystem": "npm",
+      "name": "unist-util-remove-position",
+      "version": "5.0.0",
+      "licenseSpdx": "MIT",
+      "source": "node_modules/unist-util-remove-position",
+      "licenseText": [
+        "third-party/dependency-notices.txt#license-ca4662cb5d1b"
       ],
       "missing": null
     },

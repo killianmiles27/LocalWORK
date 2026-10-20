@@ -6,14 +6,14 @@ import { previewDocument } from "./intelligent-ui";
 
 export type FrameSelection = { text: string; node: string; rect: { top: number; left: number; bottom: number } };
 type Props = {
-  html: string; title: string; editing: boolean; previous?: Record<string, string>; scroll?: number;
+  html: string; title: string; editing: boolean; zoom: number; onZoom: (direction: number) => void; onActive: (active: boolean) => void; previous?: Record<string, string>; scroll?: number;
   onTexts: (texts: Record<string, string>) => void; onScroll: (y: number) => void;
   onSelect: (s: FrameSelection | null) => void; onEdit: (node: string, before: string, after: string) => void;
 };
 
 const BRIDGE = `
 (function(){
-var editing = false, origin = null, timer = 0;
+var editing = false, origin = null, display = null, timer = 0;
 function post(m){ parent.postMessage(m, '*'); }
 function leaves(){ return Array.prototype.filter.call(document.querySelectorAll('[data-path]'), function(e){ return e.tagName !== 'TH' && !e.querySelector('[data-path]'); }); }
 function text(e){ return (e.innerText || '').replace(/\\u00a0/g, ' '); }
@@ -27,6 +27,7 @@ window.addEventListener('message', function(ev){
     (d.paths || []).forEach(function(p){ var e = document.querySelector('[data-path="' + CSS.escape(p) + '"]'); if (e) { e.classList.add('lw-changed'); first = first || e; } });
     if (first) first.scrollIntoView({block:'center'});
   }
+  if (d.type === 'lw-zoom') document.body.style.zoom = String(d.zoom / 100);
   if (d.type === 'lw-scroll-to') window.scrollTo(0, d.y || 0);
   if (d.type === 'lw-edit-mode') {
     editing = !!d.on;
@@ -37,23 +38,30 @@ window.addEventListener('message', function(ev){
 window.addEventListener('scroll', function(){ clearTimeout(timer); timer = setTimeout(function(){ post({type:'lw-scroll', y:window.scrollY}); }, 150); });
 document.addEventListener('focusin', function(e){
   var t = e.target.closest && e.target.closest('[contenteditable]'); if (!t) return;
+  display = text(t);
   var f = t.getAttribute('data-formula'); if (f) t.textContent = f;
-  origin = text(t);
+  origin = text(t); post({type:'lw-active', active:true});
 }, true);
 document.addEventListener('focusout', function(e){
   var t = e.target.closest && e.target.closest('[contenteditable]'); if (!t || origin === null) return;
   var before = origin, after = text(t); origin = null;
-  if (after !== before) post({type:'lw-edit', path:t.getAttribute('data-path'), before:before, after:after});
+  if (after === before && display !== null) t.textContent = display;
+  if (after !== before) {
+    if (after.charAt(0) === '=') t.setAttribute('data-formula', after); else t.removeAttribute('data-formula');
+    post({type:'lw-edit', path:t.getAttribute('data-path'), before:before, after:after});
+  }
+  post({type:'lw-active', active:false});
 }, true);
+window.addEventListener('wheel', function(e){ if (e.ctrlKey || e.metaKey) { e.preventDefault(); post({type:'lw-zoom-request', direction:e.deltaY < 0 ? 1 : -1}); } }, {passive:false});
 window.addEventListener('keydown', function(e){
+  if ((e.ctrlKey || e.metaKey) && ['+', '=', '-', '0'].indexOf(e.key) >= 0) { e.preventDefault(); e.stopImmediatePropagation(); post({type:'lw-zoom-request', direction:e.key === '0' ? 0 : e.key === '-' ? -1 : 1}); return; }
   if (!e.target.isContentEditable) return;
   e.stopImmediatePropagation();
-  if (e.key === 'Escape') { if (origin !== null) e.target.textContent = origin; origin = null; e.target.blur(); }
+  if (e.key === 'Escape') { if (origin !== null) e.target.textContent = display === null ? origin : display; origin = null; e.target.blur(); post({type:'lw-active', active:false}); }
   if (e.key === 'Enter' && (e.target.tagName === 'TD' || e.ctrlKey)) { e.preventDefault(); e.target.blur(); }
 }, true);
 document.addEventListener('mouseup', function(){
   setTimeout(function(){
-    if (editing) return;
     var s = getSelection(), t = s ? String(s).replace(/\\s+/g, ' ').trim() : '';
     if (!t || !s.rangeCount) { post({type:'lw-select', text:''}); return; }
     var r = s.getRangeAt(0).getBoundingClientRect(), n = s.anchorNode && (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement);
@@ -72,12 +80,13 @@ const STYLE = `<style>
 
 const short = (s: unknown, n: number) => typeof s === "string" ? s.slice(0, n) : "";
 
-export default function OfficeFrame({ html, title, editing, previous, scroll, onTexts, onScroll, onSelect, onEdit }: Props) {
+export default function OfficeFrame({ html, title, editing, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
   const doc = useMemo(() => previewDocument(`${STYLE}${html}<script>${BRIDGE}</script>`), [html]);
-  const latest = useRef({ editing, previous, scroll, onTexts, onScroll, onSelect, onEdit });
-  latest.current = { editing, previous, scroll, onTexts, onScroll, onSelect, onEdit };
+  const latest = useRef({ editing, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit });
+  latest.current = { editing, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit };
   useEffect(() => { frame.current?.contentWindow?.postMessage({ type: "lw-edit-mode", on: editing }, "*"); }, [editing]);
+  useEffect(() => { frame.current?.contentWindow?.postMessage({ type: "lw-zoom", zoom }, "*"); }, [zoom]);
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       const win = frame.current?.contentWindow;
@@ -91,8 +100,11 @@ export default function OfficeFrame({ html, title, editing, previous, scroll, on
         if (changed.length) win.postMessage({ type: "lw-flash", paths: changed }, "*");
         else if (h.scroll) win.postMessage({ type: "lw-scroll-to", y: h.scroll }, "*");
         if (h.editing) win.postMessage({ type: "lw-edit-mode", on: true }, "*");
+        win.postMessage({ type: "lw-zoom", zoom: h.zoom }, "*");
         h.onTexts(texts);
-      } else if (m.type === "lw-scroll" && Number.isFinite(m.y)) h.onScroll(m.y);
+      } else if (m.type === "lw-active" && typeof m.active === "boolean") h.onActive(m.active);
+      else if (m.type === "lw-zoom-request" && [-1, 0, 1].includes(m.direction)) h.onZoom(m.direction);
+      else if (m.type === "lw-scroll" && Number.isFinite(m.y)) h.onScroll(m.y);
       else if (m.type === "lw-select") {
         const frameBox = frame.current!.getBoundingClientRect(), r = m.rect;
         h.onSelect(typeof m.text === "string" && m.text && r && [r.top, r.left, r.bottom].every(Number.isFinite)

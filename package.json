@@ -1,12 +1,12 @@
 {
   "name": "localwork",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test:workspace": "node --test scripts/tests/intelligent-ui.test.mjs scripts/tests/chat-dates.test.mjs",
+    "test:workspace": "node --test scripts/tests/*.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

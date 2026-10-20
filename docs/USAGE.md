@@ -1,5 +1,7 @@
 # Using LocalWORK
 
+The ALPHA badge beside LocalWORK in the sidebar marks the app's current development stage.
+
 ## Start a chat in a folder
 
 Choose a folder for the task using the folder control beside the composer. New chats otherwise use your configured projects location, normally `Documents\LocalWORK`. Each chat remembers its working folder.
@@ -47,6 +49,14 @@ Read approval requests before accepting. Do not approve a command merely because
 ## Files and previews
 
 Completed documents appear in the Files panel. You can preview a file, open it in its normal application, save a copy, or inspect saved revisions. Use the document panel's revision request to describe the next change.
+
+Current Word, Excel and PowerPoint previews let you edit text immediately: click and type, then click away to save. Esc cancels the current edit. You can also select text and leave a note for the assistant. Earlier revisions stay read-only. This supports text and cell edits, rather than every layout feature available in Office. Text files still have an Edit/Save control.
+
+Use the zoom buttons or slider, Ctrl+mouse wheel, Ctrl++/Ctrl+- and Ctrl+0 inside an Office preview. Zoom changes the preview only, from 25% to 250%.
+
+After a short pause in saved edits, the assistant checks other documents in the same project folder for clear dependencies, such as participant quantities, budget formulas and quoted totals. The check appears as a message in the chat, preserves your composer draft and waits for existing messages to finish. It runs when that chat is selected and the model is ready; ambiguous relationships need clarification. This is an AI check, so review the resulting changes. Failed requests retry after a new edit, a successful message or model recovery, rather than looping. Pending checks are held while the app stays open; external Office edits do not trigger them.
+
+The built-in OfficeCLI recipe is supplied at the start of every chat. Normal batches use inline JSON without creating project files. Large batches use a hidden temporary folder and clean their input file after success or failure. Legacy hidden `.*.build.json` files are omitted from the file picker; ordinary JSON documents remain visible and existing files are not deleted.
 
 Office previews are HTML approximations. Supported direct edits save previous versions, but arbitrary shell commands do not always participate in that history. Keep independent backups for important work.
 

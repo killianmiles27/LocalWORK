@@ -127,6 +127,18 @@
       "upstreamPath": "LICENSE",
       "upstreamSource": "https://github.com/openai/whisper/blob/86098128c0b4f24f0e2aa2994de830614b474227/LICENSE",
       "note": "OpenAI upstream README explicitly licenses code and model weights under MIT. The bundled GGML small quantization is identified by its file hash in vendor/manifest.json."
+    },
+    {
+      "file": "remark-math-6.0.0-LICENSE.txt",
+      "sha256": "cb992262f361a5359e6771c28740d33c7041e15332ae8537fae40538992591a9",
+      "packages": [
+        "remark-math 6.0.0"
+      ],
+      "upstreamRepository": "https://github.com/remarkjs/remark-math",
+      "upstreamCommit": "d5d0660b150810a535bbb07eac6cc96a4510aa24",
+      "upstreamPath": "license",
+      "upstreamSource": "https://raw.githubusercontent.com/remarkjs/remark-math/d5d0660b150810a535bbb07eac6cc96a4510aa24/license",
+      "note": "Source revision from https://registry.npmjs.org/remark-math/6.0.0 gitHead; npm package omits the monorepo-root license."
     }
   ]
 }

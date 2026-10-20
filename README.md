@@ -2,6 +2,8 @@
 
 A Windows desktop assistant for working with files, researching on the web, and creating documents with a model running on your own computer.
 
+LocalWORK is in alpha. A small ALPHA badge beside the app name identifies this development stage.
+
 LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference (or [PolyStrata](https://github.com/VecSzn/PolyStrata) for models beyond Qwen), a local agent for tool use, and a background Chromium browser for interactive websites. There is no hosted model service or subscription built into the app. You install the model separately.
 
 **Yes, this is vibe-coded slop.** It was built heavily with AI assistance and is still a work in progress. Expect bugs, especially on long tasks, and check generated work before relying on it. Windows x64 is the supported target.
@@ -10,7 +12,7 @@ LocalWORK uses [Strata](https://github.com/Niko1221/Strata) for inference (or [P
 
 - Chats tied to a working folder, with file attachments and saved conversation history.
 - A searchable chat sidebar grouped by date, with pin and rename. You can edit an earlier message or regenerate the last reply, and keyboard shortcuts cover the common actions.
-- Word, Excel, and PowerPoint creation through OfficeCLI, with document previews and revision history.
+- Word, Excel, and PowerPoint creation through OfficeCLI, with directly editable previews, document zoom, revision history, and automatic checks for related project-file updates after saved edits.
 - Web search, page reading, browser interaction, and screenshots.
 - Tables, charts, diagrams, and small interactive HTML documents.
 - Local voice transcription through whisper.cpp.

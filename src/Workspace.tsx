@@ -19,7 +19,7 @@ type Picked = { text: string; where: string; top: number; left: number };
 type Props = {
   id: string; refresh: number; visuals: VisualItem[]; requested?: { path?: string; visual?: string; browser?: boolean; nonce: number }; browserTick: number;
   activity?: Activity; canSend: boolean;
-  onClose: () => void; onDraft: (text: string) => void; onSend: (text: string) => void; onUserEdit: (path: string) => void;
+  onClose: () => void; onDraft: (text: string) => void; onSend: (text: string) => void; onUserEdit: (path: string, change?: { node: string; before: string; after: string }) => void;
 };
 
 const OFFICE = new Set(["docx", "xlsx", "pptx"]), TEXT = new Set(["md", "txt", "csv", "json", "html"]);
@@ -71,6 +71,12 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
   const [expanded, setExpanded] = useState(false);
   const [reload, setReload] = useState(0);
   const [editing, setEditing] = useState(false);
+  const [officeActive, setOfficeActive] = useState(false);
+  const officeInteraction = useRef(false);
+  const pendingOfficeEdits = useRef(0);
+  const officeEditGeneration = useRef(0);
+  const [zoom, setZoom] = useState(100);
+  const changeZoom = (direction: number) => setZoom(z => direction === 0 ? 100 : Math.min(250, Math.max(25, z + direction * 10)));
   const [draftText, setDraftText] = useState<{ base: string; text: string } | null>(null);
   const [stale, setStale] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -110,27 +116,30 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
   }, [id, refresh, reload]);
 
   useEffect(() => {
+    if (officeInteraction.current || pendingOfficeEdits.current) return;
     if (requested?.path) setSelection(`file:${requested.path.replaceAll("\\", "/")}`);
     if (requested?.visual) setSelection(`visual:${requested.visual}`);
     if (requested?.browser) setSelection("browser");
   }, [requested]);
   // Follow the file the assistant is working on, unless the user is in the middle of editing.
   useEffect(() => {
-    if (!activity?.path || editing || followed.current === activity.nonce) return;
+    if (!activity?.path || editing || officeInteraction.current || pendingOfficeEdits.current || followed.current === activity.nonce) return;
     const hit = files.find(f => matches(activity.path, f.path));
     if (hit) { followed.current = activity.nonce; setSelection(`file:${hit.path}`); }
   }, [activity?.nonce, files]);
-  useEffect(() => { setRevisions([]); setNotice(""); setEditing(false); setDraftText(null); setStale(false); setPicked(null); setNotes([]); }, [selection]);
+  useEffect(() => { setRevisions([]); setNotice(""); officeInteraction.current = false; setOfficeActive(false); setEditing(false); setDraftText(null); setStale(false); setPicked(null); setNotes([]); }, [selection]);
 
   useEffect(() => {
     if (!selectedFile) { setPreview(null); setLoading(false); setError(""); return; }
     // Never pull the page out from under the user's own edits; offer a reload instead.
-    if (editing) { setStale(true); return; }
+    if (preview?.path === selectedFile && !revision && (editing || officeInteraction.current || pendingOfficeEdits.current)) { setStale(true); return; }
     let active = true;
     setError(""); setLoading(true); setStale(false);
     setPreview(current => current?.path === selectedFile && !revision ? current : null);
+    const requestGeneration = officeEditGeneration.current;
     invoke<Preview>("document_preview", { id, path: selectedFile, revision: revision || null }).then(result => {
       if (!active) return;
+      if (!revision && (officeInteraction.current || pendingOfficeEdits.current || officeEditGeneration.current !== requestGeneration)) { setStale(true); return; }
       const last = seen.current.get(selectedFile);
       setPrevious(revision ? undefined : last);
       if (result.format === "text") seen.current.set(selectedFile, { ...last, text: result.content });
@@ -184,11 +193,17 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
   }
   // In-place Office edits run one at a time, in the order the user made them.
   function officeEdit(node: string, before: string, after: string) {
-    const path = selectedFile, texts = seen.current.get(path)?.texts;
-    if (texts) texts[node] = after; // the user's own change shouldn't flash as the assistant's on the next load
+    const path = selectedFile;
+    officeEditGeneration.current += 1;
+    pendingOfficeEdits.current += 1;
     edits.current = edits.current.then(() => invoke("document_office_edit", { id, path, node, before, after }))
-      .then(() => { onUserEdit(path); setSaving(n => n + 1); setNotice("Saved."); })
-      .catch(e => setError(`Could not save that change: ${e}`));
+      .then(() => {
+        const texts = seen.current.get(path)?.texts;
+        if (texts) texts[node] = after;
+        onUserEdit(path, { node, before, after }); setNotice("Saved.");
+      })
+      .catch(e => setError(`Could not save that change. Your visible edit is unsaved; copy it before reloading. ${e}`))
+      .finally(() => { pendingOfficeEdits.current -= 1; setSaving(n => n + 1); });
   }
 
   function pickText() {
@@ -222,7 +237,7 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
 
   const title = selection === "browser" ? "Live browser" : visual?.title || selectedFile.split("/").pop() || "Files";
   const hasSelection = !!selectedFile || !!visual;
-  const officeView = preview?.format === "html" && OFFICE.has(preview.kind);
+  const officeView = preview?.path === selectedFile && preview?.format === "html" && OFFICE.has(preview.kind);
   const fresh = previous?.text !== undefined && preview?.format === "text" ? new Set(previous.text.split(/\r?\n/)) : null;
   const freshBlocks = previous?.text !== undefined && preview?.kind === "md" ? new Set(blocks(previous.text)) : null;
   const status = agentHere ? <span className="inline-flex items-center gap-1.5 rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />Assistant editing</span>
@@ -264,11 +279,11 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
         <h2 className="min-w-0 truncate text-sm font-medium" title={selectedFile || title}>{title}</h2>
         {status}
         <span className="flex-1" />
-        {canEdit && (editing
+        {canEdit && TEXT.has(kind) && (editing
           ? <button onClick={draftText ? saveText : stopEdit} disabled={working} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-xs text-accent-fg hover:bg-accent-dark disabled:opacity-40"><Check size={13} />{draftText ? "Save" : "Done"}</button>
           : <button onClick={startEdit} disabled={!preview || loading} title="Edit this file yourself" className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-line px-2.5 py-1 text-xs hover:border-accent disabled:opacity-40"><Pencil size={12} />Edit</button>)}
         {editing && draftText && <button onClick={stopEdit} className="shrink-0 text-xs text-muted hover:text-ink">Cancel</button>}
-        <button title="Refresh files and preview" aria-label="Refresh files and preview" onClick={() => setReload(n => n + 1)} disabled={loading || listing || editing} className={iconButton}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /></button>
+        <button title="Refresh files and preview" aria-label="Refresh files and preview" onClick={() => setReload(n => n + 1)} disabled={loading || listing || editing || officeActive || pendingOfficeEdits.current > 0} className={iconButton}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /></button>
         <button title={expanded ? "Exit expanded view" : "Expand"} aria-label={expanded ? "Exit expanded view" : "Expand workspace"} onClick={() => setExpanded(!expanded)} className={iconButton}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
       </header>
       <div className="flex flex-wrap items-center gap-1 border-b border-line px-3 py-1.5 shrink-0">
@@ -290,9 +305,15 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
           <button title="Ask the assistant for changes" className={iconButton + " text-xs"} onClick={() => onDraft(selectedFile ? `Revise "${selectedFile}". Preserve unaffected content and formatting. My changes: ` : `Revise the interactive visual "${title}". Keep its existing data and working controls. My changes: `)}><Sparkles size={14} />Ask</button>
         </>}
       </div>
+      {officeView && <div className="flex items-center justify-end gap-2 border-b border-line px-3 py-1 text-xs">
+        <button aria-label="Zoom out" title="Zoom out (Ctrl+-)" className={iconButton} disabled={zoom <= 25} onClick={() => changeZoom(-1)}>-</button>
+        <button aria-label="Reset document zoom" title="Reset zoom (Ctrl+0)" className={iconButton} onClick={() => changeZoom(0)}>{zoom}%</button>
+        <input aria-label="Document zoom" type="range" min="25" max="250" step="5" value={zoom} onChange={e => setZoom(Number(e.target.value))} className="w-24 accent-accent" />
+        <button aria-label="Zoom in" title="Zoom in (Ctrl++)" className={iconButton} disabled={zoom >= 250} onClick={() => changeZoom(1)}>+</button>
+      </div>}
       {error && <div role="alert" className="m-3 mb-0 p-3 rounded-lg bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200 text-sm break-words">{error}<button onClick={() => { setError(""); setReload(n => n + 1); }} className="block mt-1 underline">Reload</button></div>}
-      {stale && <div role="status" className="mx-3 mt-2 rounded-lg bg-panel px-3 py-2 text-xs text-muted">The file changed while you were editing. {draftText ? "Saving will be refused; copy your text first." : "Click Done to see the latest version."}</div>}
-      {editing && !draftText && <div className="mx-3 mt-2 text-xs text-muted">Click any text to change it. Each change saves when you click away; Esc undoes the one you're typing.</div>}
+      {stale && <div role="status" className="mx-3 mt-2 rounded-lg bg-panel px-3 py-2 text-xs text-muted">The file changed while you were editing. {draftText ? "Saving will be refused; copy your text first." : "Finish typing, then refresh to see the latest version."}</div>}
+      {officeView && !revision && <div className="mx-3 mt-2 text-xs text-muted">Click text to edit; click away to save. Select text to leave an AI note. Esc undoes the current edit.</div>}
       {notice && !editing && <div role="status" className="px-4 pt-2 text-xs text-green-600">{notice}</div>}
       <div ref={body} onMouseUp={officeView ? undefined : pickText} className="relative flex-1 min-h-0 overflow-auto p-3">
         {selection === "browser" ? <BrowserLive id={id} tick={browserTick + refresh + reload} />
@@ -300,7 +321,8 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
           : visual ? <SandboxedUi html={visual.html} title={title} designSystem={visual.designSystem} expanded onDraft={onDraft} />
           : draftText ? <textarea aria-label={`Edit ${title}`} value={draftText.text} onChange={e => setDraftText({ ...draftText, text: e.target.value })} spellCheck={kind === "md" || kind === "txt"}
               className="h-full w-full resize-none rounded-lg border border-line bg-card p-4 font-mono text-sm outline-none focus:border-accent" />
-          : officeView ? <OfficeFrame html={preview!.content} title={title} editing={editing} previous={previous?.texts} scroll={seen.current.get(selectedFile)?.scroll}
+          : officeView ? <OfficeFrame key={`${selectedFile}:${revision}`} html={preview!.content} title={title} editing={!revision} zoom={zoom} onZoom={changeZoom}
+              onActive={active => { officeInteraction.current = active; setOfficeActive(active); }} previous={previous?.texts} scroll={seen.current.get(selectedFile)?.scroll}
               onTexts={texts => seen.current.set(selectedFile, { ...seen.current.get(selectedFile), texts })}
               onScroll={y => seen.current.set(selectedFile, { ...seen.current.get(selectedFile), scroll: y })}
               onSelect={frameSelect} onEdit={officeEdit} />
@@ -340,7 +362,7 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
           </div>
         </footer>
       )}
-      {!notes.length && !editing && hasSelection && selectedFile && preview && !revision && <footer className="shrink-0 px-4 py-1.5 text-[11px] text-muted">Select text to leave a note for the assistant{canEdit ? " · Edit to change it yourself" : ""}</footer>}
+      {!notes.length && !editing && hasSelection && selectedFile && preview && !revision && <footer className="shrink-0 px-4 py-1.5 text-[11px] text-muted">Select text to leave a note for the assistant{canEdit && !officeView ? " · Edit to change it yourself" : ""}</footer>}
       {revision && <footer className="px-4 py-2 border-t border-line text-xs text-muted">Earlier version · Save a copy to recover it</footer>}
     </aside>
   );

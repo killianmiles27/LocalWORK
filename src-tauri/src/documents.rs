@@ -39,6 +39,13 @@ fn kind(path: &Path) -> Option<String> {
     .then_some(ext)
 }
 
+// Old agent versions left these OfficeCLI implementation files beside deliverables.
+// Keep user JSON documents visible, and never delete files based only on their name.
+fn is_build_scratch(path: &Path) -> bool {
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+    name.starts_with('.') && name.ends_with(".build.json")
+}
+
 pub fn resolve_file(workspace: &Path, path: &str) -> Result<PathBuf, String> {
     let root = workspace
         .canonicalize()
@@ -198,6 +205,7 @@ pub async fn documents_list(s: State<'_, App>, id: String) -> Result<Value, Stri
                     let name = entry.file_name();
                     if depth < 4 && !name.to_string_lossy().starts_with('.') && !matches!(name.to_str(), Some("node_modules" | "target" | "vendor")) { pending.push((path, depth + 1)); }
                 } else if ty.is_file() {
+                    if is_build_scratch(&path) { continue; }
                     if let Some(kind) = kind(&path) {
                         if !path.canonicalize().map_err(|e| e.to_string())?.starts_with(&root) { continue; }
                         let meta = entry.metadata().map_err(|e| e.to_string())?;
@@ -595,6 +603,16 @@ pub async fn document_office_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_legacy_hidden_build_files_are_omitted() {
+        assert!(is_build_scratch(Path::new(".brief.build.json")));
+        assert!(is_build_scratch(Path::new(".build.json")));
+        assert!(is_build_scratch(Path::new(".FIX.BUILD.JSON")));
+        assert!(!is_build_scratch(Path::new("budget.json")));
+        assert!(!is_build_scratch(Path::new("build.json")));
+        assert!(!is_build_scratch(Path::new(".settings.json")));
+        assert!(!is_build_scratch(Path::new("workshop-brief.docx")));
+    }
     #[test]
     fn find_replace_is_minimal_and_unique() {
         let (old, new) = find_replace("Hello world", "Hello there world").unwrap();

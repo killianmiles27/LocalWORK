@@ -21,6 +21,7 @@ import { BrowserPeek } from "./BrowserLive";
 import QuestionCard, { AskedLine, isAsk, openQuestion } from "./Question";
 import Logo from "./Logo";
 import FirstTokenCountdown, { ttftEstimate, ttftRecord } from "./FirstToken";
+import { documentSyncMessage, mergeChanges, type DocumentChange } from "./documentSync";
 
 type Msg = { id: number; role: string; body: any; ts: number };
 const CACHED_CHATS = 3;
@@ -66,7 +67,10 @@ export default function App() {
   const [workspaceRefresh, setWorkspaceRefresh] = useState(0);
   const [activity, setActivity] = useState<Activity | undefined>();
   const callFiles = useRef(new Map<string, string>());
-  const userEdits = useRef(new Set<string>());
+  const userEdits = useRef(new Map<string, Set<string>>());
+  const pendingSync = useRef(new Map<string, { changes: DocumentChange[]; readyAt: number; failed?: boolean }>());
+  const [editTick, setEditTick] = useState(0);
+  const syncModelState = useRef(status.state);
   const [browserTick, setBrowserTick] = useState(0);
   const [workspaceRequest, setWorkspaceRequest] = useState<{ path?: string; visual?: string; browser?: boolean; nonce: number }>();
   const [wizard, setWizard] = useState(false);
@@ -342,7 +346,9 @@ export default function App() {
 
 Attached (read with read_attachment): ${attached.join(", ")}`
       : typed;
-    const edited = [...userEdits.current]; userEdits.current.clear();
+    const editConv = curRef.current;
+    const edited = [...(editConv ? userEdits.current.get(editConv) ?? [] : [])];
+    if (editConv) userEdits.current.delete(editConv);
     const message = edited.length ? `${body}
 
 (Note: I edited ${edited.map(p => `"${p}"`).join(", ")} directly in the file pane since your last change; read the current file before editing it.)` : body;
@@ -356,8 +362,49 @@ Attached (read with read_attachment): ${attached.join(", ")}`
       if (first) setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
       if (!queued) { setFiles([]); if (override === undefined) setInput(""); }
       await invoke("agent_send", { id, text: message }); await reload(id); refreshConvs(); refreshOffline(id);
-    } catch (e) { if (epoch === navigation.current) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); } }
+      const retry = pendingSync.current.get(id);
+      if (retry?.failed) { retry.failed = false; retry.readyAt = Date.now() + 1800; setEditTick(n => n + 1); }
+      return true;
+    } catch (e) {
+      if (editConv && edited.length) userEdits.current.set(editConv, new Set([...(userEdits.current.get(editConv) ?? []), ...edited]));
+      if (epoch === navigation.current) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
+      return false;
+    }
   }
+  function savedDocument(id: string, path: string, change?: Omit<DocumentChange, "path">) {
+    const paths = userEdits.current.get(id) ?? new Set<string>();
+    paths.add(path); userEdits.current.set(id, paths);
+    const pending = pendingSync.current.get(id);
+    pendingSync.current.set(id, { changes: mergeChanges(pending?.changes ?? [], { path, ...change }), readyAt: Date.now() + 1800 });
+    setEditTick(n => n + 1);
+  }
+  // Wait for a pause in saved edits and let explicit messages finish first. Each batch is sent
+  // once, in its own chat, without consuming the composer's draft or attachments.
+  useEffect(() => {
+    if (status.state === "ready" && syncModelState.current !== "ready") {
+      for (const pending of pendingSync.current.values()) pending.failed = false;
+      setEditTick(n => n + 1);
+    }
+    syncModelState.current = status.state;
+  }, [status.state]);
+  useEffect(() => {
+    if (!cur || live.busy || queue.length || status.state !== "ready") return;
+    const pending = pendingSync.current.get(cur);
+    if (!pending || pending.failed) return;
+    const timer = setTimeout(async () => {
+      if (curRef.current !== cur || pendingSync.current.get(cur) !== pending) return;
+      pendingSync.current.delete(cur);
+      const message = documentSyncMessage(pending.changes);
+      if (!message) return;
+      const sent = await send(message, []);
+      if (!sent) {
+        const newer = pendingSync.current.get(cur);
+        pendingSync.current.set(cur, { changes: (newer?.changes ?? []).reduce(mergeChanges, pending.changes), readyAt: Date.now() + 1800, failed: !newer });
+        // Retain for the next user action/readiness change; never spin on a failed model.
+      }
+    }, Math.max(0, pending.readyAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [cur, editTick, live.busy, queue.length, status.state]);
   async function compact() {
     if (!cur || live.busy || !modelReady) return;
     if (!msgs.some((m) => m.role === "assistant")) { setErr("Nothing to compact yet."); return; }
@@ -464,7 +511,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
       {dragging && <div className="fixed inset-0 z-50 grid place-items-center bg-accent/10 border-2 border-dashed border-accent pointer-events-none text-accent font-medium">Drop files to attach them</div>}
       <aside data-open={sidebarOpen} className="sidebar w-[240px] shrink-0 bg-panel border-r border-line flex flex-col">
         <div className="w-[240px] flex flex-col h-full">
-        <div className="px-4 pt-3 pb-0.5 flex items-center gap-2 text-sm font-semibold tracking-tight select-none"><Logo size={18} />LocalWORK</div>
+        <div className="px-4 pt-3 pb-0.5 flex items-center gap-2 text-sm font-semibold tracking-tight select-none"><Logo size={18} />LocalWORK<span title="Alpha release" className="rounded border border-accent/25 bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold leading-none tracking-wider text-accent">ALPHA</span></div>
         <div className="p-2 flex items-center gap-1">
           <button onClick={newConv} disabled={live.busy} title="New chat (Ctrl+N)"
             className="flex-1 flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium hover:bg-panel-2 transition-colors">
@@ -614,7 +661,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
             </div>
         </div>
       </main>
-    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} browserTick={browserTick} activity={activity} canSend={modelReady} onSend={t => send(t)} onUserEdit={p => userEdits.current.add(p)} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
+    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} browserTick={browserTick} activity={activity} canSend={modelReady} onSend={t => send(t)} onUserEdit={(p, change) => savedDocument(cur, p, change)} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
       </div>
     {closeBlocked > 0 && (
       <div className="fixed inset-0 z-50 grid place-items-center bg-black/30" onClick={() => setCloseBlocked(0)}>

@@ -1,9 +1,10 @@
 """Workbench MCP server (stdio, JSON-RPC 2.0, newline-delimited). Python stdlib only.
 Tools: officecli (wrapper around the bundled OfficeCLI), web_search, web_fetch, memory_*, workspace_info."""
-import json, os, subprocess, sys
+import json, os, stat, subprocess, sys, tempfile
 
 OFFICECLI = os.environ.get("OFFICECLI_EXE", "officecli.exe")
 CREATE_NO_WINDOW = 0x08000000
+MAX_INLINE_COMMANDS_UTF16_UNITS = 24000
 
 TOOLS = [
     {
@@ -11,8 +12,10 @@ TOOLS = [
         "description": "Create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files with OfficeCLI. "
                        "Pass the CLI arguments as a list, e.g. [\"create\",\"report.docx\"], [\"view\",\"report.docx\"], "
                        "[\"validate\",\"report.xlsx\"]. For a combined verification in one model tool call, pass [\"verify\",\"file.docx\"] (also .xlsx/.pptx); this app wrapper runs validate, issues, outline and text views, plus ordinary Word stats. Add \"--page-count\" as a third argument only when page count is required; Word repagination is bounded to 20 seconds. This is an app wrapper, not a native OfficeCLI command. "
-                       "Build documents fast with [\"batch\",\"file.docx\",\"--input\",\"build.json\"]. Paths are relative to the workspace. This is a tool, not a shell command.",
-        "inputSchema": {"type": "object", "properties": {"args": {"type": "array", "items": {"type": "string"}}},
+                       "For batch edits, pass args [\"batch\",\"file.docx\"] and the command array in the separate commands argument; legacy --input <json-file> also works. Paths are relative to the workspace. This is a tool, not a shell command.",
+        "inputSchema": {"type": "object", "properties": {
+                            "args": {"type": "array", "items": {"type": "string"}},
+                            "commands": {"type": "array", "items": {"type": "object"}, "description": "Inline OfficeCLI batch command objects. Use only with args [\"batch\",\"file.docx\"]."}},
                         "required": ["args"]},
     },
     {
@@ -320,6 +323,48 @@ def call_tool(name, args):
             a = a.split()
         if not isinstance(a, list) or not a:
             raise ValueError("args must be a non-empty list of strings")
+        inline_commands = args.get("commands")
+        temp_input = None
+        created_temp_dir = False
+        temp_dir = None
+        if inline_commands is not None:
+            if a[0] != "batch" or len(a) != 2:
+                raise ValueError('commands must be paired with args ["batch", "file.docx"]')
+            if not isinstance(inline_commands, list) or not inline_commands or not all(isinstance(item, dict) for item in inline_commands):
+                raise ValueError("commands must be a non-empty array of command objects")
+            serialized = json.dumps(inline_commands, ensure_ascii=False, separators=(",", ":"))
+            if len(serialized.encode("utf-16-le")) // 2 <= MAX_INLINE_COMMANDS_UTF16_UNITS:
+                a = [*a, "--commands", serialized]
+            else:
+                workspace = os.path.realpath(os.getcwd())
+                temp_dir = os.path.join(workspace, ".localwork-tmp")
+                try:
+                    os.mkdir(temp_dir)
+                    created_temp_dir = True
+                except FileExistsError:
+                    pass
+                info = os.lstat(temp_dir)
+                resolved_temp_dir = os.path.realpath(temp_dir)
+                if not stat.S_ISDIR(info.st_mode) or os.path.commonpath((workspace, resolved_temp_dir)) != workspace:
+                    raise ValueError(".localwork-tmp must be a real directory inside the workspace")
+                try:
+                    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", prefix="officecli-", suffix=".json", dir=temp_dir, delete=False) as batch_file:
+                        temp_input = batch_file.name
+                        batch_file.write(serialized)
+                except BaseException:
+                    if temp_input is not None:
+                        try:
+                            os.unlink(temp_input)
+                        except OSError:
+                            pass
+                    if created_temp_dir:
+                        try:
+                            os.rmdir(temp_dir)
+                        except OSError:
+                            pass
+                    raise
+                relative_input = os.path.relpath(temp_input, workspace)
+                a = [*a, "--input", relative_input]
         if a[0] == "verify":
             if len(a) not in (2, 3):
                 raise ValueError('verify expects ["verify","file.docx"] or ["verify","file.docx","--page-count"]')
@@ -368,8 +413,20 @@ def call_tool(name, args):
             if truncated:
                 summary += " One or more command outputs were truncated; rerun the corresponding individual officecli command to fetch omitted content if needed."
             return summary + "\n\n" + "\n\n".join(sections)
-        r = subprocess.run([OFFICECLI, *map(str, a)], capture_output=True, text=True, timeout=120,
-                           creationflags=CREATE_NO_WINDOW, stdin=subprocess.DEVNULL)
+        try:
+            r = subprocess.run([OFFICECLI, *map(str, a)], capture_output=True, text=True, timeout=120,
+                               creationflags=CREATE_NO_WINDOW, stdin=subprocess.DEVNULL)
+        finally:
+            if temp_input is not None:
+                try:
+                    os.unlink(temp_input)
+                except FileNotFoundError:
+                    pass
+                if created_temp_dir:
+                    try:
+                        os.rmdir(temp_dir)
+                    except OSError:
+                        pass
         out = (r.stdout or "") + (r.stderr or "")
         if r.returncode != 0:
             raise RuntimeError(f"officecli exited {r.returncode}\n{out[-4000:]}")
