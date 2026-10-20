@@ -32,7 +32,7 @@ await check("T-C1", "Context unknown, percentage, and post-compaction refresh", 
   await emit({ type: "text_delta", text: "Working" });
   await emit({ type: "context_usage", used: 4096, window: 32768 });
   await page.waitForFunction(() => document.querySelector('[data-testid="context-ring"]').getAttribute("aria-label").includes("13 percent"));
-  await page.getByText("Usage updates when the current turn finishes.", { exact: false }).waitFor();
+  await page.getByText("Live: the size of the request the model is reading now.", { exact: false }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Compact now", exact: true }).isDisabled(), true);
   await emit({ type: "stream_end", msg_id: "fixture-finished", usage: { input_tokens: 0, output_tokens: 0 } });
   await page.waitForFunction(() => !Array.from(document.querySelectorAll("button")).find(b => b.textContent.trim() === "Compact now")?.disabled);

@@ -36,6 +36,8 @@ await check("T-A1", "Automatic mode persists, applies to new chats, and survives
   await page.waitForFunction(async () => await window.__TAURI_INTERNALS__.invoke("get_setting", { key: "auto_edit" }) === "0");
   await page.reload();
   await page.getByRole("heading", { name: "What should we work on?" }).waitFor();
+  // Settings hydrate asynchronously after the first render's default-on state.
+  await page.getByRole("button", { name: "Automatic mode off", exact: true }).waitFor();
   assert.equal(await modeButton().getAttribute("aria-label"), "Automatic mode off");
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   assert.equal(await modeButton().getAttribute("aria-label"), "Automatic mode off");
@@ -43,6 +45,7 @@ await check("T-A1", "Automatic mode persists, applies to new chats, and survives
   await page.waitForFunction(async () => await window.__TAURI_INTERNALS__.invoke("get_setting", { key: "auto_edit" }) === "1");
   await page.reload();
   await page.getByRole("heading", { name: "What should we work on?" }).waitFor();
+  await page.getByRole("button", { name: "Automatic mode on", exact: true }).waitFor();
   assert.equal(await modeButton().getAttribute("aria-label"), "Automatic mode on");
   assert.equal(await invoke("get_setting", { key: "auto_edit" }), "1");
 });
