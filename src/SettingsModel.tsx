@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Button, Message, Row, Section, Toggle, input } from "./settings-ui";
 
-type Mode = { id: string; label: string; group: string; config: string; context: number | null; found: boolean; active: boolean };
+type Mode = { id: string; label: string; group: string; config: string; context: number | null; found: boolean; active: boolean; engine?: string };
 type Cfg = Record<string, any> & { args: string[] };
 type Field = { key: string; label: string; type?: "number" | "text" | "boolean"; default?: unknown; help?: string };
 type StoreItem = { id: string; dir: string; name: string; version: string; description: string; author?: string; state: "new" | "installed" | "update"; installedVersion?: string; runsPrograms: boolean };
@@ -70,11 +70,19 @@ export function ModelEditor({ state }: { state: string }) {
   const ctx = Number(arg("--max-context") ?? 0);
   const changed = dirty || raw != null;
 
+  // Add a model from a run config JSON (Strata or PolyStrata) that its setup or a tuning tool wrote.
+  async function addModel() {
+    const f = await open({ title: "Choose a Strata or PolyStrata run config", filters: [{ name: "Run config", extensions: ["json"] }] });
+    if (typeof f !== "string") return;
+    try { const saved = await invoke<string>("run_config_import", { path: f }); await loadModes(); setPath(saved); setMsg("Added. Pick it from the model menu to load it."); }
+    catch (e) { setMsg(String(e)); }
+  }
+  const weightsFlag = arg("--native") != null ? "--native" : "--model";
   async function pickWeights() {
     const f = await open({ title: "Choose model weights (GGUF)", filters: [{ name: "GGUF", extensions: ["gguf"] }] });
     if (typeof f !== "string" || !cfg) return;
-    const was = arg("--native");
-    let a = setArg(cfg.args, "--native", f);
+    const was = arg(weightsFlag);
+    let a = setArg(cfg.args, weightsFlag, f);
     if (was && getArg(a, "--ple-gguf") === was) a = setArg(a, "--ple-gguf", f);
     setCfg({ ...cfg, args: a });
   }
@@ -106,6 +114,7 @@ export function ModelEditor({ state }: { state: string }) {
       action={cfg && <>
         <Button variant="ghost" small disabled={busy} onClick={() => setNewName(`${mode?.label ?? "Profile"} copy`)}>Duplicate</Button>
         <Button variant="ghost" small onClick={() => setRaw(r => (r == null ? JSON.stringify(cfg, null, 2) : null))}>{raw == null ? "Edit JSON" : "Back to form"}</Button>
+        <Button variant="ghost" small disabled={busy} onClick={addModel}>Add model…</Button>
       </>}>
       <Row label="Editing" hint={mode?.active ? "In use now" : "Not in use"}>
         <select className={inp} value={path} onChange={e => setPath(e.target.value)}>
@@ -127,7 +136,7 @@ export function ModelEditor({ state }: { state: string }) {
 
     {cfg && raw == null && <>
       <Section title="Model and memory">
-        <Row label="Model weights" hint={`Quantization ${quantOf(arg("--native"))}`}><PathPick path={arg("--native")} onPick={pickWeights} /></Row>
+        <Row label="Model weights" hint={`Quantization ${quantOf(arg(weightsFlag))}${mode?.engine ? ` · ${mode.engine}` : ""}`}><PathPick path={arg(weightsFlag)} onPick={pickWeights} /></Row>
         {arg("--pack") != null && <Row label="Model pack"><PathPick path={arg("--pack")} onPick={pickPack} /></Row>}
         <Row label="Context window" hint="How much text the model can hold. Longer uses more memory.">
           <select className={inp} value={CONTEXTS.includes(ctx) ? ctx : "custom"} onChange={e => e.target.value !== "custom" && put("--max-context", e.target.value)}>

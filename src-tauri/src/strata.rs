@@ -110,6 +110,17 @@ fn connect_external(app: &AppHandle, s: &Shared) -> Result<(), String> {
     Ok(())
 }
 
+/// The folder whose serve\server.py runs a config: its `engine_root`, else its `cwd` when that holds a server
+/// (a PolyStrata config keeps its own), else the Strata folder. Python comes from that folder's .venv, else Strata's.
+pub fn server_root(cfg: &str, strata_root: &PathBuf) -> PathBuf {
+    let v: Option<serde_json::Value> = std::fs::read_to_string(cfg).ok().and_then(|t| serde_json::from_str(&t).ok());
+    ["engine_root", "cwd"]
+        .iter()
+        .filter_map(|k| v.as_ref()?.get(*k)?.as_str().map(PathBuf::from))
+        .find(|d| d.join("serve").join("server.py").is_file())
+        .unwrap_or_else(|| strata_root.clone())
+}
+
 pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
     {
         let g = s.lock().unwrap();
@@ -122,8 +133,10 @@ pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
     }
     let root = PathBuf::from(setting("strataRoot", &paths::default_strata_root()));
     let cfg = setting("modelConfig", &paths::default_model_config());
-    let python = root.join(".venv").join("Scripts").join("python.exe");
-    let server = root.join("serve").join("server.py");
+    let engine_root = server_root(&cfg, &root);
+    let venv = |d: &PathBuf| d.join(".venv").join("Scripts").join("python.exe");
+    let python = if venv(&engine_root).is_file() { venv(&engine_root) } else { venv(&root) };
+    let server = engine_root.join("serve").join("server.py");
     if !python.exists() || !server.exists() || !PathBuf::from(&cfg).exists() {
         let m = if !python.is_file() || !server.is_file() {
             format!("Strata is not configured. In Settings, choose its folder (the one containing serve\\server.py and .venv\\Scripts\\python.exe). Install Strata and run SETUP.bat first if needed. Checked: {}", root.display())
@@ -154,7 +167,7 @@ pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
         // aionrs compaction has a separate 20k output cap, independent of --max-tokens.
         // Fit that cap to remaining space; Strata still rejects an oversized input.
         .args(["--engine", "strata", "--config", &cfg, "--host", "127.0.0.1", "--port", &port.to_string(), "--fit-max-tokens"])
-        .current_dir(&root)
+        .current_dir(&engine_root)
         .env("STRATA_API_KEY", &key)
         .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())

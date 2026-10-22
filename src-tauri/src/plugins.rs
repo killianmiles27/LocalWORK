@@ -237,6 +237,11 @@ pub fn modes() -> Vec<Value> {
             "config": path.to_string_lossy(), "context": context_of(&path), "found": true, "active": key == current,
         }));
     }
+    // Which engine runs each one (a PolyStrata config is launched with PolyStrata's server).
+    for m in out.iter_mut() {
+        let cfg = m["config"].as_str().unwrap_or("").to_string();
+        m["engine"] = json!(crate::setup::engine(&strata::server_root(&cfg, &root)));
+    }
     out
 }
 

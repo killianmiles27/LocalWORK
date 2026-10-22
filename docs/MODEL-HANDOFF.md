@@ -10,7 +10,7 @@ The selected folder must contain .venv/Scripts/python.exe and serve/server.py. T
 
 ## Launch
 
-The host invokes the selected Python with server.py, --engine strata, --config, explicit loopback --host and a selected port, plus --fit-max-tokens. A random STRATA_API_KEY protects each launch. The agent receives that key through API_KEY in its child environment. Keys are not placed in the process command line.
+The host invokes the selected Python with server.py, --engine strata, --config, explicit loopback --host and a selected port, plus --fit-max-tokens. The server and working folder come from the config: its optional `engine_root`, else its `cwd` when that folder holds serve/server.py (a PolyStrata config keeps its own server), else the Strata folder. Python is that folder's .venv, else the Strata folder's. Settings → Model → "Add model…" copies a run config into the Strata profiles folder so it appears in the model menu; the mode list marks each entry's engine (Strata or PolyStrata). A random STRATA_API_KEY protects each launch. The agent receives that key through API_KEY in its child environment. Keys are not placed in the process command line.
 
 /health is the readiness signal; the protected /v1/models endpoint verifies ownership before the app declares ready. One local model server is shared by chats. The host supervises its owned process tree and uses generation counters so stale pollers cannot change a replacement server's status.
 

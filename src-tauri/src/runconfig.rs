@@ -75,6 +75,29 @@ pub fn save(path: &str, config: Value, new_name: Option<String>) -> Result<Strin
     Ok(dest.to_string_lossy().into())
 }
 
+/// Add a model: copy a Strata or PolyStrata run config (for example one its setup or a tuning tool wrote) into
+/// the profiles folder, so it shows in the model menu. Returns the new path.
+pub fn import(src: &str) -> Result<String, String> {
+    let src = PathBuf::from(src);
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&src).map_err(|e| format!("Could not read {}: {e}", src.display()))?)
+        .map_err(|e| format!("Not valid JSON: {e}"))?;
+    if !v.get("args").is_some_and(|a| a.as_array().is_some_and(|a| a.iter().all(Value::is_string))) {
+        return Err("This is not a Strata or PolyStrata run config: it needs an `args` list.".into());
+    }
+    if !v.get("exe").and_then(Value::as_str).is_some_and(|e| Path::new(e).is_file()) {
+        return Err("The engine program this config names (`exe`) was not found.".into());
+    }
+    let stem: String = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        .trim_end_matches(".config").chars().filter(|c| c.is_ascii_alphanumeric() || " -_.".contains(*c)).take(32).collect();
+    let stem = if valid_name(&stem) { stem } else { "Model".into() };
+    let dir = profiles_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dest = (1..100).map(|i| dir.join(if i == 1 { format!("{stem}.json") } else { format!("{stem} {i}.json") }))
+        .find(|d| !d.exists()).ok_or("Too many profiles with that name.")?;
+    std::fs::copy(&src, &dest).map_err(|e| format!("Could not copy: {e}"))?;
+    Ok(dest.to_string_lossy().into())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

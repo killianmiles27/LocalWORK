@@ -152,6 +152,11 @@ fn run_config_save(path: String, config: Value, new_name: Option<String>) -> Res
 }
 
 #[tauri::command(async)]
+fn run_config_import(path: String) -> Result<String, String> {
+    runconfig::import(&path)
+}
+
+#[tauri::command(async)]
 fn model_status(s: State<App>) -> strata::Status {
     s.strata.lock().unwrap().status.clone()
 }
@@ -554,7 +559,7 @@ pub fn run() {
             run_config_read,
             browser_frames,
             browser_frame,
-            run_config_save,
+            run_config_save, run_config_import,
             documents::documents_list, documents::document_preview, documents::document_open,
             documents::document_revisions, documents::document_export,
             documents::document_save_visual, documents::document_save, documents::document_office_edit,

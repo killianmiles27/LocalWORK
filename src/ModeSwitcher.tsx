@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 
-type Mode = { id: string; plugin: string; label: string; description: string; group: string; config: string; context: number | null; found: boolean; active: boolean };
+type Mode = { id: string; plugin: string; label: string; description: string; group: string; config: string; context: number | null; found: boolean; active: boolean; engine?: string };
 type Effort = { effort: string | null; config: string | null; override: string | null; options: string[] };
 
 const k = (n: number) => (n >= 1024 ? Math.round(n / 1024) + "K" : String(n));
@@ -70,7 +70,7 @@ export default function ModeSwitcher({ ready, state, onKey, onError }: { ready: 
                   title={m.found ? m.config : `Missing run config: ${m.config}`}
                   className="w-full flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-panel-2 disabled:opacity-40">
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-baseline gap-2"><span>{m.label}</span>{m.context && <span className="text-xs text-muted">{k(m.context)}</span>}</span>
+                    <span className="flex items-baseline gap-2"><span>{m.label}</span>{m.context && <span className="text-xs text-muted">{k(m.context)}</span>}{m.engine === "PolyStrata" && <span className="text-[11px] text-muted">PolyStrata</span>}</span>
                     {m.description && <span className="block text-xs text-muted truncate">{m.description}</span>}
                   </span>
                   {m.active && <Check size={14} className="mt-0.5 text-accent shrink-0" />}
