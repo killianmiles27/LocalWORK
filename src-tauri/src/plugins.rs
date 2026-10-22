@@ -192,6 +192,8 @@ pub fn modes() -> Vec<Value> {
     // On a server the user runs, no Strata mode is the one loaded.
     let current = if strata::external() { "<external server>".to_string() } else { norm(&strata::setting("modelConfig", &paths::default_model_config())) };
     let mut out = vec![];
+    let picker_configs = settings().get("localPickerConfigs").and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).map(norm).collect::<std::collections::BTreeSet<_>>());
     for p in enabled() {
         let Some(list) = p.contributes("modes").and_then(Value::as_array) else { continue };
         for m in list {
@@ -199,7 +201,7 @@ pub fn modes() -> Vec<Value> {
             let Some(cfg) = m.get("config").and_then(Value::as_str) else { continue };
             let path = p.resolve(cfg);
             let ctx = context_of(&path);
-            out.push(json!({
+            let mut mode = json!({
                 "id": format!("{}/{}", p.id, mid),
                 "plugin": p.id,
                 "label": m.get("label").and_then(Value::as_str).unwrap_or(mid),
@@ -209,7 +211,9 @@ pub fn modes() -> Vec<Value> {
                 "context": ctx,
                 "found": path.is_file(),
                 "active": norm(&path.to_string_lossy()) == current,
-            }));
+            });
+            add_picker_metadata(&mut mode, &path, m.get("label").and_then(Value::as_str), picker_configs.as_ref());
+            out.push(mode);
         }
     }
     // Run configs saved in Strata's profiles folder (for example from Settings) that no plugin names.
@@ -221,10 +225,12 @@ pub fn modes() -> Vec<Value> {
         let key = norm(&path.to_string_lossy());
         if out.iter().any(|m| norm(m["config"].as_str().unwrap_or("")) == key) { continue; }
         let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        out.push(json!({
+        let mut mode = json!({
             "id": format!("profile/{stem}"), "plugin": null, "label": stem, "description": "", "group": "Profiles",
             "config": path.to_string_lossy(), "context": context_of(&path), "found": true, "active": key == current,
-        }));
+        });
+        add_picker_metadata(&mut mode, &path, Some(&stem), picker_configs.as_ref());
+        out.push(mode);
     }
     // Models set up in the Strata folder itself (strata-<model>.json). PolyStrata keeps one per installed model.
     let root = PathBuf::from(strata::setting("strataRoot", &paths::default_strata_root()));
@@ -232,10 +238,12 @@ pub fn modes() -> Vec<Value> {
         let key = norm(&path.to_string_lossy());
         if out.iter().any(|m| norm(m["config"].as_str().unwrap_or("")) == key) { continue; }
         let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        out.push(json!({
+        let mut mode = json!({
             "id": format!("model/{stem}"), "plugin": null, "label": label, "description": "", "group": "Models",
             "config": path.to_string_lossy(), "context": context_of(&path), "found": true, "active": key == current,
-        }));
+        });
+        add_picker_metadata(&mut mode, &path, Some(&label), picker_configs.as_ref());
+        out.push(mode);
     }
     // Which engine runs each one (a PolyStrata config is launched with PolyStrata's server).
     for m in out.iter_mut() {
@@ -243,6 +251,69 @@ pub fn modes() -> Vec<Value> {
         m["engine"] = json!(crate::setup::engine(&strata::server_root(&cfg, &root)));
     }
     out
+}
+
+fn config_model_value(path: &Path) -> Value {
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null)
+}
+
+fn nonempty_string<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+    v.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn humanize_model_name(s: &str) -> String {
+    s.replace('-', " ").split_whitespace().map(|part| {
+        let mut chars = part.chars();
+        chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+    }).collect::<Vec<_>>().join(" ")
+}
+
+fn context_label(context: Option<u64>) -> String {
+    context.map(|n| {
+        if n >= 1024 * 1024 { format!("{}M", n / (1024 * 1024)) }
+        else if n >= 1024 { format!("{}K", n / 1024) }
+        else { n.to_string() }
+    }).unwrap_or_else(|| "Default".into())
+}
+
+fn picker_visible(path: &Path, visible: Option<&std::collections::BTreeSet<String>>) -> bool {
+    visible.is_none_or(|set| set.contains(&norm(&path.to_string_lossy())))
+}
+
+fn add_picker_metadata(mode: &mut Value, path: &Path, fallback_name: Option<&str>, visible: Option<&std::collections::BTreeSet<String>>) {
+    let cfg = config_model_value(path);
+    let model_name = nonempty_string(&cfg, "model_name");
+    let display_name = nonempty_string(&cfg, "display_name");
+    let model_label = nonempty_string(&cfg, "model_display_name")
+        .or(model_name)
+        .or(display_name)
+        .or(fallback_name)
+        .unwrap_or("Model");
+    let model_id = model_name.or(display_name).or(fallback_name).unwrap_or("model");
+    let context = mode.get("context").and_then(Value::as_u64);
+    let profile_label = context_label(context);
+    mode["modelId"] = json!(model_id);
+    mode["modelLabel"] = json!(humanize_model_name(model_label));
+    mode["profileLabel"] = json!(profile_label);
+    mode["local"] = json!(true);
+    mode["pickerVisible"] = json!(picker_visible(path, visible));
+}
+
+/// Validate and persist the model picker visibility list without replacing unrelated settings.
+/// `None` resets visibility to all discovered configs; `Some([])` hides all configs.
+pub fn picker_configs_set(configs: Option<Vec<String>>) -> Result<(), String> {
+    let Some(configs) = configs else {
+        return update_settings(|v| { v.as_object_mut().map(|o| o.remove("localPickerConfigs")); });
+    };
+    let discovered: std::collections::BTreeSet<String> = modes().iter()
+        .filter_map(|m| m.get("config").and_then(Value::as_str).map(norm)).collect();
+    let mut clean = std::collections::BTreeSet::new();
+    for config in configs {
+        let key = norm(&config);
+        if !discovered.contains(&key) { return Err("A selected model config is no longer available.".into()); }
+        clean.insert(key);
+    }
+    update_settings(|v| { v["localPickerConfigs"] = json!(clean.into_iter().collect::<Vec<_>>()); })
 }
 
 /// `strata-*.json` run configs in a Strata or PolyStrata folder, with a display name each.
@@ -671,6 +742,38 @@ mod tests {
         assert_eq!(m.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>(), ["GLM 5.3", "qwen"]);
         assert_eq!(super::context_of(&m[0].0), Some(65536));
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn picker_metadata_groups_profiles_and_hides_only_picker_entries() {
+        let d = std::env::temp_dir().join(format!("lw-picker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let a = d.join("swift-128.json");
+        let b = d.join("swift-256.json");
+        std::fs::write(&a, r#"{"model_name":"swift-qwen3.8-flash-next-q2_0","model_display_name":"Swift Q2_0","args":["--max-context","131072"]}"#).unwrap();
+        std::fs::write(&b, r#"{"model_name":"swift-qwen3.8-flash-next-q2_0","model_display_name":"Swift Q2_0","args":["--max-context","262144"]}"#).unwrap();
+        let mut ma = json!({"config": a.to_string_lossy(), "context": context_of(&a)});
+        let mut mb = json!({"config": b.to_string_lossy(), "context": context_of(&b)});
+        add_picker_metadata(&mut ma, &a, Some("swift-128"), None);
+        add_picker_metadata(&mut mb, &b, Some("swift-256"), None);
+
+        assert_eq!(ma["modelId"], mb["modelId"]);
+        assert_eq!(ma["modelLabel"], "Swift Q2_0");
+        assert_eq!(ma["profileLabel"], "128K");
+        assert_eq!(mb["profileLabel"], "256K");
+        assert_eq!(ma["local"], true);
+        assert_eq!(ma["pickerVisible"], true);
+        // Picker metadata contains only display/group values, never the source config path.
+        for key in ["modelId", "modelLabel", "profileLabel"] {
+            assert!(!ma[key].as_str().unwrap().contains(&d.to_string_lossy().to_string()));
+        }
+
+        let hidden = std::collections::BTreeSet::from([norm(&b.to_string_lossy())]);
+        assert!(picker_visible(&b, Some(&hidden)));
+        assert!(!picker_visible(&a, Some(&hidden)));
+        assert!(picker_visible(&a, None));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -16,7 +16,14 @@ async fn find(app: &AppHandle) -> Result<Option<tauri_plugin_updater::Update>, S
 /// Download, verify the signature, run the installer and restart into the new version.
 async fn install(app: &AppHandle, update: tauri_plugin_updater::Update) -> Result<(), String> {
     let _ = app.emit("app-update", json!({"state": "installing", "version": update.version}));
-    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("The update could not be installed: {e}"))?;
+    let _ = app.emit("download-progress", json!({"id": "app-update", "state": "connecting", "message": "Connecting for the app update…"}));
+    let mut done = 0u64;
+    update.download_and_install(|chunk, total| {
+        done = done.saturating_add(chunk as u64);
+        let _ = app.emit("download-progress", json!({"id": "app-update", "state": "running", "done": done, "total": total, "message": "Downloading LocalWORK…"}));
+    }, || {
+        let _ = app.emit("download-progress", json!({"id": "app-update", "state": "installing", "message": "Download complete. Verifying and installing…"}));
+    }).await.map_err(|e| format!("The update could not be installed: {e}"))?;
     app.restart();
 }
 

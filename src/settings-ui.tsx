@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 /** Shared building blocks for the Settings window, so every tab looks and behaves the same. */
 
-export const input = "rounded-lg border border-line bg-panel px-2 py-1 text-sm min-w-0 w-full focus:border-accent outline-none";
+export const input = "rounded-lg border border-line bg-panel px-2 py-1 text-sm min-w-0 max-w-full w-full focus:border-accent outline-none";
 
 const buttonStyles = {
   primary: "bg-accent text-accent-fg hover:bg-accent-dark border border-transparent",
@@ -32,12 +32,12 @@ export function Section({ title, action, note, children, plain }: { title: strin
 /** One line on a card: label (with an optional hint under it) on the left, value or control on the right. */
 export function Row({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-6 px-3.5 py-2.5 text-sm min-h-10">
-      <div className="min-w-0">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3.5 py-2.5 text-sm min-h-10">
+      <div className="min-w-0 flex-1 basis-36 break-words">
         <div>{label}</div>
         {hint && <div className="text-xs text-muted mt-0.5">{hint}</div>}
       </div>
-      {children != null && <div className="min-w-0 shrink-0 max-w-[60%] text-right">{children}</div>}
+      {children != null && <div className="min-w-0 max-w-full text-right">{children}</div>}
     </div>
   );
 }

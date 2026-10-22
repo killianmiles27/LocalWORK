@@ -25,6 +25,7 @@ python scripts/e2e/check-agent-recovery.py --work ../.e2e-runs --python '<config
 node scripts/tests/thinking.browser.mjs
 node scripts/tests/plan.browser.mjs
 node scripts/tests/cloud.browser.mjs
+node scripts/tests/model-picker.browser.mjs
 pwsh -NoProfile -File scripts/e2e/run-all.ps1 -Exe ./src-tauri/target/release/localwork.exe -Only T-A1,T-A2,T-C1 -Iterations 1 -KeepWork
 pwsh -NoProfile -File scripts/e2e/run-all.ps1 -Exe ./src-tauri/target/release/localwork.exe -Only T-R1 -Iterations 1 -KeepWork
 ```

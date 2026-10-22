@@ -55,6 +55,8 @@ The installer has the app and its tools. It does **not** include a model. The fi
 
 Updates are signed. You can check for them in Settings > App, or turn on automatic updates there (it's off by default).
 
+The chat picker groups local models with their profiles in a side menu. Choose which local profiles and cloud models appear through Settings; downloads show progress next to their controls.
+
 ## What it does
 
 <table>

@@ -4,7 +4,9 @@ The ALPHA badge beside LocalWORK in the sidebar marks the app's current developm
 
 ## Models and cloud routing
 
-The composer model menu labels choices **Local** or **Cloud**. Local mode changes reload the managed engine; cloud selections apply to that chat's subsequent requests. Configure providers, subscription sign-in, a default cloud model and optional CPU privacy checking in **Settings → Cloud**. Local only is the default; Offline and privacy locks override cloud choices. Automatic routing currently uses availability, context size and repeated errors, not general task difficulty. See [cloud and privacy](CLOUD.md) before enabling it.
+The composer model menu separates **Local models** and **Cloud models**. Hover, click, or use Right arrow on a local model to open its profiles beside it. The menu opens on the other side or shows profiles in place when the window is narrow, and stays within the window when resized. A profile change reloads the managed local engine. Choose which local profiles appear in **Settings → Model → Local models in your picker**; hiding keeps their files and editor entries.
+
+Configure providers and subscription sign-in in **Settings → Cloud**, then open each model dropdown and check the cloud models to show in the picker. Choose them directly in chat. Only Automatic mode shows an escalation-target selector. Local only is the default; Offline and privacy locks override cloud choices. Automatic routing currently uses availability, context size and repeated errors, not general task difficulty. See [cloud and privacy](CLOUD.md) before enabling it.
 
 Use **Settings → Model → Model library** to install/update PolyStrata, download a suggested model or add files already on disk. The same library is available during first-run setup. Download sizes and hardware-fit labels are estimates. Tuning uses upstream calibration for supported configurations and requires the model to be stopped.
 

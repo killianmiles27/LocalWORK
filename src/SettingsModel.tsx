@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import DownloadProgress, { type DownloadState } from "./DownloadProgress";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Button, Message, Row, Section, Toggle, input } from "./settings-ui";
 
@@ -282,6 +284,7 @@ function PluginStore({ onInstalled }: { onInstalled: () => void }) {
   const [lists, setLists] = useState<Record<string, StoreList | string>>({});
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [progress, setProgress] = useState<DownloadState | null>(null);
   const [note, setNote] = useState("");
 
   const fetchOne = (src: string) => {
@@ -290,6 +293,7 @@ function PluginStore({ onInstalled }: { onInstalled: () => void }) {
   };
   const refresh = (list: string[]) => list.forEach(fetchOne);
   useEffect(() => { invoke<string[]>("store_sources").then(s => { setSources(s); refresh(s); }).catch(e => setNote(String(e))); }, []);
+  useEffect(() => { const sub = listen<DownloadState>("download-progress", e => { if (e.payload.id === "plugin-install") setProgress(e.payload); }); return () => { sub.then(f => f()); }; }, []);
 
   async function saveSources(next: string[]) {
     try { const s = await invoke<string[]>("store_sources_set", { list: next }); setSources(s); return s; } catch (e) { setNote(String(e)); return null; }
@@ -300,7 +304,7 @@ function PluginStore({ onInstalled }: { onInstalled: () => void }) {
     if (s) { setAdding(""); s.filter(x => !(x in lists)).forEach(fetchOne); }
   }
   async function install(src: string, it: StoreItem) {
-    setBusy(it.dir); setNote("");
+    setBusy(it.dir); setProgress(null); setNote("");
     try {
       const r = await invoke<{ name: string; runsPrograms: boolean }>("store_install", { source: src, dir: it.dir });
       setNote(r.runsPrograms ? `Installed ${r.name}. It starts programs on this computer, so it stays off until you turn it on under Installed.` : `Installed ${r.name}.`);
@@ -322,13 +326,13 @@ function PluginStore({ onInstalled }: { onInstalled: () => void }) {
           {typeof l === "string" && <div className={"px-3.5 py-3 text-sm " + (l === "Loading…" ? "text-muted" : "text-red-500 break-words")}>{l}</div>}
           {typeof l === "object" && l.plugins.length === 0 && <div className="px-3.5 py-3 text-sm text-muted">No plugins found in this repository.</div>}
           {typeof l === "object" && l.plugins.map(it => (
-            <Row key={it.dir}
+            <div key={it.dir}><Row
               label={<span className="flex items-baseline gap-2 flex-wrap"><span className="font-medium">{it.name || it.id}</span><span className="text-xs text-muted">{[it.version, it.author].filter(Boolean).join(" · ")}</span>{it.runsPrograms && <span className="rounded-md bg-panel-2 px-1.5 py-px text-[11px] text-muted">Runs programs</span>}</span>}
               hint={it.description}>
               {it.state === "installed"
                 ? <span className="text-xs text-muted">Installed</span>
                 : <Button variant={it.state === "update" ? "primary" : "default"} small disabled={busy != null} onClick={() => install(src, it)}>{busy === it.dir ? "Installing…" : it.state === "update" ? "Update" : "Install"}</Button>}
-            </Row>
+            </Row>{busy === it.dir && <div className="px-3.5 pb-3"><DownloadProgress label={`Installing ${it.name || it.id}`} progress={progress} /></div>}</div>
           ))}
         </Section>
       );

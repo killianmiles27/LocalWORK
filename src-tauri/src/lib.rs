@@ -109,8 +109,8 @@ fn store_list(source: String) -> Result<Value, String> {
 }
 
 #[tauri::command(async)]
-fn store_install(source: String, dir: String) -> Result<Value, String> {
-    pluginstore::install(&source, &dir)
+fn store_install(app: AppHandle, source: String, dir: String) -> Result<Value, String> {
+    pluginstore::install_with_progress(&source, &dir, &|progress| { let _ = app.emit("download-progress", progress); })
 }
 
 #[tauri::command(async)]
@@ -121,6 +121,11 @@ fn plugins_folder() -> Result<(), String> {
 #[tauri::command(async)]
 fn modes_list(s: State<App>) -> Value {
     serde_json::json!({"modes": plugins::modes(), "effort": plugins::effort_get(&s.strata)})
+}
+
+#[tauri::command(async)]
+fn local_picker_set(configs: Option<Vec<String>>) -> Result<(), String> {
+    plugins::picker_configs_set(configs)
 }
 
 #[tauri::command(async)]
@@ -571,7 +576,7 @@ pub fn run() {
             cloud::cloud_provider_save, cloud::cloud_provider_remove, cloud::cloud_models,
             gate::gate_status, gate::gate_install, gate::gate_test,
             router::route_mode_set, router::chat_route_get, router::chat_route_set, router::chat_unlock, router::route_last_sent, router::cloud_available,
-            run_config_read,
+            run_config_read, local_picker_set,
             browser_frames,
             browser_frame,
             run_config_save, run_config_import,

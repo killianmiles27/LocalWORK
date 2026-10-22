@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, Cpu, Download, ExternalLink, FolderOpen, Loader2, Search, Wrench, X } from "lucide-react";
 import { Button, input } from "./settings-ui";
+import DownloadProgress, { type DownloadState } from "./DownloadProgress";
 import { FIT_LABEL, FIT_STYLE, fitOf, normalizeCatalog, STATIC_MODELS, type CatalogModel, type Hw } from "./modelCatalog";
 
 type Status = { installed: boolean; root: string; engine: string; version: string | null; python_ok: boolean; latest_tag: string | null; offline: boolean };
@@ -27,6 +28,7 @@ export default function ModelLibrary({ onChanged }: { onChanged?: () => void }) 
   const [modes, setModes] = useState<Mode[]>([]);
   const [job, setJob] = useState<string | null>(null);
   const [pct, setPct] = useState<number | null>(null);
+  const [download, setDownload] = useState<DownloadState | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [showLog, setShowLog] = useState(false);
   const [ask, setAsk] = useState<string | null>(null);
@@ -55,11 +57,10 @@ export default function ModelLibrary({ onChanged }: { onChanged?: () => void }) 
       listen<{ line: string }>("engine-log", e => {
         setLines(p => [...p.slice(-400), e.payload.line]);
         const m = e.payload.line.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
-        if (m) setPct(Math.min(100, Number(m[1])));
+        setPct(m ? Math.min(100, Number(m[1])) : null); setDownload(null);
       }),
-      listen<{ id: string; done: number; total: number | null }>("download-progress", e => {
-        if (e.payload.id === "engine-install" && e.payload.total) setPct(Math.min(100, (e.payload.done / e.payload.total) * 100));
-        if (e.payload.id === "hf-model-download" && e.payload.total) setPct(Math.min(100, (e.payload.done / e.payload.total) * 100));
+      listen<DownloadState>("download-progress", e => {
+        if (e.payload.id === "engine-install" || e.payload.id === "hf-model-download") { setDownload(e.payload); setPct(null); }
       }),
     ];
     return () => { subs.forEach(s => s.then(f => f())); };
@@ -67,7 +68,7 @@ export default function ModelLibrary({ onChanged }: { onChanged?: () => void }) 
 
   /** Run one engine job at a time, with the log and progress bar wired to it. */
   async function go<T>(id: string, fn: () => Promise<T>, done: (r: T) => string | void) {
-    setJob(id); setPct(null); setLines([]); setMsg(null); setAsk(null); setFresh(null);
+    setJob(id); setPct(null); setDownload(null); setLines([]); setMsg(null); setAsk(null); setFresh(null);
     try {
       const t = done(await fn());
       if (t) setMsg({ t });
@@ -122,7 +123,7 @@ export default function ModelLibrary({ onChanged }: { onChanged?: () => void }) 
   const updatable = !!st?.installed && !!st.latest_tag && st.latest_tag !== st.version;
   const bar = (id: string) => job === id && (
     <div className="mt-2">
-      <div className="h-1.5 rounded-full bg-panel-2 overflow-hidden"><div className={`h-full bg-accent transition-all ${pct == null ? "w-1/3 animate-pulse" : ""}`} style={pct == null ? undefined : { width: `${pct}%` }} /></div>
+      <DownloadProgress label={lines[lines.length - 1] ?? "Preparing…"} progress={download} percent={pct} />
       <div className="mt-1 flex items-center justify-between text-xs text-muted"><span className="truncate">{lines[lines.length - 1] ?? "Starting..."}</span>
         <button onClick={() => invoke("engine_cancel")} className="inline-flex items-center gap-1 hover:text-ink shrink-0 ml-2"><X size={12} />Cancel</button></div>
     </div>

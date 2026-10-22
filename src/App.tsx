@@ -626,8 +626,8 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                       {autoEdit ? <Check size={15} /> : <ShieldAlert size={15} />}
                     </button>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                    <StatusItems />
+                    <div className="flex items-center justify-end gap-1.5 min-w-0 flex-1">
+                    <div className="hidden @min-[38rem]:block"><StatusItems /></div>
                     <ModeSwitcher ready={modelReady} state={status.state} conv={cur} ensureConversation={ensureConversation} running={live.busy} onKey={(k) => { modeKey.current = k; }} onError={setErr} />
                     {cur && <ContextRing used={ctx.used} window={ctx.window} busy={live.busy} onCompact={compact} />}
                     {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="hidden @min-[30rem]:inline text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}

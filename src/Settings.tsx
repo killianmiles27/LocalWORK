@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import DownloadProgress, { type DownloadState } from "./DownloadProgress";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AppWindow, Cloud, Cpu, Globe, Puzzle, SlidersHorizontal, X } from "lucide-react";
 import CloudSettings from "./CloudSettings";
 import ModelLibrary from "./ModelLibrary";
+import LocalPickerSettings from "./LocalPickerSettings";
 import { ModelEditor, Plugins } from "./SettingsModel";
 import { Button, Message, Meter, Row, Section, ToggleRow, Value, input } from "./settings-ui";
 
@@ -40,22 +43,22 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
-      <div role="dialog" aria-label="Settings" className="w-full max-w-3xl h-[min(46rem,100%)] flex overflow-hidden rounded-2xl bg-bg border border-line shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <nav aria-label="Settings sections" className="w-44 shrink-0 border-r border-line bg-panel p-2 flex flex-col gap-0.5">
-          <h2 className="px-2.5 pt-1.5 pb-3 text-base font-semibold">Settings</h2>
+      <div role="dialog" aria-label="Settings" className="w-full max-w-3xl h-[min(46rem,calc(100dvh-2rem))] flex max-[640px]:flex-col overflow-hidden rounded-2xl bg-bg border border-line shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <nav aria-label="Settings sections" className="w-44 max-[640px]:w-full shrink-0 border-r max-[640px]:border-r-0 max-[640px]:border-b border-line bg-panel p-2 flex flex-col max-[640px]:flex-row max-[640px]:overflow-x-auto gap-0.5">
+          <h2 className="px-2.5 pt-1.5 pb-3 text-base font-semibold max-[640px]:hidden">Settings</h2>
           {TABS.map(({ id, icon: Icon }) => (
             <button key={id} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}
-              className={"flex items-center gap-2.5 w-full rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors " + (tab === id ? "bg-panel-2 text-ink" : "text-muted hover:bg-panel-2 hover:text-ink")}>
+              className={"flex items-center gap-2.5 w-full max-[640px]:w-auto max-[640px]:shrink-0 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors " + (tab === id ? "bg-panel-2 text-ink" : "text-muted hover:bg-panel-2 hover:text-ink")}>
               <Icon size={15} strokeWidth={1.8} className={tab === id ? "text-accent" : ""} />{id}
             </button>
           ))}
         </nav>
-        <div className="min-w-0 flex-1 flex flex-col">
+        <div className="min-w-0 min-h-0 flex-1 flex flex-col">
           <div className="flex items-center justify-between pl-6 pr-3 h-12 shrink-0">
             <h2 className="text-base font-semibold">{tab}</h2>
             <button onClick={onClose} title="Close" aria-label="Close" className="p-1.5 rounded-lg text-muted hover:text-ink hover:bg-panel-2"><X size={17} /></button>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto px-6 pb-6 space-y-6">
+          <div className="min-h-0 flex-1 overflow-auto px-3 sm:px-6 pb-6 space-y-6">
             {tab === "Model" && <ModelTab status={status} showTps={showTps} onShowTps={onShowTps} />}
             {tab === "Tuning" && <ModelEditor state={status.state} />}
             {tab === "Cloud" && <CloudSettings />}
@@ -126,6 +129,7 @@ function ModelTab({ status, showTps, onShowTps }: { status: St; showTps: boolean
       <Row label="Processor" hint={info?.cpu?.name}><Value>{info?.cpu ? `${num(info.cpu.load, 0)}% load` : "–"}</Value></Row>
     </Section>
 
+    <LocalPickerSettings />
     <EngineSetup />
     <ModelLibrary onChanged={() => window.dispatchEvent(new Event("cloud-changed"))} />
   </>;
@@ -319,9 +323,13 @@ function AppUpdates() {
   const [found, setFound] = useState<{ available: boolean; current: string; version?: string; notes?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
+  const [progress, setProgress] = useState<DownloadState | null>(null);
   useEffect(() => {
     invoke<boolean>("auto_update_get").then(setAuto).catch(() => {});
     getVersion().then(setVersion).catch(() => {});
+    const sub = listen<DownloadState>("download-progress", e => { if (e.payload.id === "app-update") setProgress(e.payload); });
+    const state = listen<{ state: string; error?: string }>("app-update", e => { if (e.payload.state === "failed") { setProgress(null); setMsg(e.payload.error || "The app update failed."); } });
+    return () => { sub.then(f => f()); state.then(f => f()); };
   }, []);
   async function check() {
     setBusy("Checking…"); setMsg("");
@@ -329,8 +337,8 @@ function AppUpdates() {
     catch (e) { setMsg(String(e)); } finally { setBusy(""); }
   }
   async function install() {
-    setBusy("Downloading. LocalWORK restarts when it is installed…"); setMsg("");
-    try { await invoke("app_update_install"); } catch (e) { setMsg(String(e)); setBusy(""); }
+    setBusy("Downloading. LocalWORK restarts when it is installed…"); setMsg(""); setProgress(null);
+    try { await invoke("app_update_install"); } catch (e) { setMsg(String(e)); setBusy(""); setProgress(null); }
   }
   return (
     <Section title="Updates">
@@ -340,6 +348,7 @@ function AppUpdates() {
           : <Button small disabled={!!busy} onClick={check}>Check for updates</Button>}
       </Row>
       {found?.available && found.notes && <div className="px-3.5 py-2.5 text-xs text-muted whitespace-pre-wrap">{found.notes.slice(0, 300)}</div>}
+      {(progress || busy.startsWith("Downloading")) && <div className="px-3.5 py-3"><DownloadProgress label="Updating LocalWORK" progress={progress} /></div>}
       <ToggleRow label="Update automatically when LocalWORK opens" hint="Installs signed releases from GitHub and restarts. Chats and settings are kept."
         checked={auto ?? false} disabled={auto === null}
         onChange={async on => { setAuto(on); try { await invoke("auto_update_set", { on }); } catch (error) { setAuto(!on); setMsg(String(error)); } }} />

@@ -52,12 +52,30 @@ fn resumed_total(header: &str, have: u64) -> Option<u64> {
     (start == have && end >= start && end < total).then_some(total)
 }
 
+/// Small upstream release marker, never an executable or a model download.
+pub fn text(url: &str) -> Result<String, String> {
+    let u = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
+    if !host_ok(&u) { return Err("The release marker is not on an allowed host.".into()); }
+    let r = client(Some(Duration::from_secs(30)))?.get(u).send()
+        .map_err(|e| format!("Could not read release marker: {e}"))?
+        .error_for_status().map_err(|e| format!("Could not read release marker: {e}"))?;
+    let mut data = String::new();
+    r.take(1025).read_to_string(&mut data).map_err(|e| e.to_string())?;
+    if data.len() > 1024 { return Err("The release marker is too large.".into()); }
+    Ok(data)
+}
+
+pub fn stage(app: &AppHandle, id: &str, state: &str, message: &str) {
+    let _ = app.emit("download-progress", json!({"id": id, "done": 0, "total": null, "rate": 0, "state": state, "stage": state, "message": message}));
+}
+
 /// GET a small JSON document (catalog, API listing) from an allowed host.
 pub fn json(url: &str, bearer: Option<&str>) -> Result<serde_json::Value, String> {
     let u = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
     if !host_ok(&u) {
         return Err(format!("LocalWORK does not download from {}", u.host_str().unwrap_or("?")));
     }
+    let github = u.host_str().is_some_and(|h| h == "api.github.com" || h == "github.com");
     let mut r = client(Some(Duration::from_secs(30)))?.get(u).header("Accept", "application/json");
     if let Some(t) = bearer {
         r = r.bearer_auth(t);
@@ -66,6 +84,8 @@ pub fn json(url: &str, bearer: Option<&str>) -> Result<serde_json::Value, String
     let code = r.status().as_u16();
     if code != 200 {
         return Err(match code {
+            403 if github => "GitHub refused the release lookup or its public rate limit was reached. Try again later.".into(),
+            404 if github => "That upstream release no longer exists on GitHub.".into(),
             401 | 403 => "This Hugging Face model needs access approval or a sign-in. Accept its licence on Hugging Face and try again.".into(),
             404 => "That model or pinned revision no longer exists on Hugging Face.".into(),
             _ => format!("The server answered HTTP {code}."),
@@ -77,6 +97,13 @@ pub fn json(url: &str, bearer: Option<&str>) -> Result<serde_json::Value, String
 /// Download `url` to `dest`, resuming a `.part` file. Emits `download-progress` {id, done, total, rate, state}.
 /// Blocking: call from a command thread.
 pub fn fetch(app: &AppHandle, id: &str, url: &str, dest: &Path, bearer: Option<&str>) -> Result<(), String> {
+    let result = fetch_inner(app, id, url, dest, bearer);
+    if let Err(ref error) = result { stage(app, id, "error", error); }
+    result
+}
+
+fn fetch_inner(app: &AppHandle, id: &str, url: &str, dest: &Path, bearer: Option<&str>) -> Result<(), String> {
+    stage(app, id, "connecting", "Connecting to download server…");
     let u = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
     if !host_ok(&u) {
         return Err(format!("LocalWORK does not download from {}", u.host_str().unwrap_or("?")));
@@ -107,6 +134,7 @@ pub fn fetch(app: &AppHandle, id: &str, url: &str, dest: &Path, bearer: Option<&
                     .and_then(|v| v.strip_prefix("bytes */")).and_then(|n| n.parse::<u64>().ok());
                 if total == Some(have) {
                     std::fs::rename(&part, dest).map_err(|e| format!("Could not finish the download: {e}"))?;
+                    let _ = app.emit("download-progress", json!({"id": id, "done": have, "total": have, "rate": 0, "state": "done"}));
                     return Ok(());
                 }
                 return Err("The saved partial download does not match the source size. Try again to restart it.".into());
@@ -128,6 +156,7 @@ pub fn fetch(app: &AppHandle, id: &str, url: &str, dest: &Path, bearer: Option<&
         let secs = t0.elapsed().as_secs_f64().max(0.1);
         let _ = app.emit("download-progress", json!({"id": id, "done": done, "total": total, "rate": ((done - start) as f64 / secs) as u64, "state": state}));
     };
+    emit(done, "running");
     loop {
         if cancelled(id) {
             emit(done, "cancelled");

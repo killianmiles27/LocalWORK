@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const OFFICIAL: &str = "https://github.com/killianmiles27/LocalWORK-plugins";
 const MAX_ZIP: u64 = 256 * 1024 * 1024;
@@ -98,6 +98,35 @@ fn get(c: &reqwest::blocking::Client, url: &str, limit: u64) -> Result<Vec<u8>, 
         return Err("The download is larger than LocalWORK accepts.".into());
     }
     Ok(buf)
+}
+
+fn read_bounded_progress<R: Read>(mut reader: R, limit: u64, total: Option<u64>, report: &dyn Fn(u64, Option<u64>, &str)) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    let mut last = Instant::now();
+    report(0, total, "running");
+    loop {
+        let remaining = limit.saturating_add(1).saturating_sub(buf.len() as u64) as usize;
+        if remaining == 0 { return Err("The download is larger than LocalWORK accepts.".into()); }
+        let chunk_size = remaining.min(chunk.len());
+        let n = reader.read(&mut chunk[..chunk_size]).map_err(|e| e.to_string())?;
+        if n == 0 { break; }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() as u64 > limit { return Err("The download is larger than LocalWORK accepts.".into()); }
+        if last.elapsed() >= Duration::from_millis(250) { report(buf.len() as u64, total, "running"); last = Instant::now(); }
+    }
+    report(buf.len() as u64, total, "running");
+    Ok(buf)
+}
+
+fn get_progress(c: &reqwest::blocking::Client, url: &str, limit: u64, report: &dyn Fn(u64, Option<u64>, &str)) -> Result<Vec<u8>, String> {
+    let r = c.get(url).header("Accept", "application/vnd.github+json").send().map_err(|e| format!("Could not reach GitHub: {e}"))?;
+    let code = r.status().as_u16();
+    if code == 404 { return Err("GitHub says that repository or file does not exist (or is private).".into()); }
+    if code == 403 || code == 429 { return Err("GitHub is rate-limiting requests from this PC. Try again in a while.".into()); }
+    if code != 200 { return Err(format!("GitHub answered HTTP {code}.")); }
+    let total = r.content_length();
+    read_bounded_progress(r, limit, total, report)
 }
 
 fn get_json(c: &reqwest::blocking::Client, url: &str) -> Result<Value, String> {
@@ -203,15 +232,27 @@ pub fn list(source: &str) -> Result<Value, String> {
 
 // ------------------------------------------------------------------------------------------ install
 
-/// Download the repository once, then install the plugin folder `dir` from it like a local import.
-pub fn install(source: &str, dir: &str) -> Result<Value, String> {
+/// Download and install a plugin while reporting the ZIP download and extraction stages.
+pub fn install_with_progress(source: &str, dir: &str, report: &dyn Fn(Value)) -> Result<Value, String> {
+    let progress = |state: &str, done: u64, total: Option<u64>, message: &str| {
+        report(json!({"id": "plugin-install", "done": done, "total": total, "rate": 0, "state": state, "stage": state, "message": message}));
+    };
+    progress("connecting", 0, None, "Connecting to GitHub…");
+    let result = install_inner(source, dir, &progress);
+    if let Err(ref error) = result { progress("error", 0, None, error); }
+    result
+}
+
+fn install_inner(source: &str, dir: &str, progress: &dyn Fn(&str, u64, Option<u64>, &str)) -> Result<Value, String> {
     let r = parse_repo(source)?;
     if !dir.split('/').filter(|s| !s.is_empty()).all(part_ok) {
         return Err("That plugin folder name is not accepted.".into());
     }
     let c = client()?;
     let branch = branch_of(&c, &r)?;
-    let bytes = get(&c, &format!("https://codeload.github.com/{}/{}/zip/{}", r.owner, r.name, branch), MAX_ZIP)?;
+    let on_download = |done: u64, total: Option<u64>, state: &str| progress(state, done, total, "Downloading plugin repository…");
+    let bytes = get_progress(&c, &format!("https://codeload.github.com/{}/{}/zip/{}", r.owner, r.name, branch), MAX_ZIP, &on_download)?;
+    progress("extracting", bytes.len() as u64, Some(bytes.len() as u64), "Extracting plugin…");
     let n: u32 = rand::random();
     let work = std::env::temp_dir().join(format!("localwork-store-{n:08x}"));
     let result = (|| {
@@ -232,6 +273,7 @@ pub fn install(source: &str, dir: &str) -> Result<Value, String> {
     let _ = std::fs::remove_dir_all(&work);
     let mut v = result?;
     v["source"] = json!(r.url());
+    progress("done", bytes.len() as u64, Some(bytes.len() as u64), "Plugin installed.");
     Ok(v)
 }
 
@@ -268,6 +310,19 @@ mod tests {
         assert_eq!(plugin_dirs(&tree, "plugins"), ["plugins/x"]);
         let root = json!({"tree": [{"type": "blob", "path": "plugin.json"}]});
         assert_eq!(plugin_dirs(&root, ""), [""]);
+    }
+
+    #[test]
+    fn bounded_progress_reports_bytes_and_rejects_oversized_downloads() {
+        let updates = std::cell::RefCell::new(Vec::new());
+        let read = read_bounded_progress(&b"abcdefgh"[..], 8, Some(8), &|done, total, state| updates.borrow_mut().push((done, total, state.to_string()))).unwrap();
+        assert_eq!(read, b"abcdefgh");
+        let updates = updates.into_inner();
+        assert_eq!(updates.first().unwrap(), &(0, Some(8), "running".into()));
+        assert_eq!(updates.last().unwrap(), &(8, Some(8), "running".into()));
+
+        let error = read_bounded_progress(&b"abcdefghi"[..], 8, Some(9), &|_, _, _| {}).unwrap_err();
+        assert!(error.contains("larger than LocalWORK accepts"));
     }
 
     #[test]

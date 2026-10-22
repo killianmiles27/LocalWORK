@@ -14,6 +14,8 @@ Choose **No, help me set one up** in the wizard, or open **Settings â†’ Model â†
 
 You can also add a supported GGUF already on disk, or inspect/download another Hugging Face GGUF using the library. Compatibility depends on the upstream engine; downloading weights does not guarantee support. Existing model JSON configurations can still be selected through Engine and setup. LocalWORK starts and stops the selected managed model; an external server remains under your control.
 
+In **Local models in your picker**, check the profiles you want to see in chat. The picker groups profiles by model rather than listing every configuration as a separate model. Download operations show a progress bar immediately, with size and percentage when available; preparation/extraction use an indeterminate bar.
+
 **Tune for this PC** runs supported upstream calibration and saves its changes. Stop the model first. Calibration runs inference measurements and can take time; it is not a general optimizer for every model family. Unsupported engines return an error rather than claiming a speed improvement. No calibration runs merely from opening the library.
 
 ## Install Strata and a model

@@ -442,26 +442,76 @@ pub fn gate_status() -> Value {
 
 #[tauri::command(async)]
 pub fn gate_install(app: tauri::AppHandle) -> Result<(), String> {
+    crate::download::stage(&app, "gate-install", "resolving", "Finding the privacy filter runtime…");
+    let result = install_filter(&app);
+    match &result {
+        Ok(()) => crate::download::stage(&app, "gate-install", "done", "Privacy filter installed."),
+        Err(error) => crate::download::stage(&app, "gate-install", "error", error),
+    }
+    result
+}
+
+fn cpu_asset(release: &Value) -> Option<String> {
+    release["assets"].as_array()?.iter().find_map(|a| {
+        let name = a["name"].as_str()?;
+        (name.starts_with("llama-") && name.ends_with("bin-win-cpu-x64.zip"))
+            .then(|| a["browser_download_url"].as_str().map(str::to_string)).flatten()
+    })
+}
+
+fn nightly_tag(marker: &str) -> Option<&str> {
+    let tag = marker.trim();
+    (tag.starts_with('b') && tag.len() > 1 && tag[1..].bytes().all(|b| b.is_ascii_digit())).then_some(tag)
+}
+
+fn runtime_url() -> Result<String, String> {
+    resolve_runtime(|url| crate::download::json(url, None), crate::download::text)
+}
+
+fn resolve_runtime(get_json: impl Fn(&str) -> Result<Value, String>, get_text: impl Fn(&str) -> Result<String, String>) -> Result<String, String> {
+    let base = "https://api.github.com/repos/ggml-org/llama.cpp/releases";
+    let latest = get_json(&format!("{base}/latest"))?;
+    if let Some(url) = cpu_asset(&latest) { return Ok(url); }
+    // Stable releases now publish a tiny pointer to the nightly containing their binaries.
+    let marker = latest["assets"].as_array().into_iter().flatten()
+        .find(|a| a["name"] == "nightly-tag.txt")
+        .and_then(|a| a["browser_download_url"].as_str());
+    if let Some(marker) = marker {
+        if let Ok(text) = get_text(marker) {
+            if let Some(tag) = nightly_tag(&text) {
+                if let Ok(release) = get_json(&format!("{base}/tags/{tag}")) {
+                    if let Some(url) = cpu_asset(&release) { return Ok(url); }
+                }
+            }
+        }
+    }
+    // Bounded fallback for an incomplete stable release or a missing marker.
+    let releases = get_json(&format!("{base}?per_page=10"))?;
+    releases.as_array().into_iter().flatten().filter(|r| r["draft"] != true)
+        .find_map(cpu_asset).ok_or_else(|| "No Windows x64 CPU runtime was found in recent llama.cpp releases. Try again later.".into())
+}
+
+fn install_filter(app: &tauri::AppHandle) -> Result<(), String> {
     let dir = gate_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     if server_exe().is_none() {
-        let rel = crate::download::json("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest", None)?;
-        let url = rel["assets"].as_array().into_iter().flatten()
-            .find(|a| a["name"].as_str().is_some_and(|n| n.ends_with("bin-win-cpu-x64.zip")))
-            .and_then(|a| a["browser_download_url"].as_str())
-            .ok_or("Could not find a Windows CPU build in the latest llama.cpp release.")?
-            .to_string();
+        let url = runtime_url()?;
         let zip = dir.join("llama.zip");
-        crate::download::fetch(&app, "gate-llama", &url, &zip, None)?;
+        crate::download::stage(app, "gate-install", "downloading", "Downloading CPU runtime (1 of 4)…");
+        crate::download::fetch(app, "gate-llama", &url, &zip, None)?;
         let out = dir.join("llama");
         let _ = std::fs::remove_dir_all(&out);
+        crate::download::stage(app, "gate-install", "extracting", "Extracting CPU runtime…");
         unzip(&zip, &out)?;
         let _ = std::fs::remove_file(&zip);
         if server_exe().is_none() { return Err("The llama.cpp download did not contain llama-server.exe.".into()); }
     }
-    for (id, f) in [("gate-config", CONFIG), ("gate-heads", HEADS), ("gate-model", MODEL)] {
+    for (index, (id, f)) in [("gate-config", CONFIG), ("gate-heads", HEADS), ("gate-model", MODEL)].into_iter().enumerate() {
         let p = dir.join(f);
-        if !p.exists() { crate::download::fetch(&app, id, &format!("{HF}{f}"), &p, None)?; }
+        if !p.exists() {
+            crate::download::stage(app, "gate-install", "downloading", &format!("Downloading privacy filter ({} of 4)…", index + 2));
+            crate::download::fetch(app, id, &format!("{HF}{f}"), &p, None)?;
+        }
     }
     Ok(())
 }
@@ -495,6 +545,42 @@ pub fn gate_test(text: String) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selects_only_windows_x64_cpu_runtime_assets() {
+        let release = json!({"assets":[
+            {"name":"llama-b11669-bin-win-cpu-arm64.zip","browser_download_url":"wrong-arm"},
+            {"name":"llama-b11669-bin-win-cuda-13.4-x64.zip","browser_download_url":"wrong-gpu"},
+            {"name":"llama-b11669-bin-win-cpu-x64.zip","browser_download_url":"correct"}
+        ]});
+        assert_eq!(cpu_asset(&release), Some("correct".into()));
+        assert_eq!(cpu_asset(&json!({"assets":[{"name":"nightly-tag.txt"}]})), None);
+        assert_eq!(cpu_asset(&json!({})), None);
+        assert_eq!(nightly_tag("b11669\n"), Some("b11669"));
+        for invalid in ["", "b", "../b11669", "b123?x=1", "https://example.com", "b12\n34"] {
+            assert_eq!(nightly_tag(invalid), None);
+        }
+    }
+
+    #[test]
+    fn resolves_stable_release_marker_and_bounded_fallback() {
+        let stable = json!({"tag_name":"v0.7.0", "assets":[{"name":"nightly-tag.txt", "browser_download_url":"https://github.com/ggml-org/llama.cpp/releases/download/v0.7.0/nightly-tag.txt"}]});
+        let nightly = json!({"tag_name":"b11669", "assets":[{"name":"llama-b11669-bin-win-cpu-x64.zip", "browser_download_url":"cpu-runtime"}]});
+        let result = resolve_runtime(|url| {
+            if url.ends_with("/latest") { Ok(stable.clone()) }
+            else if url.ends_with("/tags/b11669") { Ok(nightly.clone()) }
+            else { panic!("Unexpected metadata request: {url}") }
+        }, |_| Ok("b11669\n".into()));
+        assert_eq!(result.unwrap(), "cpu-runtime");
+        let result = resolve_runtime(|url| {
+            if url.ends_with("/latest") { Ok(stable.clone()) }
+            else if url.ends_with("?per_page=10") { Ok(json!([{"draft":true,"assets":nightly["assets"]},nightly])) }
+            else { panic!("Unexpected metadata request: {url}") }
+        }, |_| Ok("../../invalid".into()));
+        assert_eq!(result.unwrap(), "cpu-runtime");
+        assert!(resolve_runtime(|_| Ok(json!([])), |_| Err("missing".into())).is_err());
+        assert_eq!(resolve_runtime(|_| Err("offline".into()), |_| unreachable!()), Err("offline".into()));
+    }
 
     fn labels() -> Vec<(Kind, String)> {
         ["O", "B-private_person", "I-private_person", "E-private_person", "S-private_person", "S-private_email"].iter().map(|l| parse_label(l)).collect()

@@ -63,11 +63,11 @@ A later folder overrides an earlier plugin with the same `id`. The app ships wit
 
 A `tooltip` can include `${path}` values from the source. To add a source, write a read-only Tauri command, register it in `lib.rs`, then add it to the allowlist. Never allowlist a command that changes state.
 
-Run configs that sit in `<strataRoot>/profiles` but that no plugin names are still listed, under the "Profiles" group. Settings → Tuning → *Duplicate* creates such profiles.
+Run configs in `<strataRoot>/profiles` and root-level model configs remain discoverable even when no plugin names them. Settings → Tuning → *Duplicate* creates a profile. The chat picker groups configs by their `model_name` (optional `model_display_name` supplies the label) and opens context profiles beside each model. Settings → Model controls which profiles appear; hiding never deletes the config or removes it from tuning.
 
 ## Mode switching and effort
 
-- `modes_list` returns the modes plus the effective reasoning effort.
+- `modes_list` returns all modes plus the effective reasoning effort. Each mode has `modelId`, `modelLabel`, `profileLabel`, `local` and `pickerVisible`; apply visibility only to the chat picker.
 - `mode_switch {id, reload}` points `modelConfig` at the mode's config. With `reload`, it restarts Strata, and only one model instance ever runs.
 - `effort_set {effort}` changes the running server's shared default (`none|low|medium|high`) with no reload. `null` reverts to the run config's value.
 
@@ -87,13 +87,13 @@ Run configs that sit in `<strataRoot>/profiles` but that no plugin names are sti
 
 - **Import:** Settings → Plugins → *Import .zip* or *Import folder*. The zip or folder can hold one plugin (its `plugin.json` at the top or in one subfolder) or a pack: several subfolders, each with a `plugin.json`. Importing replaces an installed copy with the same `id`.
 - **Export:** each plugin's *Export* button writes a zip that Import accepts.
-- **Get plugins:** Settings → Plugins → *Get plugins* lists every folder with a `plugin.json` in the GitHub repositories you add (`owner/repo`, a repository link, or a `/tree/<branch>/<folder>` link). The official repository is listed by default. *Install* downloads the repository from GitHub and imports that folder like *Import folder…*; when the repository has a higher `version` than the installed copy, the button reads *Update*. Plugins that start programs arrive turned off. The list of repositories is saved as `pluginSources` in `settings.json`. Nothing is fetched while offline mode is on.
+- **Get plugins:** Settings → Plugins → *Get plugins* lists every folder with a `plugin.json` in the GitHub repositories you add (`owner/repo`, a repository link, or a `/tree/<branch>/<folder>` link). The official repository is listed by default. *Install* downloads the repository from GitHub and imports that folder like *Import folder…*; when the repository has a higher `version` than the installed copy, the button reads *Update*. Progress shows connection, ZIP bytes and extraction beside the plugin being installed. Plugins that start programs arrive turned off. The list of repositories is saved as `pluginSources` in `settings.json`. Nothing is fetched while offline mode is on.
 - **Publish:** put the plugin in a public GitHub repository, one folder per plugin with the folder name equal to the `id`, and share the link. For an official plugin, open a pull request on [LocalWORK-plugins](https://github.com/killianmiles27/LocalWORK-plugins). `scripts/package-plugins.ps1` (reading a checkout of that repository) writes `dist-plugins/<id>_<version>.zip` for each plugin and `LocalWORK-recommended-plugins_<app version>.zip` with all of them, for the release.
 
 ## Checklist for a new plugin
 
 1. Create the folder and `plugin.json`, then validate it: `python -c "import json;json.load(open('plugin.json'))"`.
 2. Drop the folder into the user plugins folder and open Settings → Plugins. Confirm it is listed, not marked *Not loaded*, and that its contribution tags appear.
-3. For modes: open the mode menu and check that the label, group and context appear and that `found` is true. A missing config file shows as unavailable.
+3. For modes: open the model menu and check that model/profile labels and context appear and that `found` is true. A missing config file shows as unavailable. Confirm the profile is checked in Settings → Model if it is hidden from the picker.
 4. For skills, prompt text or MCP: start a **new** chat.
 5. Keep machine paths, logs and benchmark output in the plugin, never in `app/`.

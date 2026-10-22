@@ -4,6 +4,8 @@ LocalWORK starts in **Local only**. Cloud routing is an optional core feature be
 
 In **Settings → Cloud**, add an OpenAI-compatible provider with its API base URL and optional key. Fetch its models or enter model IDs yourself. Keys and ChatGPT tokens are stored in Windows Credential Manager; provider addresses and model IDs are stored in settings. Network discovery and sign-in require internet access. Model availability and provider charges depend on the account.
 
+Open **ChatGPT models** or a provider's model dropdown and check the models you want in the chat picker. You can search the fetched catalog, show all or hide all; hidden models are not deleted from the catalog. The picker lists selected cloud models directly under **Cloud models**. In Local only they remain visible but disabled; **Enable cloud choices** changes to Manual without sending a message. The **Automatic can escalate to** dropdown appears only in Automatic mode. Hiding that selected target clears it until you choose another.
+
 ChatGPT subscription sign-in uses an unofficial Codex OAuth integration, similar to pi and OpenCode. A browser opens for sign-in; LocalWORK listens for the callback on loopback port 1455. This is not an official LocalWORK partnership or a guarantee that a subscription supports this client. Refresh models to query the backend; cached results may be stale and no guessed model IDs are supplied. Live account sign-in and inference still require verification. OpenAI also documents a registered [Sign in with ChatGPT integration](https://developers.openai.com/siwc/quickstart); the current integration has not migrated to it.
 
 ## Choose where a chat runs
@@ -21,6 +23,8 @@ The composer shows the selected location and receives routing updates. Open the 
 ## Privacy filter
 
 Click **Install privacy filter** to download [PII-Tracer](https://huggingface.co/perplexity-ai/PII-Tracer-GGUF), its heads/configuration and a Windows CPU build of llama.cpp. The download is about 1.25 GB. This starts a separate CPU helper when scanning is needed; it does not load a second copy of the main GPU model. The helper stops with LocalWORK. Nothing downloads merely from opening Settings.
+
+The installer follows upstream release markers when a stable llama.cpp release points at nightly binaries. Progress appears beside Install immediately: finding the runtime, connecting, downloaded bytes/percentage when the size is known, and extraction. Unknown totals use a moving bar instead of an invented percentage. Model-library, plugin-store and app-update downloads use the same progress display.
 
 Enable **Check cloud requests for personal data**. Supported text is scanned locally; detected spans become stable placeholders and replies are restored locally. High sensitivity locks the chat local. Unsupported attachments, unavailable detection or scan errors stay local rather than bypassing the filter. Extracted attachment text is checked when it enters conversation/tool history; this is not a whole-disk or pre-read document scanner. The test box runs locally.
 

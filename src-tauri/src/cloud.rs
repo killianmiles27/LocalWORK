@@ -317,6 +317,19 @@ pub fn chatgpt_logout() {
 }
 
 /// Ask the Codex backend for the models this subscription can use; remember them, or fall back to the saved list.
+fn catalog_ids(v: &Value, codex: bool) -> Option<Vec<String>> {
+    let list = v["models"].as_array().or(v["data"].as_array())?;
+    let mut ids = Vec::new();
+    for model in list {
+        if codex && model["visibility"] == "hidden" { continue; }
+        let id = model["slug"].as_str().or(model["id"].as_str()).or(model.as_str()).map(str::trim);
+        if let Some(id) = id.filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control)) {
+            if !ids.iter().any(|existing| existing == id) { ids.push(id.to_string()); }
+        }
+    }
+    Some(ids)
+}
+
 #[tauri::command(async)]
 pub fn chatgpt_models() -> Vec<String> {
     let fetched = (|| {
@@ -334,13 +347,7 @@ pub fn chatgpt_models() -> Vec<String> {
             return None;
         }
         let v: Value = r.json().ok()?;
-        let list = v["models"].as_array().or(v["data"].as_array())?;
-        let ids: Vec<String> = list
-            .iter()
-            .filter(|m| m["visibility"].as_str().map_or(true, |s| s != "hidden"))
-            .filter_map(|m| m["slug"].as_str().or(m["id"].as_str()).map(str::to_string))
-            .collect();
-        (!ids.is_empty()).then_some(ids)
+        catalog_ids(&v, true)
     })();
     if let Some(ids) = fetched {
         let _ = setup::write_setting_value("chatgptModels", json!(ids));
@@ -364,19 +371,35 @@ pub fn cloud_get() -> Value {
         .map(|mut p| {
             let id = p["id"].as_str().unwrap_or_default().to_string();
             p["hasKey"] = json!(creds::get(&key_name(&id)).is_some());
+            p["visibleModels"] = s["cloudVisibleModels"][&id].clone();
             p
         })
         .collect();
     json!({
         "routing": s["routing"].as_str().unwrap_or("local"),
         "cloudDefault": s["cloudDefault"],
+        "cloudVisibleModels": s["cloudVisibleModels"].as_object().cloned().unwrap_or_default(),
         "privacyGate": s["privacyGate"].as_str().unwrap_or("off"),
         "providers": list,
         "chatgpt": {
             "signedIn": chatgpt.is_some(),
             "email": chatgpt.as_ref().map(|c| c["email"].clone()),
             "models": s["chatgptModels"].as_array().cloned().unwrap_or_default(),
+            "visibleModels": s["cloudVisibleModels"]["chatgpt"],
         },
+    })
+}
+
+fn valid_visible_models(value: &Value, s: &Value) -> bool {
+    let Some(map) = value.as_object() else { return false };
+    map.iter().all(|(provider_id, selected)| {
+        let catalog = if provider_id == "chatgpt" { Some(&s["chatgptModels"]) } else {
+            s["cloudProviders"].as_array().and_then(|p| p.iter().find(|p| p["id"] == provider_id.as_str())).map(|p| &p["models"])
+        };
+        let Some(catalog) = catalog else { return false };
+        selected.is_null() || selected.as_array().is_some_and(|ids| {
+            ids.len() <= 1000 && ids.iter().all(|id| id.is_string() && catalog.as_array().is_some_and(|models| models.contains(id)))
+        })
     })
 }
 
@@ -391,6 +414,7 @@ pub fn cloud_set(key: String, value: Value) -> Result<(), String> {
         "privacyGate" => matches!(value.as_str(), Some("on" | "off")),
         "cloudDefault" => value.is_null() || value.as_str().is_some_and(|t| t.starts_with("cloud:")),
         "chatgptModels" => value.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
+        "cloudVisibleModels" => valid_visible_models(&value, &settings()),
         _ => false,
     };
     if !ok {
@@ -435,6 +459,10 @@ pub fn cloud_provider_remove(id: String) -> Result<(), String> {
     if s["cloudDefault"].as_str().is_some_and(|t| t.starts_with(&format!("cloud:{id}:"))) {
         setup::write_setting_value("cloudDefault", Value::Null)?;
     }
+    if let Some(mut visible) = s["cloudVisibleModels"].as_object().cloned() {
+        visible.remove(&id);
+        setup::write_setting_value("cloudVisibleModels", json!(visible))?;
+    }
     setup::write_setting_value("cloudProviders", json!(list))
 }
 
@@ -457,10 +485,7 @@ pub fn cloud_models(id: String) -> Result<Vec<String>, String> {
         return Err(if code == 401 || code == 403 { "The key was refused.".into() } else { format!("The server answered HTTP {code}.") });
     }
     let v: Value = r.json().map_err(|e| format!("Unexpected reply: {e}"))?;
-    let mut ids: Vec<String> = v["data"].as_array().or(v["models"].as_array()).ok_or("No model list in the reply.")?
-        .iter()
-        .filter_map(|m| m["id"].as_str().or(m.as_str()).map(str::to_string))
-        .collect();
+    let mut ids = catalog_ids(&v, false).ok_or("No model list in the reply.")?;
     ids.sort();
     let mut list = providers();
     for q in list.iter_mut().filter(|q| q["id"] == id.as_str()) {
@@ -473,6 +498,28 @@ pub fn cloud_models(id: String) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_codex_and_compatible_catalog_shapes() {
+        let codex = json!({"models": [
+            {"slug": "gpt-example", "visibility": "list", "supported_in_api": false},
+            {"slug": "hidden-model", "visibility": "hidden"},
+            {"slug": "gpt-example"}, {"id": "id-fallback"}, {"slug": "  "}
+        ]});
+        assert_eq!(catalog_ids(&codex, true).unwrap(), ["gpt-example", "id-fallback"]);
+        assert_eq!(catalog_ids(&json!({"data": [{"id":"model-a"}, "model-b", {"id":"model-a"}]}), false).unwrap(), ["model-a", "model-b"]);
+        assert_eq!(catalog_ids(&json!({"models": []}), true), Some(vec![]));
+        assert_eq!(catalog_ids(&json!({"error":"denied"}), true), None);
+    }
+    #[test]
+    fn visible_selection_requires_known_provider_and_catalog_ids() {
+        let s = json!({"chatgptModels":["one","two"], "cloudProviders":[{"id":"provider","models":["other"]}]});
+        assert!(valid_visible_models(&json!({"chatgpt":["two"],"provider":[]}), &s));
+        assert!(valid_visible_models(&json!({"chatgpt":null}), &s));
+        assert!(!valid_visible_models(&json!({"chatgpt":["invented"]}), &s));
+        assert!(!valid_visible_models(&json!({"unknown":[]}), &s));
+        assert!(!valid_visible_models(&json!({"provider":[2]}), &s));
+        assert!(!valid_visible_models(&json!([]), &s));
+    }
     #[test]
     fn decodes_query() {
         assert_eq!(decode("a%20b+c%2F"), "a b c/");
