@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Md from "./Md";
 import PlanDock, { latestPlan } from "./PlanDock";
-import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Copy, Download, FolderOpen, Mic, Pencil, RotateCcw, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Copy, Download, FolderOpen, GripVertical, Mic, Pencil, RotateCcw, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import ChatList, { type Conv } from "./ChatList";
 import Wizard from "./Wizard";
@@ -179,7 +179,7 @@ export default function App() {
               // Start the resumed answer in a fresh live buffer while keeping this turn active.
               setLive({ text: "", thinking: "", busy: true });
               reload(conv);
-            } else if (text(ev.message).startsWith("Run incomplete:")) reload(conv);
+            } else if (/^(Run incomplete|Run stalled):/.test(text(ev.message))) reload(conv);
             break;
           case "title": refreshConvs(); break;
         }
@@ -585,17 +585,8 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                 {cur && <PlanDock plan={currentPlan} busy={live.busy && currentPlan?.currentTurn !== false} />}
                 {cur && (() => { const q = openQuestion(msgs); return q && <QuestionCard q={q} canSend={modelReady} busy={live.busy} onAnswer={(t) => send(t)} />; })()}
                 {queue.length > 0 && (
-                  <div className="mb-2 space-y-1" aria-label="Queued messages">
-                    {queue.map((q, i) => (
-                      <div key={i} className="flex items-center gap-2 rounded-lg border border-line bg-card px-3 py-1.5 text-sm">
-                        <span className="shrink-0 text-xs text-muted">Queued</span>
-                        <span className="min-w-0 flex-1 truncate">{q.text || q.files.map(baseName).join(", ")}</span>
-                        <button title="Edit" aria-label="Edit queued message" className="text-xs text-muted hover:text-ink"
-                          onClick={() => { setQueue(x => x.filter((_, j) => j !== i)); setInput(q.text); setFiles(f => [...f, ...q.files]); taRef.current?.focus(); }}>Edit</button>
-                        <button title="Remove" aria-label="Remove queued message" className="text-muted hover:text-red-600" onClick={() => setQueue(x => x.filter((_, j) => j !== i))}><X size={13} /></button>
-                      </div>
-                    ))}
-                  </div>
+                  <QueueList queue={queue} setQueue={setQueue}
+                    onEdit={q => { setQueue(x => x.filter(y => y !== q)); setInput(q.text); setFiles(f => [...f, ...q.files]); taRef.current?.focus(); }} />
                 )}
                 {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
                 <div className="@container rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
@@ -692,6 +683,74 @@ const isPlainTool = (m: Msg) => {
   return declined || b.status === "error" || !richFor(nm, b.request?.args, undefined);
 };
 type Block = { kind: "row"; m: Msg } | { kind: "tools"; items: Msg[] };
+type QueuedMsg = { text: string; files: string[] };
+// Pure move: returns a new array with the item at `from` placed at index `to` (same array if nothing changes).
+function moveItem<T>(arr: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= arr.length || to >= arr.length) return arr;
+  const next = arr.slice();
+  next.splice(to, 0, next.splice(from, 1)[0]);
+  return next;
+}
+// Queued messages above the composer. Reordering uses pointer events on the grip: Tauri's native file-drop
+// handler (needed for attachments) swallows HTML5 drag events inside the webview on Windows.
+// Items are tracked by object identity, so a message dispatched mid-drag can't be duplicated, lost or mis-moved.
+function QueueList({ queue, setQueue, onEdit }: { queue: QueuedMsg[]; setQueue: React.Dispatch<React.SetStateAction<QueuedMsg[]>>; onEdit: (q: QueuedMsg) => void }) {
+  const [drag, setDrag] = useState<QueuedMsg | null>(null);
+  const [over, setOver] = useState<{ item: QueuedMsg; after: boolean } | null>(null);
+  const rows = useRef(new Map<QueuedMsg, HTMLDivElement>());
+  const move = (item: QueuedMsg, delta: number) => setQueue(x => { const i = x.indexOf(item); return i < 0 ? x : moveItem(x, i, i + delta); });
+  const end = () => { setDrag(null); setOver(null); };
+  const target = (y: number) => {
+    for (const q of queue) {
+      const r = rows.current.get(q)?.getBoundingClientRect();
+      if (r && y < r.bottom) return { item: q, after: y > r.top + r.height / 2 };
+    }
+    return queue.length ? { item: queue[queue.length - 1], after: true } : null;
+  };
+  const drop = () => {
+    if (drag && over) {
+      const d = drag, t = over;
+      setQueue(x => {
+        const from = x.indexOf(d), tgt = x.indexOf(t.item);
+        if (from < 0 || tgt < 0) return x;
+        let to = tgt + (t.after ? 1 : 0);
+        if (from < to) to -= 1;
+        return moveItem(x, from, to);
+      });
+    }
+    end();
+  };
+  const canDrag = queue.length > 1;
+  return (
+    <div className="mb-2 space-y-1" aria-label="Queued messages">
+      {queue.map((q, i) => {
+        const line = drag && over?.item === q && drag !== q ? (over.after ? "shadow-[0_2px_0_0_var(--color-accent)]" : "shadow-[0_-2px_0_0_var(--color-accent)]") : "";
+        return (
+          <div key={i} ref={el => { if (el) rows.current.set(q, el); else rows.current.delete(q); }}
+            className={`flex items-center gap-2 rounded-lg border border-line bg-card px-3 py-1.5 text-sm select-none ${drag === q ? "opacity-50" : ""} ${line}`}>
+            {canDrag && (
+              <span role="button" tabIndex={0} title="Drag to reorder" aria-label="Drag to reorder (Alt+Up or Alt+Down to move)"
+                className={`shrink-0 touch-none text-muted hover:text-ink ${drag ? "cursor-grabbing" : "cursor-grab"}`}
+                onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); setDrag(q); setOver(null); }}
+                onPointerMove={e => { if (drag !== q) return; const t = target(e.clientY); if (t && (over?.item !== t.item || over.after !== t.after)) setOver(t); }}
+                onPointerUp={() => { if (drag === q) drop(); }}
+                onPointerCancel={end}
+                onKeyDown={e => {
+                  if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+                  e.preventDefault(); move(q, e.key === "ArrowUp" ? -1 : 1);
+                }}><GripVertical size={13} /></span>
+            )}
+            <span className="shrink-0 text-xs text-muted">Queued</span>
+            <span className="min-w-0 flex-1 truncate">{q.text || q.files.map(baseName).join(", ")}</span>
+            <button title="Edit" aria-label="Edit queued message" className="text-xs text-muted hover:text-ink" onClick={() => onEdit(q)}>Edit</button>
+            <button title="Remove" aria-label="Remove queued message" className="text-muted hover:text-red-600" onClick={() => setQueue(x => x.filter(y => y !== q))}><X size={13} /></button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function group(msgs: Msg[]): Block[] {
   const out: Block[] = [];
   for (const m of msgs) {
@@ -902,7 +961,7 @@ function ApprovalCard({ a, answer }: { a: Approval; answer: (a: Approval, allow:
       <pre className="text-xs bg-card border border-line rounded-lg p-2 mt-2 max-h-40 overflow-auto whitespace-pre-wrap">{text(a.args)}</pre>
       <div className="flex flex-wrap gap-2 mt-3 text-sm">
         <button onClick={() => answer(a, true, false)} className="rounded-lg bg-accent hover:bg-accent-dark text-accent-fg px-3 py-1.5">Allow once</button>
-        {a.can_remember && <button onClick={() => answer(a, true, true)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-accent">Allow for this chat</button>}
+        {a.can_remember && <button onClick={() => answer(a, true, true)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-accent">{a.class === "exec" ? "Allow this command for this chat" : "Allow for this chat"}</button>}
         <button onClick={() => answer(a, false, false)} className="rounded-lg border border-line bg-card px-3 py-1.5 hover:border-red-500">Deny</button>
       </div>
     </div>

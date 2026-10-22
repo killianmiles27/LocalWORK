@@ -84,11 +84,11 @@ pub fn hardware_check() -> Value {
 }
 
 /// Look for an OpenAI-compatible server the user already runs: the given port, or the usual ones
-/// (Strata 8080, LM Studio 1234, Ollama 11434). Only 127.0.0.1 is ever contacted.
+/// (llama.cpp/Strata 8080, LM Studio 1234, Ollama 11434, vLLM 8000, SGLang 30000). Only 127.0.0.1 is ever contacted.
 #[tauri::command(async)]
 pub fn probe_model_server(port: Option<u16>, key: Option<String>) -> Value {
     let key = key.filter(|k| !k.trim().is_empty());
-    let ports: Vec<u16> = port.map(|p| vec![p]).unwrap_or_else(|| vec![8080, 1234, 11434]);
+    let ports: Vec<u16> = port.map(|p| vec![p]).unwrap_or_else(|| vec![8080, 1234, 11434, 8000, 30000]);
     let mut last = String::new();
     for p in ports {
         match strata::probe(p, key.as_deref()) {
@@ -96,7 +96,7 @@ pub fn probe_model_server(port: Option<u16>, key: Option<String>) -> Value {
             Err(e) => last = e,
         }
     }
-    json!({"ok": false, "error": if port.is_some() { last } else { "No model server found on ports 8080, 1234 or 11434.".into() }})
+    json!({"ok": false, "error": if port.is_some() { last } else { "No model server found on ports 8080, 1234, 11434, 8000 or 30000.".into() }})
 }
 
 /// Use a server the user runs. Checked before it is saved; the app will not start or stop it.

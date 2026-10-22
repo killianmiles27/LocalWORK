@@ -63,6 +63,11 @@ Third-party libraries used by the UI:
 - sysinfo (MIT) - CPU and memory readings in Settings
 - ddgs (MIT), httpx (BSD-3), beautifulsoup4 (MIT), markdownify (MIT), pypdf (BSD-3) - web search and page reading tools, installed into workbench-mcp/libs
 
+Eigent (eigent-ai/eigent, Apache-2.0, copyright Eigent.ai): some safety and
+reliability ideas were adapted from its design, re-implemented independently in
+policy.rs, agent.rs, workbench-mcp/server.py and App.tsx. No Eigent code was copied.
+Source: https://github.com/eigent-ai/eigent
+
 Hermes Agent (NousResearch/hermes-agent, MIT, copyright 2025 Nous Research): the
 citations, blocked-pages, arxiv, action-items, debugging and knowledge-base skills
 are shortened adaptations of its grounded-citations, blocked-page-recovery, arxiv,

@@ -10,7 +10,7 @@ Include the affected commit/version, Windows version, minimal reproduction, expe
 
 ## Boundaries
 
-- Automatic mode is enabled by default. Command and action classification reduces prompts; it does not prove a script is safe. Turning it off also does not create OS isolation.
+- Automatic mode is enabled by default. Command and action classification reduces prompts; it does not prove a script is safe. Turning it off also does not create OS isolation. Automatic mode still asks before commands that publish, push or upload, connect to another computer, run as administrator, or change files and settings that run code automatically; the classifier looks inside common `cmd`, PowerShell and `sh` wrappers. A command it cannot recognise may still run without asking.
 - OfficeCLI paths are checked by the host. Generic scripts, model tool implementations, file links, and subprocesses remain capable of using the user's other permissions. Revision history does not cover every shell operation.
 - Web fetching validates public destinations at every redirect, pins the checked IP for the connection, preserves TLS hostname verification, bypasses environment proxies, and limits downloads. This is not a firewall for other tools.
 - Browser navigation checks and hostname filters do **not** fully constrain page subrequests or DNS rebinding. A hostile page may reach services accessible from the PC. Do not treat the browser as private-network isolation.

@@ -50,9 +50,17 @@ For planned work, the assistant can mark an established procedure as execution t
 
 Chat downloads include per-request wall time, first streamed event wait, input/output/cache token counts and provider timing fields when supplied. A first event may contain an already completed tool call, so that wait is not labelled prompt-processing or decoding time. Tool request-to-result durations include approvals and host overhead. Missing measurements remain unknown. These diagnostics are stored locally and are not injected into the model's context.
 
+## Queued messages
+
+Messages sent while the model is busy wait above the composer. Edit or remove them there, and drag the grip to change their order (or focus the grip and press Alt+Up or Alt+Down).
+
 ## Automatic mode and approvals
 
-Automatic mode starts enabled and is saved across restarts. Routine edits, tool use, and ordinary workspace commands proceed without repeated prompts. Recognized destructive commands, credential entry, external submissions, and other consequential actions can still ask for approval.
+Automatic mode starts enabled and is saved across restarts. Routine edits, tool use, and ordinary workspace commands proceed without repeated prompts. Recognized destructive commands, credential entry, external submissions, and other consequential actions can still ask for approval. Automatic mode always asks before a command publishes or pushes something online (`git push`, `npm`/`cargo`/`twine publish`, `gh` writes), sends data to another computer (`ssh`, `scp`, `rsync`, uploads with `curl` or `Invoke-WebRequest`), runs as administrator, or changes something that runs code automatically (scheduled tasks, services, Git hooks, the Startup folder, PowerShell profiles). Commands wrapped in `cmd /c`, `powershell -Command` or `sh -c` are checked inside the wrapper, and encoded PowerShell commands always ask.
+
+*Allow this command for this chat* allows only that exact command text again in the same chat, not every command. Other tools keep *Allow for this chat*.
+
+If a run makes no progress for 10 minutes, the chat shows a notice so you can press Stop. The run is not ended for you. If the agent stops unexpectedly while a tool was writing a file, the chat names that file so you can check it.
 
 Turn Automatic mode off when you want more control. The app can still allow a limited set of recognized read operations. These checks are conservative command classification, not a permission boundary enforced by Windows. Scripts and approved tools run as your user.
 

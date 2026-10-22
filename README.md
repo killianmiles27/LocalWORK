@@ -169,6 +169,10 @@ npm run tauri -- dev
 
 That needs the pinned runtime tools first. [docs/SETUP.md](docs/SETUP.md#build-from-source) has the full steps. Before opening a pull request, run `npm run build`, `npm run test:workspace` and `cargo test --locked --lib --manifest-path src-tauri/Cargo.toml`.
 
+## Credits
+
+Some safety and reliability ideas (always-ask command categories, exact-command approvals, the stall notice, structured tool refusals, preflight checks and queue reordering) were adapted from [Eigent](https://github.com/eigent-ai/eigent) (Apache-2.0). No Eigent code was copied. See [NOTICE.md](NOTICE.md) for the other projects LocalWORK builds on.
+
 ## License
 
 LocalWORK is [Apache-2.0](LICENSE). Dependencies, bundled tools, fonts and model weights keep their own licenses. See [NOTICE.md](NOTICE.md) and [third-party](third-party/). The app doesn't give you any rights to third-party models or trademarks.

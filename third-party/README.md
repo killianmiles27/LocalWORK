@@ -20,4 +20,6 @@ The inventory intentionally includes build-time and platform-specific metadata a
 
 For installer distribution, review the exact files actually shipped. Some components have MPL/LGPL terms or corresponding-source requirements; preserving a license file alone may not fulfill those obligations. Keep source locations and build provenance available. Review new dependencies and updated binaries again before release.
 
+Eigent (eigent-ai/eigent, Apache-2.0) is credited in NOTICE.md as a design inspiration only. No Eigent code or files are included, so no license text is retained here.
+
 Strata's inference model weights are external and have their own licenses. The voice model is a separate quantization of OpenAI Whisper; its original MIT model-weight license is included in the cache and inventory.

@@ -138,7 +138,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
             <h2 className="text-lg font-medium mb-1">Do you already have an AI model?</h2>
             <p className="text-sm text-muted mb-3">LocalWORK needs a model to talk to. Pick what fits you.</p>
             <Choice on={path === "strata"} onClick={() => setPath("strata")} title="Yes, Strata or PolyStrata is installed" text="LocalWORK starts and stops it for you. Recommended." />
-            <Choice on={path === "server"} onClick={() => setPath("server")} title="Yes, I run my own model server" text="Strata, LM Studio, Ollama or any OpenAI-compatible server on this PC. You start it yourself." />
+            <Choice on={path === "server"} onClick={() => setPath("server")} title="Yes, I run my own model server" text="Strata, LM Studio, Ollama, llama.cpp, vLLM or any OpenAI-compatible server on this PC. You start it yourself." />
             <Choice on={path === "setup"} onClick={() => setPath("setup")} title="No, help me set one up" text="Step-by-step Strata install. It downloads the model once (about 70 GB)." />
           </>
         )}
@@ -158,7 +158,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
         {step === 2 && path === "server" && (
           <>
             <h2 className="text-lg font-medium mb-1">Connect your model server</h2>
-            <p className="text-sm text-muted mb-3">Start your server first. Leave the port empty to look on the usual ones (Strata 8080, LM Studio 1234, Ollama 11434). Only this computer is contacted.</p>
+            <p className="text-sm text-muted mb-3">Start your server first. Leave the port empty to look on the usual ones (Strata or llama.cpp 8080, LM Studio 1234, Ollama 11434, vLLM 8000, SGLang 30000). Only this computer is contacted.</p>
             <div className="grid grid-cols-[7rem_1fr] items-center gap-2 text-sm">
               <span className="text-muted">Port</span><input className={inp} value={port} onChange={e => setPort(e.target.value.replace(/\D/g, ""))} placeholder="auto" />
               <span className="text-muted">API key</span><input className={inp} value={key} onChange={e => setKey(e.target.value)} placeholder="only if your server needs one" type="password" />

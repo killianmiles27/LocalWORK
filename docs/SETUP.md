@@ -44,7 +44,7 @@ For a portable folder or installer, preserve the runtime resources; copying only
 The first-run wizard asks whether you already have a model:
 
 - **Yes, Strata or PolyStrata is installed:** choose its folder (the one with `START-HERE.bat`). With PolyStrata, every `strata-<model>.json` in that folder shows up in the model menu under *Models*, and the context window is read from the running server, so compaction follows whichever model is loaded. The model you set up there is picked automatically. LocalWORK starts and stops it for you.
-- **Yes, I run my own model server:** Strata, LM Studio, Ollama or any OpenAI-compatible server on this PC. Start it yourself, then press *Test and connect*. With the port left empty, LocalWORK tries the usual ones (8080, 1234, 11434). Set the context size your server uses.
+- **Yes, I run my own model server:** Strata, LM Studio, Ollama or any OpenAI-compatible server on this PC. Start it yourself, then press *Test and connect*. With the port left empty, LocalWORK tries the usual ones (8080 for Strata or llama.cpp, 1234 for LM Studio, 11434 for Ollama, 8000 for vLLM, 30000 for SGLang). Set the context size your server uses.
 - **No, help me set one up:** step-by-step Strata install with a one-line command chosen for your graphics card. It downloads the model once. You can also copy instructions for another AI assistant to do the install.
 
 Then choose where projects live and whether web tools are on. The model indicator turns ready once the model has loaded, which can take a while the first time.

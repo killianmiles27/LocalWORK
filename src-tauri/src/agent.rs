@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub type Db = Arc<Mutex<Connection>>;
@@ -39,6 +40,52 @@ pub struct Agent {
     stopping: AtomicBool,
     /// Closed on purpose to be restarted (edit and regenerate); its exit is not reported to the UI.
     retired: AtomicBool,
+    /// When the agent last said anything, or the user last answered an approval. Read by the stall watchdog.
+    last_event: Mutex<Instant>,
+    stall_noticed: AtomicBool,
+    exited: AtomicBool,
+}
+
+/// A user turn with no agent event for this long gets a one-time notice. Local prefill of a long context
+/// and slow builds can be quiet for minutes, so this only informs; it never stops the run.
+const STALL_AFTER: Duration = Duration::from_secs(10 * 60);
+const STALL_NOTICE: &str = "Run stalled: no progress for 10 minutes. The model or a tool may be stuck; press Stop to end the run if it should not take this long.";
+
+impl Agent {
+    /// True once per quiet stretch of a running user turn that is not waiting on the user.
+    fn stalled(&self, now: Instant) -> bool {
+        let quiet = now.saturating_duration_since(*self.last_event.lock().unwrap()) >= STALL_AFTER;
+        let g = self.inner.lock().unwrap();
+        quiet && g.processing && g.user_turn && g.pending.is_empty() && !self.stopping.load(Ordering::SeqCst)
+            && !self.stall_noticed.swap(true, Ordering::SeqCst)
+    }
+}
+
+fn watchdog(agent: std::sync::Weak<Agent>, app: AppHandle, db: Db) {
+    loop {
+        std::thread::sleep(Duration::from_secs(15));
+        let Some(agent) = agent.upgrade() else { return };
+        if agent.exited.load(Ordering::SeqCst) { return; }
+        if agent.stalled(Instant::now()) {
+            store::add_msg(&db.lock().unwrap(), &agent.conv, "notice", &json!({"text": STALL_NOTICE}));
+            let _ = app.emit("agent-event", json!({"conv": agent.conv, "ev": {"type": "info", "message": STALL_NOTICE}}));
+        }
+    }
+}
+
+/// Tools that may leave a file half-written if the agent dies mid-call.
+fn writes_files(name: &str, category: &str, args: &Value) -> bool {
+    match category {
+        "edit" | "exec" => true,
+        "info" => false,
+        _ => name.to_lowercase().contains("officecli")
+            && !matches!(args.get("args").and_then(|a| a.get(0)).and_then(Value::as_str).unwrap_or(""), "view" | "get" | "query" | "validate" | "verify" | "help"),
+    }
+}
+
+fn first_path(args: &Value) -> Option<&str> {
+    ["path", "file", "file_path", "target", "output"].iter().find_map(|k| args.get(*k).and_then(Value::as_str))
+        .or_else(|| args.get("args").and_then(Value::as_array).and_then(|a| a.get(1)).and_then(Value::as_str))
 }
 
 pub type Agents = Arc<Mutex<HashMap<String, Arc<Agent>>>>;
@@ -170,9 +217,10 @@ impl Agent {
                 write_line(&mut self.inner.lock().unwrap(), &json!({"type":"tool_deny", "call_id":call_id, "reason":reason}));
                 return;
             }
+            *self.last_event.lock().unwrap() = Instant::now();
             let mut g = self.inner.lock().unwrap();
             if remember {
-                g.remembered.push(name.to_string());
+                g.remembered.push(policy::remember_key(name, category, &tool["args"]));
             }
             write_line(&mut g, &json!({"type": "tool_approve", "call_id": call_id, "scope": "once"}));
         } else {
@@ -350,11 +398,16 @@ pub fn get_or_start(
         auto_edit: Mutex::new(store::kv_get(&db.lock().unwrap(), "auto_edit").map(|v| v != "0").unwrap_or(true)),
         stopping: AtomicBool::new(false),
         retired: AtomicBool::new(false),
+        last_event: Mutex::new(Instant::now()),
+        stall_noticed: AtomicBool::new(false),
+        exited: AtomicBool::new(false),
     });
     agents.lock().unwrap().insert(conv.to_string(), agent.clone());
 
     let (a2, app2, db2, agents2) = (agent.clone(), app.clone(), db.clone(), agents.clone());
     std::thread::spawn(move || reader(a2, app2, db2, agents2, stdout, pid));
+    let (weak, app3, db3) = (Arc::downgrade(&agent), app.clone(), db.clone());
+    std::thread::spawn(move || watchdog(weak, app3, db3));
     agent.send(json!({"type": "message", "msg_id": "ctx-initial", "content": "/context"}));
     Ok(agent)
 }
@@ -498,11 +551,15 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
+        *agent.last_event.lock().unwrap() = Instant::now();
         // Do not approve buffered tools or forward stale UI events after Stop.
         if agent.stopping.load(Ordering::SeqCst) { continue; }
         let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match ty {
-            "stream_start" => last_run_notice = None,
+            "stream_start" => {
+                last_run_notice = None;
+                agent.stall_noticed.store(false, Ordering::SeqCst);
+            }
             "ready" => {
                 {
                     let c = db.lock().unwrap();
@@ -549,7 +606,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 let args = tool.get("args").cloned().unwrap_or(Value::Null);
                 let call_id = ev.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 tool_started.insert(call_id.clone(), std::time::Instant::now());
-                tool_args.insert(call_id.clone(), json!({"name": name, "args": args}));
+                tool_args.insert(call_id.clone(), json!({"name": name, "category": cat, "args": args}));
                 let auto_edit = *agent.auto_edit.lock().unwrap();
                 let remembered = agent.inner.lock().unwrap().remembered.clone();
                 let offline = crate::setup::is_network_tool(&name) && crate::setup::chat_is_offline(&db.lock().unwrap(), &conv);
@@ -665,7 +722,19 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
         }
     }
     // Process ended (closed by us, crashed, or killed).
+    agent.exited.store(true, Ordering::SeqCst);
     flush_text(&db, &conv, &mut text, &mut thinking);
+    if !agent.stopping.load(Ordering::SeqCst) && !agent.retired.load(Ordering::SeqCst) {
+        // An unexpected exit mid-write can leave a partial file; say which one rather than carrying on silently.
+        for call_id in tool_started.keys() {
+            let Some(ta) = tool_args.get(call_id) else { continue };
+            let (name, cat) = (ta["name"].as_str().unwrap_or(""), ta["category"].as_str().unwrap_or(""));
+            if !writes_files(name, cat, &ta["args"]) { continue; }
+            let what = first_path(&ta["args"]).map(|p| format!(" on {p}")).unwrap_or_default();
+            let text = format!("The agent stopped unexpectedly while {name} was running{what}. Files it was changing may be only partly written; check them before continuing.");
+            store::add_msg(&db.lock().unwrap(), &conv, "notice", &json!({"text": text}));
+        }
+    }
     supervisor::forget(&paths::data_dir(), pid);
     let mut active = agents.lock().unwrap();
     // A stopped process may finish draining after a replacement was started.
@@ -680,6 +749,48 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
 #[cfg(test)]
 mod context_tests {
     use super::*;
+    fn idle_agent(quiet_for: Duration) -> Agent {
+        Agent {
+            conv: "c".into(),
+            workspace: PathBuf::from(r"C:\work"),
+            child: Mutex::new(None),
+            inner: Mutex::new(Inner { processing: true, user_turn: true, ..Default::default() }),
+            auto_edit: Mutex::new(true),
+            stopping: AtomicBool::new(false),
+            retired: AtomicBool::new(false),
+            last_event: Mutex::new(Instant::now() - quiet_for),
+            stall_noticed: AtomicBool::new(false),
+            exited: AtomicBool::new(false),
+        }
+    }
+
+    #[test]
+    fn stall_notice_fires_once_and_not_while_waiting_on_the_user() {
+        let now = Instant::now();
+        assert!(!idle_agent(Duration::from_secs(60)).stalled(now));
+        let a = idle_agent(STALL_AFTER + Duration::from_secs(1));
+        assert!(a.stalled(now));
+        assert!(!a.stalled(now), "only one notice per quiet stretch");
+        let waiting = idle_agent(STALL_AFTER * 2);
+        waiting.inner.lock().unwrap().pending.insert("call".into(), Value::Null);
+        assert!(!waiting.stalled(now));
+        let idle = idle_agent(STALL_AFTER * 2);
+        idle.inner.lock().unwrap().processing = false;
+        assert!(!idle.stalled(now));
+    }
+
+    #[test]
+    fn in_flight_write_detection() {
+        assert!(writes_files("write_file", "edit", &json!({"path": "a.txt"})));
+        assert!(writes_files("ExecCommand", "exec", &json!({"cmd": "x"})));
+        assert!(!writes_files("read_file", "info", &json!({})));
+        assert!(writes_files("workbench__officecli", "mcp", &json!({"args": ["set", "r.docx"]})));
+        assert!(!writes_files("workbench__officecli", "mcp", &json!({"args": ["view", "r.docx"]})));
+        assert!(!writes_files("workbench__web_search", "mcp", &json!({})));
+        assert_eq!(first_path(&json!({"path": "a.txt"})), Some("a.txt"));
+        assert_eq!(first_path(&json!({"args": ["set", "r.docx"]})), Some("r.docx"));
+    }
+
     #[test]
     fn context_uses_total_percentage_only() {
         assert_eq!(context_percent("Context Usage\n  2.0k/32.8k tokens (6.0%)\n  Free space: 30.8k tokens (94.0%)"), Some(6.0));

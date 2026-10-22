@@ -1,6 +1,6 @@
 """Workbench MCP server (stdio, JSON-RPC 2.0, newline-delimited). Python stdlib only.
 Tools: officecli (wrapper around the bundled OfficeCLI), web_search, web_fetch, memory_*, workspace_info."""
-import json, os, stat, subprocess, sys, tempfile
+import datetime, json, os, shutil, stat, subprocess, sys, tempfile
 
 OFFICECLI = os.environ.get("OFFICECLI_EXE", "officecli.exe")
 CREATE_NO_WINDOW = 0x08000000
@@ -141,8 +141,10 @@ TOOLS = EFFICIENCY_TOOLS + [
     },
     {
         "name": "workspace_info",
-        "description": "List files in the workspace folder (names, sizes).",
-        "inputSchema": {"type": "object", "properties": {}},
+        "description": "List files in the workspace folder (names, sizes). Optionally check which commands are installed and which output paths already exist, so resumed work is not redone.",
+        "inputSchema": {"type": "object", "properties": {
+            "commands": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Executable names to look up, e.g. [\"python\",\"node\",\"git\",\"officecli\"]."},
+            "paths": {"type": "array", "items": {"type": "string"}, "maxItems": 50, "description": "Workspace-relative paths to check for existence."}}},
     },
 ]
 
@@ -225,12 +227,17 @@ _seen = {}
 OUTPUT_CAP = 24000
 
 
+def refusal(code, message, recovery, retryable=False):
+    """Machine-readable refusal for calls rejected before any work was done."""
+    return json.dumps({"error_code": code, "write_performed": False, "retryable": retryable, "message": message, "recovery": recovery})
+
+
 def guarded_call(name, args):
     key = (name, json.dumps(args, sort_keys=True, default=str)) if name in IDEMPOTENT else None
     n = _seen.get(key, 0) if key else 0
     if n >= 2:
-        return ("You have already made this exact call twice in this chat and the result has not changed. "
-                "Do not call it again: use what you have, try a different query or source, or move on to the next step.")
+        return refusal("repeated_call", "You have already made this exact call twice in this chat and the result has not changed.",
+                       "Do not call it again: use what you have, try a different query or source, or move on to the next step.")
     text = call_tool(name, args)
     if len(text) > OUTPUT_CAP:
         text = text[:OUTPUT_CAP] + f"\n[Output truncated: {len(text) - OUTPUT_CAP} more characters. Ask for a narrower range if you need them.]"
@@ -240,6 +247,34 @@ def guarded_call(name, args):
             text = ("Note: you already made this exact call earlier in this chat; the result is the same as before. "
                     "Use it and move on rather than repeating it.\n\n") + text[:4000]
     return text
+
+
+def preflight_report(commands, paths):
+    if not isinstance(commands, list) or not isinstance(paths, list) or len(commands) > 20 or len(paths) > 50:
+        raise ValueError("commands must be a list of at most 20 names and paths a list of at most 50 paths")
+    lines = []
+    for c in map(str, commands):
+        found = OFFICECLI if c.lower() in ("officecli", "officecli.exe") else shutil.which(c)
+        line = f"command {c}: " + (f"found at {found}" if found else "not found")
+        if c.lower() == "python" and os.environ.get("LOCALWORK_PYTHON"):
+            line += f"; LOCALWORK_PYTHON={os.environ['LOCALWORK_PYTHON']}"
+        lines.append(line)
+    root = os.path.realpath(os.getcwd())
+    for p in map(str, paths):
+        full = os.path.realpath(os.path.join(root, p))
+        try:
+            inside = os.path.commonpath([root, full]) == root
+        except ValueError:
+            inside = False
+        if not inside:
+            lines.append(f"path {p}: outside the workspace (not checked)")
+        elif not os.path.exists(full):
+            lines.append(f"path {p}: missing")
+        else:
+            info = os.stat(full)
+            when = datetime.datetime.fromtimestamp(info.st_mtime).isoformat(timespec="seconds")
+            lines.append(f"path {p}: exists, " + ("directory" if os.path.isdir(full) else f"{info.st_size} bytes") + f", modified {when}")
+    return "\n".join(lines)
 
 
 def call_tool(name, args):
@@ -275,6 +310,9 @@ def call_tool(name, args):
         return ("Shown to the user. Their answer arrives as their next message. If the rest of the task does not depend on it, "
                 "continue meanwhile with a stated assumption; otherwise end your turn now with one line saying what you are waiting for.")
     if name == "workspace_info":
+        commands, paths = args.get("commands"), args.get("paths")
+        if commands or paths:
+            return preflight_report(commands or [], paths or [])
         rows = []
         for root, dirs, files in os.walk(os.getcwd()):
             dirs[:] = [d for d in dirs if not d.startswith(".")][:50]
@@ -311,10 +349,10 @@ def call_tool(name, args):
         f = next((os.path.join(d, n, "SKILL.md") for d in dirs if n and os.path.isfile(os.path.join(d, n, "SKILL.md"))), None)
         if not f:
             have = {x for d in dirs if os.path.isdir(d) for x in os.listdir(d) if os.path.isfile(os.path.join(d, x, "SKILL.md"))}
-            return "No such skill. Available: " + ", ".join(sorted(have))
+            return refusal("unknown_skill", "No such skill.", "Available: " + ", ".join(sorted(have)))
         if n.lower() in _loaded_skills and not args.get("force"):
-            return (f"The {n} skill is already loaded earlier in this chat; follow those instructions and continue the task. "
-                    "Only if they are no longer in your context, call load_skill again with force:true.")
+            return refusal("already_loaded", f"The {n} skill is already loaded earlier in this chat.",
+                           "Follow those instructions and continue the task. Only if they are no longer in your context, call load_skill again with force:true.")
         _loaded_skills.add(n.lower())
         return open(f, encoding="utf8").read()
     if name in ("memory_save", "memory_search", "memory_forget"):
@@ -495,7 +533,7 @@ def call_tool(name, args):
         if r.returncode != 0:
             raise RuntimeError(f"officecli exited {r.returncode}\n{out[-4000:]}")
         return out[-20000:] or "OK"
-    raise ValueError(f"unknown tool {name}")
+    raise ValueError(refusal("unknown_tool", f"unknown tool {name}", "Use one of the tools listed in your instructions."))
 
 
 def reply(id_, result=None, error=None):
