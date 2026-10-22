@@ -62,6 +62,14 @@ Use npm ci, scripts/fetch-vendor.ps1, scripts/build-agent.ps1, and scripts/insta
 - Successful update_plan stage execution is an explicit per-run hint, independent of plan text. Only normal native-provider requests lower effort, retaining configured thinking. Analysis/verification/missing or unknown stage, tool errors and new turns restore defaults. Recovery overrides remain bounded and unchanged. Stage state survives history compaction without changing profiles.
 - Request metrics are info events, persisted as diagnostic messages and exported but hidden from chat rendering/model history. Agent measurements separate compaction, request wall and first-event waits; provider-reported numeric timings are retained only when available. Host tool durations include approval/host overhead. No extra model or polling requests are made for these measurements.
 
+## Optional model routing and downloads
+
+- cloud.rs owns OpenAI-compatible providers and optional unofficial Codex OAuth; creds.rs stores secrets in Windows Credential Manager. No static cloud model list is treated as current. cloud-ui.ts, CloudSettings.tsx and ChatRouting.tsx provide configuration and explicit Local/Cloud selections. Local only remains the default.
+- router.rs is an authenticated loopback chat/completions proxy selected by agent.rs for Manual/Automatic modes. Enforce global local-only, offline/chat-offline and sensitivity locks before pins. Automatic requires the privacy filter. Routing is availability/context/repeated-error heuristics, not a learned capability classifier or Switchyard integration. Routed agents use generic rather than native Strata compaction.
+- gate.rs owns a separate CPU-only PII-Tracer helper, span masking and streamed restoration. Privacy checking must fail closed for unsupported payloads and detector errors. Unknown attachment formats never silently pass protected routing. Preserve tools until a successful stream terminal event; partial/error streams must not become successful callable tools.
+- engine.rs / download.rs and ModelLibrary.tsx serve first-run setup and Settings Model: upstream PolyStrata release discovery, explicit downloads/setup, existing GGUFs and supported calibration. Engine/model setup executes trusted upstream scripts and can install their dependencies; the downloader allowlist does not sandbox those scripts. Updates retain the old folder. Calibration starts an engine and requires the current model to be stopped.
+- Runtime state and provider credentials never belong in Git. See CLOUD.md for disclosure and unverified live-service paths.
+
 ## Checks
 
 See CONTRIBUTING.md for commands and docs/PUBLIC_READINESS.md for the latest audit. Most tests need no GPU. Windows browser tests require pinned Chromium; CDP acceptance uses isolated app data and stub inference by default. A guided website run or stub suite is not a broad real-model benchmark. Do not hide timed-out or skipped model trials.

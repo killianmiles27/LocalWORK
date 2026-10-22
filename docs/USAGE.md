@@ -2,6 +2,12 @@
 
 The ALPHA badge beside LocalWORK in the sidebar marks the app's current development stage.
 
+## Models and cloud routing
+
+The composer model menu labels choices **Local** or **Cloud**. Local mode changes reload the managed engine; cloud selections apply to that chat's subsequent requests. Configure providers, subscription sign-in, a default cloud model and optional CPU privacy checking in **Settings → Cloud**. Local only is the default; Offline and privacy locks override cloud choices. Automatic routing currently uses availability, context size and repeated errors, not general task difficulty. See [cloud and privacy](CLOUD.md) before enabling it.
+
+Use **Settings → Model → Model library** to install/update PolyStrata, download a suggested model or add files already on disk. The same library is available during first-run setup. Download sizes and hardware-fit labels are estimates. Tuning uses upstream calibration for supported configurations and requires the model to be stopped.
+
 ## Start a chat in a folder
 
 Choose a folder for the task using the folder control beside the composer. New chats otherwise use your configured projects location, normally `Documents\LocalWORK`. Each chat remembers its working folder.

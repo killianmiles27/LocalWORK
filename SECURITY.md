@@ -16,12 +16,18 @@ Include the affected commit/version, Windows version, minimal reproduction, expe
 - Browser navigation checks and hostname filters do **not** fully constrain page subrequests or DNS rebinding. A hostile page may reach services accessible from the PC. Do not treat the browser as private-network isolation.
 - A local server API key is generated for each model launch and passed through environment variables. Local processes running as the same user can still inspect or affect app processes. Do not expose the model or test CDP listener to the network.
 - Model configuration is trusted executable configuration. Only choose a Strata installation and configuration you trust.
+- Optional cloud routing uses an authenticated loopback proxy. Local-only, offline flags and privacy locks take priority over cloud pins. Protected routes reject unsupported nontext payloads and scan failures; incomplete cloud streams must not become completed tool calls. These checks are not a sandbox for approved commands or plugins.
+- Engine setup downloads and runs trusted upstream PolyStrata scripts, which may install packages and fetch models. The application's downloader host allowlist does not constrain networking performed by those scripts. Hugging Face file downloads pin a repository revision and validate relative paths; hardware-fit estimates do not establish compatibility or model safety.
 - SSH uses host-key verification and explicit host configuration. Its read-only classifier is conservative, but it is not a remote sandbox. Use a restricted account.
 - Interactive document previews use an opaque iframe sandbox. Opening a file externally delegates to the installed application and its security model.
 
 ## Privacy
 
-Inference runs locally. Searches, browsing, downloads, update checks, and SSH contact external systems. The web toggle is a tool setting, not network isolation. There is no claim that the app can never transmit data.
+Inference runs locally by default. Optional Manual/Automatic cloud routing sends conversation data to configured providers; Manual without privacy checking sends it without redaction. Automatic requires the installed and enabled CPU privacy filter. PII detection can miss sensitive data: use Local only or Offline for records that must never leave the PC. See [cloud and privacy](docs/CLOUD.md). Automatic routing is separate from the default-on action approval mode.
+
+Provider keys and subscription tokens are stored in Windows Credential Manager. Provider addresses and model choices are ordinary settings. Subscription sign-in is an unofficial Codex OAuth integration and is not a claim of official client support. The last attempted cloud payload and local placeholder mapping are inspectable in the app and may contain sensitive values.
+
+Searches, browsing, downloads, update checks, and SSH contact external systems. The web toggle is a tool setting, not network isolation. There is no claim that the app can never transmit data.
 
 Conversation databases, cached pages, saved attachments, logs, and browser cookies can contain private information. They are not encrypted by LocalWORK. Review diagnostic material before sharing it. Do not commit data folders, credentials, signing keys, or `.env` files.
 

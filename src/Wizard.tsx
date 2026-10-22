@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Check, AlertTriangle, Copy, ExternalLink } from "lucide-react";
+import { Check, AlertTriangle } from "lucide-react";
+import ModelLibrary from "./ModelLibrary";
 
 type Hw = {
   ram_gib: number; disk_free_gib: number | null; gpu: { name: string; vram_gib: number | null; driver: string } | null;
@@ -9,9 +10,6 @@ type Hw = {
 };
 type Path = "strata" | "server" | "setup";
 
-const STRATA_URL = "https://github.com/Niko1221/Strata";
-/** Strata fork that also runs GLM, DeepSeek, LFM, Gemma and newer Qwen models. Same folder layout and server. */
-const POLY_URL = "https://github.com/VecSzn/PolyStrata";
 const g = (n: number | null | undefined) => (typeof n === "number" ? n.toFixed(1) + " GiB" : "unknown");
 
 function Line({ ok, label, value }: { ok: boolean; label: string; value: string }) {
@@ -24,14 +22,6 @@ function Line({ ok, label, value }: { ok: boolean; label: string; value: string 
   );
 }
 
-/** Strata's own sizing table (its AI_SETUP guide), by installed RAM. */
-function recommend(hw: Hw | null) {
-  const ram = hw?.ram_gib ?? 0;
-  if (ram >= 90) return { args: "--family qwen --model IQ3_S", why: "96 GB or more of memory: the larger, slightly better size." };
-  if (ram >= 60) return { args: "--family qwen --model IQ2_XS", why: "64 GB of memory: the recommended size." };
-  if (ram >= 44) return { args: "--family qwen --model IQ2_XS", why: "48 GB of memory: the recommended size." };
-  return { args: "--family coder --model IQ1_M", why: "32 GB of memory: the smallest version. With a 24 GB graphics card, IQ2_XS also runs." };
-}
 
 function Choice({ on, title, text, onClick }: { on: boolean; title: string; text: string; onClick: () => void }) {
   return (
@@ -62,8 +52,6 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
   }, []);
 
   const ready = path === "server" ? !!server : !!(hw?.strata_found && hw.model_config_found);
-  const rec = recommend(hw);
-  const cmd = `START-HERE.bat --yes ${rec.args} --no-start`;
 
   async function pickStrata() {
     setErr(""); setNote("");
@@ -98,8 +86,6 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
     const d = await open({ directory: true, title: "Choose where your projects live" });
     if (d && !Array.isArray(d)) setProj(d);
   }
-  const openUrl = (url: string) => invoke("open_external", { url }).catch(e => setErr(String(e)));
-  const copy = (t: string, what: string) => navigator.clipboard.writeText(t).then(() => setNote(`Copied ${what}.`)).catch(() => setErr("Could not copy."));
   async function finish() {
     try {
       await invoke("set_web_access", { on: web });
@@ -116,16 +102,15 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
   const btn = "rounded-lg bg-accent text-accent-fg px-4 py-1.5 text-sm disabled:opacity-40";
   const small = "rounded-lg border border-line px-3 py-1 text-sm hover:border-accent inline-flex items-center gap-1.5";
   const inp = "rounded-lg border border-line bg-bg px-2 py-1 text-sm";
-  const vram = hw?.gpu?.vram_gib ?? 0;
 
   return (
     <div className="fixed inset-0 z-[60] grid place-items-center bg-black/50 p-4">
-      <div className="w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-2xl bg-bg border border-line shadow-xl p-6">
+      <div className={`w-full ${step === 2 && path === "setup" ? "max-w-3xl" : "max-w-lg"} max-h-[92vh] overflow-y-auto rounded-2xl bg-bg border border-line shadow-xl p-6`}>
         <div className="text-xs text-muted mb-1">Step {step + 1} of 4</div>
         {step === 0 && (
           <>
             <h2 className="text-lg font-medium mb-1">Welcome to LocalWORK</h2>
-            <p className="text-sm text-muted mb-3">LocalWORK is a work assistant that runs on an AI model on your own computer. Nothing you write is sent to a cloud AI. First, a look at this PC:</p>
+            <p className="text-sm text-muted mb-3">LocalWORK is a work assistant that runs on an AI model on your own computer. Cloud AI is optional and off by default. First, a look at this PC:</p>
             <Line ok={!!hw?.gpu} label="Graphics card" value={hw ? (hw.gpu ? `${hw.gpu.name} · ${g(hw.gpu.vram_gib)} video memory` : "No NVIDIA card detected (AMD cards may still work)") : "checking…"} />
             <Line ok={!!hw?.gpu && Number(hw.gpu.driver.split(".")[0]) >= 580} label="Driver" value={hw?.gpu ? `${hw.gpu.driver}${Number(hw.gpu.driver.split(".")[0]) < 580 ? " (Strata needs 580 or newer)" : ""}` : hw ? "not found" : "checking…"} />
             <Line ok={(hw?.ram_gib ?? 0) >= 30} label="Memory" value={hw ? g(hw.ram_gib) + ((hw.ram_gib ?? 0) < 30 ? " (Strata needs 32 GB)" : "") : "checking…"} />
@@ -139,7 +124,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
             <p className="text-sm text-muted mb-3">LocalWORK needs a model to talk to. Pick what fits you.</p>
             <Choice on={path === "strata"} onClick={() => setPath("strata")} title="Yes, Strata or PolyStrata is installed" text="LocalWORK starts and stops it for you. Recommended." />
             <Choice on={path === "server"} onClick={() => setPath("server")} title="Yes, I run my own model server" text="Strata, LM Studio, Ollama, llama.cpp, vLLM or any OpenAI-compatible server on this PC. You start it yourself." />
-            <Choice on={path === "setup"} onClick={() => setPath("setup")} title="No, help me set one up" text="Step-by-step Strata install. It downloads the model once (about 70 GB)." />
+            <Choice on={path === "setup"} onClick={() => setPath("setup")} title="No, help me set one up" text="Install PolyStrata from GitHub and choose a model for this PC. You confirm each download." />
           </>
         )}
         {step === 2 && path === "strata" && (
@@ -174,28 +159,10 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
         )}
         {step === 2 && path === "setup" && (
           <>
-            <h2 className="text-lg font-medium mb-1">Set up Strata</h2>
-            <p className="text-sm text-muted mb-2">Strata runs a large open model fast on a gaming PC by keeping part of it in memory. Setup takes a while, mostly the download.</p>
-            <ol className="text-sm list-decimal pl-5 space-y-2">
-              <li>
-                Download Strata: <button className="underline inline-flex items-center gap-1" onClick={() => openUrl(STRATA_URL)}>github.com/Niko1221/Strata <ExternalLink size={12} /></button>. Press the green <b>Code</b> button, <b>Download ZIP</b>, and unzip it somewhere with 80 GB free (an SSD is best), for example C:\Strata.
-              </li>
-              <li>
-                Open the folder, click the address bar, type <code>cmd</code> and press Enter. In the black window paste this and press Enter:
-                <div className="mt-1 flex items-center gap-2">
-                  <code className="flex-1 rounded-lg bg-panel-2 px-2 py-1 text-xs break-all">{cmd}</code>
-                  <button className={small} onClick={() => copy(cmd, "the command")}><Copy size={13} />Copy</button>
-                </div>
-                <span className="text-xs text-muted">Picked for this PC: {rec.why}{vram && vram < 12 ? " Your graphics card has under 12 GB, so it will be slower." : ""} Leave the window open until it says it is done.</span>
-              </li>
-              <li>Come back here, press <b>Choose Strata folder</b>, and pick that folder.</li>
-            </ol>
-            <p className="text-xs text-muted mt-2">Want models other than Qwen? <button className="underline inline-flex items-center gap-1" onClick={() => openUrl(POLY_URL)}>PolyStrata <ExternalLink size={11} /></button> is a Strata fork that also runs GLM, DeepSeek, LFM, Gemma and others. Install it the same way (its START-HERE.bat lets you pick models), then choose its folder here.</p>
-            <div className="flex flex-wrap gap-2 mt-3">
-              <button onClick={async () => { await pickStrata(); setPath("strata"); }} className={small}>Choose Strata folder…</button>
-              <button className={small} onClick={() => copy(`Please install Strata (${STRATA_URL}) on this Windows PC by following its docs/AI_SETUP.md. Then tell me the folder path.`, "instructions for an AI assistant")}><Copy size={13} />Copy instructions for an AI helper</button>
-            </div>
-            <p className="text-xs text-muted mt-2">You can also finish this now and connect the model later in Settings &gt; Model.</p>
+            <h2 className="text-lg font-medium mb-1">Set up a local model</h2>
+            <p className="text-sm text-muted mb-3">PolyStrata runs Strata and additional model families. Install it, then choose a download or add model files you already have. LocalWORK starts and stops the model for you.</p>
+            <ModelLibrary onChanged={() => { setChanged(true); check(); }} />
+            <p className="text-xs text-muted mt-3">You can finish setup now and return to the model library in Settings → Model.</p>
           </>
         )}
         {step === 2 && !path && <p className="text-sm text-muted">Go back and choose an option.</p>}
@@ -214,7 +181,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
             <p className="text-xs text-muted mt-3">Extras such as the CPU/GPU bar and the electricity cost per task are plugins. Add them in Settings &gt; Plugins.</p>
             {ready && path !== "server" && (
               <p className="text-xs text-muted mt-4 rounded-lg border border-line p-2.5">
-                Tip: once the model is running, ask it <b>"tune yourself for this PC"</b>. It measures your hardware and writes faster settings (more context, more tokens per second) as modes you can switch between. Settings matter a lot: the same PC can go from 16K context at 30 tokens/s to 256K at 40+.
+                Tip: once the model is running, ask it <b>"tune yourself for this PC"</b>. It measures your hardware and writes faster settings (more context, more tokens per second) as modes you can switch between. Calibration takes measurements; results depend on the hardware and model.
               </p>
             )}
             {!ready && <p className="text-xs text-amber-600 mt-4">No model is connected yet. You can finish now and connect one later in Settings &gt; Model.</p>}

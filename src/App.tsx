@@ -50,6 +50,7 @@ export default function App() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [live, setLive] = useState({ text: "", thinking: "", busy: false });
   const [status, setStatus] = useState<Status>({ state: "starting", detail: "", port: 0, model: "" });
+  const [cloudReady, setCloudReady] = useState(false);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [input, setInput] = useState("");
   // Messages sent while the assistant is working go out, in order, once the current turn ends.
@@ -105,6 +106,15 @@ export default function App() {
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   curRef.current = cur;
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => invoke<boolean>("cloud_available", { conv: cur }).then(ok => { if (alive) setCloudReady(ok); }).catch(() => { if (alive) setCloudReady(false); });
+    refresh();
+    window.addEventListener("cloud-changed", refresh);
+    window.addEventListener("offline-changed", refresh);
+    const sub = listen("route", refresh);
+    return () => { alive = false; window.removeEventListener("cloud-changed", refresh); window.removeEventListener("offline-changed", refresh); sub.then(f => f()); };
+  }, [cur, status.state]);
   const [tidying, setTidying] = useState(false);
   const voice = useVoice((t) => { setErr(""); setInput((i) => (i.trim() ? i.replace(/\s+$/, "") + " " : "") + t); taRef.current?.focus(); }, setErr);
   async function tidy() {
@@ -411,11 +421,11 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     catch (e) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
   }
   useEffect(() => {
-    if (live.busy || !queue.length || status.state !== "ready") return;
+    if (live.busy || !queue.length || (status.state !== "ready" && !cloudReady)) return;
     const [next, ...rest] = queue;
     setQueue(rest);
     send(next.text, next.files);
-  }, [live.busy, queue, status.state]);
+  }, [live.busy, queue, status.state, cloudReady]);
   // Edit and regenerate: cut the chat (and the agent's memory of it) back to before user message `m`, then
   // send `text`, or the original message again. Files the agent changed stay as they are.
   async function rewindTo(m: Msg, text?: string) {
@@ -465,7 +475,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
   const [dotCls, label] = dot[status.state] ?? dot.error;
   const mine = approvals.filter((a) => a.conv === cur);
   const curConv = convs.find((c) => c.id === cur);
-  const modelReady = status.state === "ready";
+  const modelReady = status.state === "ready" || cloudReady;
   const visuals: VisualItem[] = msgs.filter(m => m.role === "tool" && m.body?.status !== "error" && m.body?.status !== "cancelled")
     .flatMap(m => {
       const request = m.body?.request;
@@ -618,7 +628,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                     <StatusItems />
-                    <ModeSwitcher ready={modelReady} state={status.state} onKey={(k) => { modeKey.current = k; }} onError={setErr} />
+                    <ModeSwitcher ready={modelReady} state={status.state} conv={cur} ensureConversation={ensureConversation} running={live.busy} onKey={(k) => { modeKey.current = k; }} onError={setErr} />
                     {cur && <ContextRing used={ctx.used} window={ctx.window} busy={live.busy} onCompact={compact} />}
                     {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="hidden @min-[30rem]:inline text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}
                     {input.trim().length > 20 && !live.busy && (

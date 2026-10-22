@@ -35,7 +35,7 @@
 
 Say you've got a spreadsheet with fifteen years of your finances in it. Would you upload that to a chatbot? Yeah, me neither. That's why I made LocalWORK.
 
-The model runs on your PC, so your files stay on your PC. There's no account, no subscription, no usage limits and no ads. You hand it a folder or some files, tell it what you want, and it does the work: reading the files, running the numbers, and writing the documents. You watch it happen in a pane next to the chat, and you can click into the result and edit it yourself.
+By default the model runs on your PC, so your files stay on your PC. Local use needs no account or subscription. Optional cloud providers and ChatGPT subscription sign-in live in Settings → Cloud, with clear Local/Cloud choices and an optional CPU privacy filter. Cloud services have their own limits and costs; see [cloud and privacy](docs/CLOUD.md). You hand it a folder or some files, tell it what you want, and it does the work: reading the files, running the numbers, and writing the documents. You watch it happen in a pane next to the chat, and you can click into the result and edit it yourself.
 
 What LocalWORK itself adds:
 
@@ -51,7 +51,7 @@ The model side is someone else's work. LocalWORK runs models through [Strata](ht
 
 Grab `LocalWORK_<version>_x64-setup.exe` from the [latest release](https://github.com/killianmiles27/LocalWORK/releases/latest) and run it.
 
-The installer has the app and its tools. It does **not** include a model. The first-run wizard asks if you already have one, and if you don't, it walks you through installing Strata with a command picked for your graphics card. Model downloads are big, so that part takes a while.
+The installer has the app and its tools. It does **not** include a model. The first-run wizard can connect an existing server or open the model library: download PolyStrata from GitHub, choose a suggested model, or use your own model files. You confirm downloads; some models require tens or hundreds of GB. Engine updates come from upstream releases rather than needing a new LocalWORK build.
 
 Updates are signed. You can check for them in Settings > App, or turn on automatic updates there (it's off by default).
 

@@ -6,7 +6,15 @@
 - A model: a [Strata installation](https://github.com/Niko1221/Strata) (recommended; the first-run wizard can walk you through it), or [PolyStrata](https://github.com/VecSzn/PolyStrata) for models beyond Qwen, or any OpenAI-compatible server on this PC, such as LM Studio or Ollama. You also need enough GPU memory, system memory and disk space for that model. Follow Strata's current hardware requirements rather than treating one developer's PC as a minimum specification.
 - Internet access for initial downloads. After setup, local inference and file work can run without a hosted AI service. Web tools still need the network.
 
-Model downloads can be large. LocalWORK does not include weights or choose a suitable model automatically.
+Model downloads can be large. LocalWORK does not include weights. Its model library suggests models using reported memory and disk capacity; these estimates are not benchmarks or a guarantee that a model fits.
+
+## Guided PolyStrata setup
+
+Choose **No, help me set one up** in the wizard, or open **Settings → Model → Model library**. Install PolyStrata from its latest GitHub release, confirm its runtime dependencies, then choose a suggested model and context size. Each download needs a click. Model setup is delegated to PolyStrata's trusted upstream scripts and may fetch dependencies and large model files. Updates keep the previous engine folder and may need to set models up again; review the download notice first.
+
+You can also add a supported GGUF already on disk, or inspect/download another Hugging Face GGUF using the library. Compatibility depends on the upstream engine; downloading weights does not guarantee support. Existing model JSON configurations can still be selected through Engine and setup. LocalWORK starts and stops the selected managed model; an external server remains under your control.
+
+**Tune for this PC** runs supported upstream calibration and saves its changes. Stop the model first. Calibration runs inference measurements and can take time; it is not a general optimizer for every model family. Unsupported engines return an error rather than claiming a speed improvement. No calibration runs merely from opening the library.
 
 ## Install Strata and a model
 
@@ -45,9 +53,11 @@ The first-run wizard asks whether you already have a model:
 
 - **Yes, Strata or PolyStrata is installed:** choose its folder (the one with `START-HERE.bat`). With PolyStrata, every `strata-<model>.json` in that folder shows up in the model menu under *Models*, and the context window is read from the running server, so compaction follows whichever model is loaded. The model you set up there is picked automatically. LocalWORK starts and stops it for you.
 - **Yes, I run my own model server:** Strata, LM Studio, Ollama or any OpenAI-compatible server on this PC. Start it yourself, then press *Test and connect*. With the port left empty, LocalWORK tries the usual ones (8080 for Strata or llama.cpp, 1234 for LM Studio, 11434 for Ollama, 8000 for vLLM, 30000 for SGLang). Set the context size your server uses.
-- **No, help me set one up:** step-by-step Strata install with a one-line command chosen for your graphics card. It downloads the model once. You can also copy instructions for another AI assistant to do the install.
+- **No, help me set one up:** the model library installs PolyStrata from GitHub and offers model downloads or existing files. You confirm each download.
 
 Then choose where projects live and whether web tools are on. The model indicator turns ready once the model has loaded, which can take a while the first time.
+
+Cloud use is optional and off by default. See [cloud providers, routing and privacy](CLOUD.md) for setup and limits. Cloud chats still need the configured Python runtime for Workbench tools.
 
 **Make it fast:** once the model runs, ask it to *tune yourself for this PC*. The model-tuning skill reads your hardware and Strata's options, then writes launch profiles (Sprint 16K, 64K, 128K, 256K) that you switch between in the mode menu. On the same PC, tuned settings can take a model from 16K context at 30 tokens/s to 256K at 40+.
 

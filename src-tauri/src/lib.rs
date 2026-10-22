@@ -1,4 +1,10 @@
 mod agent;
+mod cloud;
+mod creds;
+mod download;
+mod engine;
+mod gate;
+mod router;
 mod documents;
 mod export;
 mod desktop;
@@ -488,6 +494,7 @@ fn shutdown(state: &App) {
     }
     close_browsers();
     strata::stop(None, &state.strata);
+    gate::stop();
     let _ = std::fs::write(paths::data_dir().join("pids.json"), "[]");
     eprintln!("shutdown complete in {:?}", t0.elapsed());
 }
@@ -552,10 +559,18 @@ pub fn run() {
             let handle = app.handle().clone();
             let st = app.state::<App>().strata.clone();
             let _ = strata::start(&handle, &st);
+            router::start(&handle, app.state::<App>().db.clone(), st.clone());
             updates::on_launch(&handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            download::download_cancel,
+            engine::engine_status, engine::engine_install, engine::engine_catalog, engine::engine_add_model, engine::engine_add_gguf,
+            engine::engine_inspect_hf, engine::engine_tune, engine::engine_hw, engine::engine_cancel, engine::engine_hf_files, engine::engine_hf_download,
+            cloud::chatgpt_login, cloud::chatgpt_logout, cloud::chatgpt_models, cloud::cloud_get, cloud::cloud_set,
+            cloud::cloud_provider_save, cloud::cloud_provider_remove, cloud::cloud_models,
+            gate::gate_status, gate::gate_install, gate::gate_test,
+            router::route_mode_set, router::chat_route_get, router::chat_route_set, router::chat_unlock, router::route_last_sent, router::cloud_available,
             run_config_read,
             browser_frames,
             browser_frame,

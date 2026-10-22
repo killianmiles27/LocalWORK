@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
+import ChatRouting from "./ChatRouting";
 
 type Mode = { id: string; plugin: string; label: string; description: string; group: string; config: string; context: number | null; found: boolean; active: boolean; engine?: string };
 type Effort = { effort: string | null; config: string | null; override: string | null; options: string[] };
@@ -8,16 +10,30 @@ type Effort = { effort: string | null; config: string | null; override: string |
 const k = (n: number) => (n >= 1024 ? Math.round(n / 1024) + "K" : String(n));
 
 /** Composer dropdown: model modes from plugins (reload) and reasoning effort (instant, no reload). */
-export default function ModeSwitcher({ ready, state, onKey, onError }: { ready: boolean; state: string; onKey: (key: string) => void; onError: (e: string) => void }) {
+export default function ModeSwitcher({ ready, state, onKey, onError, conv, ensureConversation, running }: { ready: boolean; state: string; onKey: (key: string) => void; onError: (e: string) => void; conv: string | null; ensureConversation: () => Promise<string>; running: boolean }) {
   const [modes, setModes] = useState<Mode[]>([]);
   const [effort, setEffort] = useState<Effort | null>(null);
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
+  const [location, setLocation] = useState("Local");
   const box = useRef<HTMLDivElement>(null);
 
   const refresh = () => invoke<{ modes: Mode[]; effort: Effort }>("modes_list").then(r => { setModes(r.modes); setEffort(r.effort); }).catch(() => {});
   useEffect(() => { refresh(); }, [state]);
   useEffect(() => { if (open) refresh(); }, [open]);
+  useEffect(() => {
+    let alive = true;
+    const update = async () => {
+      const r = await invoke<{ routing: string; model: string | null; locked: boolean; offline?: boolean }>("chat_route_get", { conv: conv ?? "" });
+      if (alive) setLocation(r.offline ? "Local · offline" : r.locked ? "Local · locked" : r.routing === "local" || r.model === "local" ? "Local" : r.model?.startsWith("cloud:") ? `Cloud · ${r.model.split(":").slice(2).join(":")}` : r.routing === "auto" ? "Auto · local first" : "Local");
+    };
+    const changed = () => { update().catch(() => {}); };
+    changed(); window.addEventListener("cloud-changed", changed); window.addEventListener("offline-changed", changed);
+    const sub = listen<{ conv: string; target: string; label: string }>("route", e => {
+      if (alive && e.payload.conv === conv) setLocation(e.payload.target === "local" ? "Local" : `Cloud · ${e.payload.label}`);
+    });
+    return () => { alive = false; window.removeEventListener("cloud-changed", changed); window.removeEventListener("offline-changed", changed); sub.then(f => f()); };
+  }, [conv, state]);
 
   const active = modes.find(m => m.active);
   useEffect(() => { onKey(`${active?.id ?? "default"}|${effort?.effort ?? "default"}`); }, [active?.id, effort?.effort]);
@@ -45,7 +61,6 @@ export default function ModeSwitcher({ ready, state, onKey, onError }: { ready: 
     catch (e) { setEffort(before); onError(String(e)); }
   }
 
-  if (!modes.length && !effort) return null;
   const groups = Array.from(new Set(modes.map(m => m.group)));
   const busy = !!switching || state === "loading" || state === "starting";
   const label = switching ? modes.find(m => m.id === switching)?.label ?? "Switching" : active?.label ?? "Model";
@@ -56,15 +71,16 @@ export default function ModeSwitcher({ ready, state, onKey, onError }: { ready: 
         title={active ? `${active.label}${active.context ? ` · ${k(active.context)} context` : ""}` : "Model and effort"}
         className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted hover:bg-panel hover:text-ink whitespace-nowrap">
         {busy && <Loader2 size={12} className="animate-spin" />}
-        <span className="max-w-28 truncate">{label}</span>
+        <span className="max-w-48 truncate">{location === "Local" ? `Local · ${label}` : location}</span>
         {effort?.effort && <span className="hidden @min-[34rem]:inline opacity-60">· {effort.effort}</span>}
         <ChevronDown size={12} />
       </button>
       {open && (
-        <div role="menu" className="absolute bottom-full right-0 mb-2 w-72 rounded-xl border border-line bg-panel shadow-lg p-1.5 text-sm z-30">
+        <div role="menu" className="absolute bottom-full right-0 mb-2 w-80 max-h-[65vh] overflow-auto rounded-xl border border-line bg-panel shadow-lg p-1.5 text-sm z-30">
+          <ChatRouting conv={conv} ensureConversation={ensureConversation} disabled={running} onError={onError} />
           {groups.map(g => (
             <div key={g}>
-              <div className="px-2.5 pt-1.5 pb-1 text-xs text-muted">{g}</div>
+              <div className="px-2.5 pt-1.5 pb-1 text-xs text-muted">Local · {g}</div>
               {modes.filter(m => m.group === g).map(m => (
                 <button key={m.id} role="menuitemradio" aria-checked={m.active} disabled={!m.found || busy} onClick={() => pick(m)}
                   title={m.found ? m.config : `Missing run config: ${m.config}`}

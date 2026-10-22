@@ -24,7 +24,9 @@ python scripts/e2e/check-agent-python.py --work ../.e2e-runs --python '<configur
 python scripts/e2e/check-agent-recovery.py --work ../.e2e-runs --python '<configured-python>' --officecli vendor/officecli.exe --scenario output-limit --scenario repeated-reasoning --scenario always-truncated --scenario unfinished-plan
 node scripts/tests/thinking.browser.mjs
 node scripts/tests/plan.browser.mjs
+node scripts/tests/cloud.browser.mjs
 pwsh -NoProfile -File scripts/e2e/run-all.ps1 -Exe ./src-tauri/target/release/localwork.exe -Only T-A1,T-A2,T-C1 -Iterations 1 -KeepWork
+pwsh -NoProfile -File scripts/e2e/run-all.ps1 -Exe ./src-tauri/target/release/localwork.exe -Only T-R1 -Iterations 1 -KeepWork
 ```
 
 The efficient-tools fixture creates unrelated inventory and experiment files, evaluates live formulas, compares saved aggregates, verifies a chart and Word document, and requires real bundled OfficeCLI. It does not run a model or measure model-task speed.
