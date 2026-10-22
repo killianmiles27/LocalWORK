@@ -1,107 +1,78 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
-import { X } from "lucide-react";
+import { AppWindow, Cpu, Globe, Puzzle, SlidersHorizontal, X } from "lucide-react";
 import { ModelEditor, Plugins } from "./SettingsModel";
+import { Button, Message, Meter, Row, Section, ToggleRow, Value, input } from "./settings-ui";
 
-const TABS = ["General", "Model", "Plugins", "Connections", "App"] as const;
+const TABS = [
+  { id: "Model", icon: Cpu },
+  { id: "Tuning", icon: SlidersHorizontal },
+  { id: "Plugins", icon: Puzzle },
+  { id: "Connections", icon: Globe },
+  { id: "App", icon: AppWindow },
+] as const;
+type Tab = (typeof TABS)[number]["id"];
 
 type Info = { cpu?: { name: string; load: number; server_ram_gib: number | null }; model: string; quant: string; file: string; context: string | null; kv: string | null; status: any; live: any };
 type St = { state: string; detail: string; port: number; model: string };
 
 const num = (v: unknown, d = 1) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "–");
-const dur = (s?: number) => (typeof s !== "number" ? "–" : s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min` : `${s} s`);
+const dur = (s?: number) => (typeof s !== "number" ? "" : s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min` : `${s} s`);
+const STATE_DOT: Record<string, string> = { ready: "bg-sage", stopped: "bg-muted", error: "bg-red-500" };
+const STATE_TEXT: Record<string, string> = { ready: "Ready", stopped: "Stopped", error: "Error", starting: "Starting", loading: "Loading" };
 
-function Row({ k, v }: { k: string; v: string }) {
+export default function Settings({ status, onClose, showTps, onShowTps }: { status: St; onClose: () => void; showTps: boolean; onShowTps: (on: boolean) => void }) {
+  const [tab, setTab] = useState<Tab>(() => {
+    const saved = sessionStorage.getItem("settings-tab");
+    return TABS.some(t => t.id === saved) ? saved as Tab : "Model";
+  });
+  useEffect(() => { try { sessionStorage.setItem("settings-tab", tab); } catch { /* ignore */ } }, [tab]);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, []);
+
   return (
-    <div className="flex justify-between gap-6 py-1.5 text-sm">
-      <span className="text-muted">{k}</span>
-      <span className="text-right break-all">{v}</span>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
+      <div role="dialog" aria-label="Settings" className="w-full max-w-3xl h-[min(46rem,100%)] flex overflow-hidden rounded-2xl bg-bg border border-line shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <nav aria-label="Settings sections" className="w-44 shrink-0 border-r border-line bg-panel p-2 flex flex-col gap-0.5">
+          <h2 className="px-2.5 pt-1.5 pb-3 text-base font-semibold">Settings</h2>
+          {TABS.map(({ id, icon: Icon }) => (
+            <button key={id} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}
+              className={"flex items-center gap-2.5 w-full rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors " + (tab === id ? "bg-panel-2 text-ink" : "text-muted hover:bg-panel-2 hover:text-ink")}>
+              <Icon size={15} strokeWidth={1.8} className={tab === id ? "text-accent" : ""} />{id}
+            </button>
+          ))}
+        </nav>
+        <div className="min-w-0 flex-1 flex flex-col">
+          <div className="flex items-center justify-between pl-6 pr-3 h-12 shrink-0">
+            <h2 className="text-base font-semibold">{tab}</h2>
+            <button onClick={onClose} title="Close" aria-label="Close" className="p-1.5 rounded-lg text-muted hover:text-ink hover:bg-panel-2"><X size={17} /></button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto px-6 pb-6 space-y-6">
+            {tab === "Model" && <ModelTab status={status} showTps={showTps} onShowTps={onShowTps} />}
+            {tab === "Tuning" && <ModelEditor state={status.state} />}
+            {tab === "Plugins" && <Plugins />}
+            {tab === "Connections" && <ConnectionsTab />}
+            {tab === "App" && <AppTab />}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-type Host = { host: string; user: string; port: number; read_ok: boolean };
-
-function SshHosts() {
-  const [hosts, setHosts] = useState<Record<string, Host>>({});
-  const [pub, setPub] = useState("");
-  const [f, setF] = useState({ name: "", host: "", user: "", port: "22", read_ok: true });
-  const [scan, setScan] = useState<{ keys: string; fingerprint: string } | null>(null);
-  const [msg, setMsg] = useState("");
-  const load = () => invoke<Record<string, Host>>("ssh_hosts").then(setHosts).catch(() => {});
-  useEffect(() => { load(); }, []);
-  const inp = "rounded-lg border border-line bg-panel px-2 py-1 text-sm min-w-0";
-  async function check() {
-    setMsg("");
-    try { setScan(await invoke("ssh_scan", { host: f.host, port: Number(f.port) || 22 })); } catch (e) { setMsg(String(e)); }
-  }
-  async function save(pin: boolean) {
-    try {
-      if (pin && scan) await invoke("ssh_pin", { keys: scan.keys });
-      await invoke("ssh_save_host", { name: f.name, host: f.host, user: f.user, port: Number(f.port) || 22, readOk: f.read_ok });
-      setScan(null); setF({ name: "", host: "", user: "", port: "22", read_ok: true }); load();
-    } catch (e) { setMsg(String(e)); }
-  }
-  return (
-    <section>
-      <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">SSH hosts</h3>
-      {Object.keys(hosts).length === 0 && <div className="text-sm text-muted py-1">No servers yet. Add one so the assistant can look into it for you.</div>}
-      {Object.entries(hosts).map(([n, h]) => (
-        <div key={n} className="flex items-center gap-2 py-1 text-sm">
-          <span className="flex-1">{n} <span className="text-muted">{h.user}@{h.host}:{h.port}{h.read_ok ? " · reads allowed" : ""}</span></span>
-          <button className="text-muted hover:text-red-600 text-xs underline" onClick={() => invoke("ssh_delete_host", { name: n }).then(load)}>remove</button>
-        </div>
-      ))}
-      <div className="grid grid-cols-2 gap-2 mt-2">
-        <input className={inp} placeholder="Name (e.g. web1)" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-        <input className={inp} placeholder="Host or IP" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} />
-        <input className={inp} placeholder="User" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} />
-        <input className={inp} placeholder="Port" value={f.port} onChange={(e) => setF({ ...f, port: e.target.value })} />
-      </div>
-      <label className="flex items-center gap-2 text-sm mt-2"><input type="checkbox" checked={f.read_ok} onChange={(e) => setF({ ...f, read_ok: e.target.checked })} /> Let the assistant run read-only commands without asking</label>
-      {!scan && <button disabled={!f.name || !f.host || !f.user} onClick={check} className="mt-2 rounded-lg bg-accent text-accent-fg px-3 py-1 text-sm disabled:opacity-40">Check server</button>}
-      {scan && (
-        <div className="mt-2 rounded-lg border border-line p-2 text-xs">
-          <div className="mb-1">Does this fingerprint match your server?</div>
-          <div className="font-mono break-all mb-2">{scan.fingerprint}</div>
-          <button onClick={() => save(true)} className="rounded-lg bg-accent text-accent-fg px-3 py-1 text-sm mr-2">Yes, trust and save</button>
-          <button onClick={() => setScan(null)} className="text-muted underline">Cancel</button>
-        </div>
-      )}
-      {msg && <div className="text-xs text-red-600 mt-1 break-all">{msg}</div>}
-      <div className="mt-2 text-xs text-muted">
-        Add this key to the server's <span className="font-mono">~/.ssh/authorized_keys</span>:
-        {pub ? <div className="font-mono break-all select-all mt-1 p-2 rounded-lg bg-panel text-ink">{pub}</div>
-          : <button className="ml-1 underline" onClick={() => invoke<string>("ssh_public_key").then(setPub).catch((e) => setMsg(String(e)))}>show key</button>}
-      </div>
-    </section>
-  );
-}
-
-export default function Settings({ status, onClose, showTps, onShowTps }: { status: St; onClose: () => void; showTps: boolean; onShowTps: (on: boolean) => void }) {
+function ModelTab({ status, showTps, onShowTps }: { status: St; showTps: boolean; onShowTps: (on: boolean) => void }) {
   const [info, setInfo] = useState<Info | null>(null);
-  const [dir, setDir] = useState("");
-  const [web, setWeb] = useState<boolean | null>(null);
-  const [offline, setOffline] = useState<boolean | null>(null);
-  const [webBusy, setWebBusy] = useState(false);
-  const [mem, setMem] = useState<{ id: number; text: string }[]>([]);
-  const [tab, setTab] = useState<(typeof TABS)[number]>(() => (TABS as readonly string[]).includes(sessionStorage.getItem("settings-tab") ?? "") ? sessionStorage.getItem("settings-tab") as any : "General");
-  useEffect(() => { try { sessionStorage.setItem("settings-tab", tab); } catch { /* ignore */ } }, [tab]);
-  const loadMem = () => invoke<{ id: number; text: string }[]>("memories_list").then(setMem).catch(() => {});
-
   useEffect(() => {
     let alive = true;
     const pull = () => invoke<Info>("model_info").then((i) => { if (alive) setInfo(i); }).catch(() => {});
     pull();
-    loadMem();
-    invoke<string>("data_dir").then(setDir).catch(() => {});
-    invoke<string | null>("get_setting", { key: "web_access" }).then(value => setWeb(value !== "off")).catch(() => {});
-    invoke<boolean>("offline_get").then(setOffline).catch(() => {});
     const t = setInterval(pull, 2000);
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", esc);
-    return () => { alive = false; clearInterval(t); window.removeEventListener("keydown", esc); };
+    return () => { alive = false; clearInterval(t); };
   }, []);
 
   const st = info?.status ?? null;
@@ -112,221 +83,279 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
   const generating = typeof live?.tokens_per_s === "number";
   const tps = generating ? live.tokens_per_s : last?.predicted_per_second;
   const pre = last?.prompt_per_second;
-  const ctx = info?.context ? Number(info.context).toLocaleString() + " tokens" : "–";
+  const stopped = status.state === "stopped" || status.state === "error";
+  const gpuStats = gpu ? [gpu.util_pct != null && `${gpu.util_pct}% load`, gpu.temp_c != null && `${gpu.temp_c}°C`, gpu.power_w != null && `${num(gpu.power_w, 0)} W`].filter(Boolean).join(" · ") : "";
 
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-2xl h-[min(44rem,100%)] flex flex-col overflow-hidden rounded-2xl bg-bg border border-line shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 h-12 border-b border-line">
-          <h2 className="font-medium">Settings</h2>
-          <button onClick={onClose} title="Close" className="text-muted hover:text-ink"><X size={18} /></button>
+  return <>
+    <Section title="Current model">
+      <div className="flex items-center gap-4 px-3.5 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2 min-w-0">
+            <span className="font-semibold truncate">{info?.model || status.model || "No model"}</span>
+            {info?.quant && <span className="shrink-0 rounded-md bg-panel-2 px-1.5 py-px text-[11px] text-muted">{info.quant}</span>}
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-muted mt-0.5">
+            <span className={`size-1.5 rounded-full ${STATE_DOT[status.state] ?? "bg-gold"}`} />
+            {STATE_TEXT[status.state] ?? status.state}{status.state === "ready" && st?.uptime_s != null ? ` for ${dur(st.uptime_s)}` : ""}
+          </div>
         </div>
-        <div className="flex min-h-0 flex-1">
-        <nav aria-label="Settings sections" className="w-36 shrink-0 border-r border-line p-2 space-y-0.5">
-          {TABS.map(t => <button key={t} aria-current={tab === t ? "page" : undefined} onClick={() => setTab(t)} className={"w-full rounded-lg px-2.5 py-1.5 text-left text-sm " + (tab === t ? "bg-panel text-ink" : "text-muted hover:bg-panel hover:text-ink")}>{t}</button>)}
-        </nav>
-        <div className="min-w-0 flex-1 overflow-auto px-5 py-4 space-y-5">
-          {tab === "General" && <>
-          <section>
-            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Model</h3>
-            <Row k="Name" v={info?.model || status.model || "–"} />
-            <Row k="Quantization" v={info?.quant || "–"} />
-            <Row k="Context window" v={ctx} />
-            <Row k="KV cache" v={info?.kv || "–"} />
-            <Row k="Engine" v={st?.engine ? String(st.engine) : "–"} />
-            <Row k="Status" v={status.state + (status.state === "ready" ? ` · up ${dur(st?.uptime_s)}` : "")} />
-            <button className="mt-2 rounded-lg border border-line px-3 py-1.5 text-sm hover:bg-panel" onClick={() => invoke(status.state === "stopped" || status.state === "error" ? "model_start" : "model_stop").catch(error => window.alert(String(error)))}>{status.state === "stopped" || status.state === "error" ? "Start model" : "Stop model"}</button>
-          </section>
-          <section>
-            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Speed</h3>
-            <label className="flex items-center justify-between gap-4 py-2 text-sm">Show tokens per second in composer<input type="checkbox" checked={showTps} onChange={async e => { const on = e.target.checked; onShowTps(on); try { await invoke("set_setting", { key: "show_tps", value: on ? "1" : "0" }); } catch (error) { onShowTps(!on); window.alert(String(error)); } }} /></label>
-            <Row k={generating ? "Generating now" : "Last reply"} v={tps != null ? `${num(tps)} tokens/s` : "–"} />
-            <Row k="Prompt reading" v={pre != null ? `${num(pre, 0)} tokens/s` : "–"} />
-            {generating && <Row k="Average this reply" v={`${num(live.tokens_per_s_mean)} tokens/s`} />}
-          </section>
-          <section>
-            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">This computer</h3>
-            <Row k="GPU" v={gpu?.name ?? "–"} />
-            <Row k="GPU memory" v={gpu ? `${num((gpu.used_mib ?? 0) / 1024)} / ${num((gpu.total_mib ?? 0) / 1024)} GiB` : "–"} />
-            <Row k="GPU load" v={gpu ? `${gpu.util_pct ?? "–"}%${gpu.temp_c != null ? ` · ${gpu.temp_c}°C` : ""}${gpu.power_w != null ? ` · ${num(gpu.power_w, 0)} W` : ""}` : "–"} />
-            <Row k="CPU" v={info?.cpu?.name || "–"} />
-            <Row k="CPU load" v={info?.cpu ? `${num(info.cpu.load, 0)}%` : "–"} />
-            <Row k="System memory" v={ram ? `${num(ram.used_gib)} / ${num(ram.total_gib)} GiB` : "–"} />
-            {info?.cpu?.server_ram_gib != null && <Row k="Model server memory" v={`${num(info.cpu.server_ram_gib)} GiB`} />}
-          </section>
-          </>}
-          {tab === "Model" && <>
-          <ModelEditor state={status.state} />
-          <ModelSetup />
-          <StrataUpdate />
-          </>}
-          {tab === "Plugins" && <Plugins />}
-          {tab === "App" && <>
-          <section>
-            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Memory</h3>
-            <div className="text-sm text-muted py-1">Cross-chat memory is disabled. Any saved legacy entries can be removed below.</div>
-            <ul className="max-h-40 overflow-auto">
-              {mem.map((m) => (
-                <li key={m.id} className="flex items-start gap-2 py-1 text-sm">
-                  <span className="flex-1">{m.text}</span>
-                  <button className="text-muted hover:text-red-600 text-xs underline" onClick={() => invoke("memory_delete", { id: m.id }).then(loadMem)}>forget</button>
-                </li>
-              ))}
-            </ul>
-          </section>
-          <Rollback />
-          <AppUpdates />
-          <section>
-            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">App</h3>
-            <Row k="Data folder" v={dir || "–"} />
-            <Row k="Model inference" v="On this computer" />
-            <p className="text-xs text-muted">Web tools, updates and SSH use the network. Chats, browser profiles and generated files are stored locally.</p>
-          </section>
-          </>}
-          {tab === "Connections" && <>
-          <section>
-            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Offline mode</h3>
-            <label className="flex items-center justify-between gap-4 py-2 text-sm">Keep LocalWORK off the internet<input type="checkbox" disabled={offline === null} checked={offline ?? false} onChange={async event => { const on = event.target.checked; setOffline(on); try { await invoke("set_offline", { on }); window.dispatchEvent(new Event("offline-changed")); } catch (error) { setOffline(!on); window.alert(String(error)); } }} /></label>
-            <p className="text-xs text-muted">Turns off web search, browsing and SSH tools, the plugin store and update checks. Chats you use while this is on stay offline later; each one asks before going online again. Commands you approve and programs started by plugins are not blocked, so they could still reach the network.</p>
-          </section>
-          <section>
-            <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Web tools</h3>
-            <label className="flex items-center justify-between gap-4 py-2 text-sm">Enable web search and browsing<input type="checkbox" disabled={web === null || webBusy} checked={web ?? false} onChange={async event => { const on = event.target.checked; const previous = web; setWeb(on); setWebBusy(true); try { await invoke("set_web_access", { on }); } catch (error) { setWeb(previous); window.alert(String(error)); } finally { setWebBusy(false); } }} /></label>
-            <p className="text-xs text-muted">Searches and page requests contact external services. This setting does not block networking from commands, updates or SSH.</p>
-          </section>
-          <SshHosts />
-          </>}
-        </div>
-        </div>
+        <Button variant={stopped ? "primary" : "default"} onClick={() => invoke(stopped ? "model_start" : "model_stop").catch(error => window.alert(String(error)))}>{stopped ? "Start model" : "Stop model"}</Button>
       </div>
-    </div>
-  );
+      <Row label="Context window"><Value>{info?.context ? `${Number(info.context).toLocaleString()} tokens` : "–"}</Value></Row>
+      <Row label="KV cache"><Value>{info?.kv || "–"}</Value></Row>
+      <Row label="Engine version"><Value>{st?.engine ? String(st.engine) : "–"}</Value></Row>
+    </Section>
+
+    <Section title="Speed">
+      <Row label={generating ? "Generating now" : "Last reply"} hint={generating ? `Average this reply: ${num(live.tokens_per_s_mean)} tokens/s` : undefined}><Value>{tps != null ? `${num(tps)} tokens/s` : "–"}</Value></Row>
+      <Row label="Reading the prompt"><Value>{pre != null ? `${num(pre, 0)} tokens/s` : "–"}</Value></Row>
+      <ToggleRow label="Show tokens per second in composer" checked={showTps} onChange={async on => { onShowTps(on); try { await invoke("set_setting", { key: "show_tps", value: on ? "1" : "0" }); } catch (error) { onShowTps(!on); window.alert(String(error)); } }} />
+    </Section>
+
+    <Section title="Hardware">
+      <Row label="Graphics card" hint={[gpu?.name, gpuStats].filter(Boolean).join(" · ") || undefined}>
+        {gpu ? <Meter used={gpu.used_mib ?? 0} total={gpu.total_mib ?? 0} text={`${num((gpu.used_mib ?? 0) / 1024)} / ${num((gpu.total_mib ?? 0) / 1024)} GiB`} /> : <Value>–</Value>}
+      </Row>
+      <Row label="Memory" hint={info?.cpu?.server_ram_gib != null ? `Model server uses ${num(info.cpu.server_ram_gib)} GiB` : undefined}>
+        {ram ? <Meter used={ram.used_gib} total={ram.total_gib} text={`${num(ram.used_gib)} / ${num(ram.total_gib)} GiB`} /> : <Value>–</Value>}
+      </Row>
+      <Row label="Processor" hint={info?.cpu?.name}><Value>{info?.cpu ? `${num(info.cpu.load, 0)}% load` : "–"}</Value></Row>
+    </Section>
+
+    <EngineSetup />
+  </>;
 }
 
-function AppUpdates() {
-  const [auto, setAuto] = useState<boolean | null>(null);
-  const [found, setFound] = useState<{ available: boolean; current: string; version?: string; notes?: string } | null>(null);
-  const [busy, setBusy] = useState("");
-  const [msg, setMsg] = useState("");
-  useEffect(() => { invoke<boolean>("auto_update_get").then(setAuto).catch(() => {}); }, []);
-  async function check() {
-    setBusy("Checking…"); setMsg("");
-    try { const r = await invoke<typeof found>("app_update_check"); setFound(r); if (r && !r.available) setMsg(`LocalWORK ${r.current} is the newest version.`); }
-    catch (e) { setMsg(String(e)); } finally { setBusy(""); }
-  }
-  async function install() {
-    setBusy("Downloading the update. LocalWORK restarts when it is installed…"); setMsg("");
-    try { await invoke("app_update_install"); } catch (e) { setMsg(String(e)); setBusy(""); }
-  }
-  const btn = "rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-panel-2 disabled:opacity-40";
-  return (
-    <section>
-      <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Updates</h3>
-      <label className="flex items-center justify-between gap-4 py-2 text-sm">Update automatically when LocalWORK opens<input type="checkbox" disabled={auto === null} checked={auto ?? false} onChange={async e => { const on = e.target.checked; setAuto(on); try { await invoke("auto_update_set", { on }); } catch (error) { setAuto(!on); setMsg(String(error)); } }} /></label>
-      <p className="text-xs text-muted">Off by default. When on, LocalWORK checks GitHub for a new signed release each time it opens, installs it and restarts. Chats and settings are kept. Skipped while offline mode is on.</p>
-      <div className="flex flex-wrap items-center gap-2 mt-2">
-        <button className={btn} disabled={!!busy} onClick={check}>Check for updates</button>
-        {found?.available && <button className="rounded-lg bg-accent text-accent-fg px-2.5 py-1 text-xs disabled:opacity-40" disabled={!!busy} onClick={install}>Install {found.version}</button>}
-        {busy && <span className="text-xs text-muted">{busy}</span>}
-      </div>
-      {found?.available && <p className="text-xs text-muted mt-1">Version {found.version} is available (you have {found.current}).{found.notes ? " " + found.notes.slice(0, 300) : ""}</p>}
-      {msg && <p role="status" className="text-xs mt-1 break-words">{msg}</p>}
-    </section>
-  );
-}
+type Chk = { git: boolean; message?: string; head?: string; behind?: number; changes?: string[] };
+type Applied = { ok: boolean; before: string; after: string; restart: string | null; log_tail: string };
 
-function ModelSetup() {
+/** Where Strata lives, which configuration it starts, and engine updates. */
+function EngineSetup() {
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [chk, setChk] = useState<Chk | null>(null);
+  const [res, setRes] = useState<Applied | null>(null);
+  const [err, setErr] = useState("");
+
   async function choose(config: boolean) {
-    setMessage(""); setBusy(true);
+    setMessage(""); setErr("");
     try {
       const path = await open(config
         ? { title: "Choose your Strata model configuration", filters: [{ name: "JSON", extensions: ["json"] }] }
         : { title: "Choose your Strata or PolyStrata folder", directory: true });
       if (typeof path === "string") {
         await invoke(config ? "set_model_config" : "set_strata_root", { path });
-        setMessage("Saved. Stop and start the model to use this configuration.");
+        setMessage("Saved. Stop and start the model to use it.");
       }
-    } catch (error) { setMessage(String(error)); }
-    finally { setBusy(false); }
+    } catch (error) { setErr(String(error)); }
   }
-  return <section>
-    <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Model setup</h3>
-    <div className="flex flex-wrap gap-2">
-      <button disabled={busy} onClick={() => choose(false)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose Strata or PolyStrata folder</button>
-      <button disabled={busy} onClick={() => choose(true)} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Choose model configuration</button>
-      <button disabled={busy} onClick={() => window.dispatchEvent(new Event("open-wizard"))} className="rounded-lg border border-line px-3 py-1 text-sm disabled:opacity-40">Run setup again…</button>
-    </div>
-    <p className="text-xs text-muted mt-2">Use a trusted Strata or PolyStrata configuration. PolyStrata runs more than Qwen (GLM, DeepSeek, Gemma and others); each model it sets up appears in the model menu. It selects the executable, model files and launch arguments. Setup also connects a model server you run yourself (LM Studio, Ollama, or Strata started on its own).</p>
-    {message && <p role="status" className="text-sm mt-2 break-all">{message}</p>}
-  </section>;
+  async function check() {
+    setBusy("Checking…"); setErr(""); setRes(null); setMessage("");
+    try { setChk(await invoke<Chk>("strata_update_check")); } catch (e) { setErr(String(e)); }
+    setBusy("");
+  }
+  async function apply() {
+    if (!confirm("Update the model engine now? The model stops, updates and restarts. Open chats are interrupted.")) return;
+    setBusy("Updating… this can take a few minutes"); setErr("");
+    try { setRes(await invoke<Applied>("strata_update_apply")); setChk(null); } catch (e) { setErr(String(e)); }
+    setBusy("");
+  }
+
+  return (
+    <Section title="Engine and setup">
+      <Row label="Engine folder" hint="Strata or PolyStrata. PolyStrata adds GLM, DeepSeek, Gemma and more.">
+        <Button small onClick={() => choose(false)}>Choose Strata folder</Button>
+      </Row>
+      <Row label="Model configuration" hint="Picks the model files and launch options.">
+        <Button small onClick={() => choose(true)}>Choose model configuration</Button>
+      </Row>
+      <Row label="Engine updates" hint={busy || (chk?.git && chk.behind === 0 ? `Up to date (${chk.head})` : chk && !chk.git ? chk.message : "Checking changes nothing until you confirm.")}>
+        <Button small disabled={!!busy} onClick={check}>Check for updates</Button>
+      </Row>
+      {chk?.git && !!chk.behind && (
+        <div className="px-3.5 py-2.5 text-sm">
+          {chk.behind} new change{chk.behind > 1 ? "s" : ""}:
+          <ul className="list-disc ml-5 text-xs text-muted my-1.5 space-y-0.5">{chk.changes?.map((c, i) => <li key={i}>{c}</li>)}</ul>
+          <Button variant="primary" small onClick={apply}>Update and restart the model</Button>
+        </div>
+      )}
+      {res && (
+        <div className="px-3.5 py-2.5 text-sm">
+          {res.ok ? `Updated (${res.before} → ${res.after}). The model is restarting.` : "The update did not finish cleanly."}
+          {!res.ok && <pre className="text-xs text-muted whitespace-pre-wrap mt-1">{[res.restart, res.log_tail].filter(Boolean).join("\n")}</pre>}
+        </div>
+      )}
+      <Row label="Setup wizard" hint="Also connects LM Studio, Ollama, or a server you run yourself.">
+        <Button small onClick={() => window.dispatchEvent(new Event("open-wizard"))}>Run setup again</Button>
+      </Row>
+      {(message || err) && <div className="px-3.5 py-2"><Message error={!!err}>{err || message}</Message></div>}
+    </Section>
+  );
+}
+
+function ConnectionsTab() {
+  const [web, setWeb] = useState<boolean | null>(null);
+  const [offline, setOffline] = useState<boolean | null>(null);
+  const [webBusy, setWebBusy] = useState(false);
+  useEffect(() => {
+    invoke<string | null>("get_setting", { key: "web_access" }).then(value => setWeb(value !== "off")).catch(() => {});
+    invoke<boolean>("offline_get").then(setOffline).catch(() => {});
+  }, []);
+  return <>
+    <Section title="Internet" note="Commands you approve and programs started by plugins are not blocked by either switch.">
+      <ToggleRow label="Offline mode" hint="Turns off web tools, SSH, the plugin store and update checks. Chats used offline ask before going online later."
+        checked={offline ?? false} disabled={offline === null}
+        onChange={async on => { setOffline(on); try { await invoke("set_offline", { on }); window.dispatchEvent(new Event("offline-changed")); } catch (error) { setOffline(!on); window.alert(String(error)); } }} />
+      <ToggleRow label="Enable web search and browsing" hint="Lets the assistant search and open web pages."
+        checked={web ?? false} disabled={web === null || webBusy}
+        onChange={async on => { const previous = web; setWeb(on); setWebBusy(true); try { await invoke("set_web_access", { on }); } catch (error) { setWeb(previous); window.alert(String(error)); } finally { setWebBusy(false); } }} />
+    </Section>
+    <SshHosts />
+  </>;
+}
+
+type Host = { host: string; user: string; port: number; read_ok: boolean };
+const EMPTY_HOST = { name: "", host: "", user: "", port: "22", read_ok: true };
+
+function SshHosts() {
+  const [hosts, setHosts] = useState<Record<string, Host>>({});
+  const [pub, setPub] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [f, setF] = useState(EMPTY_HOST);
+  const [scan, setScan] = useState<{ keys: string; fingerprint: string } | null>(null);
+  const [msg, setMsg] = useState("");
+  const load = () => invoke<Record<string, Host>>("ssh_hosts").then(setHosts).catch(() => {});
+  useEffect(() => { load(); }, []);
+  async function check() {
+    setMsg("");
+    try { setScan(await invoke("ssh_scan", { host: f.host, port: Number(f.port) || 22 })); } catch (e) { setMsg(String(e)); }
+  }
+  async function save() {
+    try {
+      if (scan) await invoke("ssh_pin", { keys: scan.keys });
+      await invoke("ssh_save_host", { name: f.name, host: f.host, user: f.user, port: Number(f.port) || 22, readOk: f.read_ok });
+      setScan(null); setF(EMPTY_HOST); setAdding(false); load();
+    } catch (e) { setMsg(String(e)); }
+  }
+  const names = Object.keys(hosts);
+  return (
+    <Section title="SSH servers" action={!adding && <Button small onClick={() => setAdding(true)}>Add server</Button>}>
+      {names.length === 0 && !adding && <div className="px-3.5 py-3 text-sm text-muted">No servers yet. Add one so the assistant can look into it for you.</div>}
+      {Object.entries(hosts).map(([n, h]) => (
+        <Row key={n} label={n} hint={`${h.user}@${h.host}:${h.port}${h.read_ok ? " · read-only commands run without asking" : ""}`}>
+          <Button variant="danger" small onClick={() => invoke("ssh_delete_host", { name: n }).then(load)}>Remove</Button>
+        </Row>
+      ))}
+      {adding && (
+        <div className="px-3.5 py-3 space-y-2.5">
+          <div className="grid grid-cols-2 gap-2">
+            <input className={input} placeholder="Name (e.g. web1)" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+            <input className={input} placeholder="Host or IP" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} />
+            <input className={input} placeholder="User" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} />
+            <input className={input} placeholder="Port" value={f.port} onChange={(e) => setF({ ...f, port: e.target.value })} />
+          </div>
+          <label className="flex items-center gap-2.5 text-sm">
+            <input type="checkbox" className="switch" checked={f.read_ok} onChange={(e) => setF({ ...f, read_ok: e.target.checked })} />
+            Run read-only commands without asking
+          </label>
+          {scan ? (
+            <div className="rounded-lg border border-line bg-panel p-2.5 text-xs space-y-2">
+              <div>Does this fingerprint match your server?</div>
+              <div className="font-mono break-all select-text">{scan.fingerprint}</div>
+              <div className="flex gap-1.5"><Button variant="primary" small onClick={save}>Trust and save</Button><Button variant="ghost" small onClick={() => setScan(null)}>Back</Button></div>
+            </div>
+          ) : (
+            <div className="flex gap-1.5">
+              <Button variant="primary" small disabled={!f.name || !f.host || !f.user} onClick={check}>Check server</Button>
+              <Button variant="ghost" small onClick={() => { setAdding(false); setF(EMPTY_HOST); setMsg(""); }}>Cancel</Button>
+            </div>
+          )}
+          <div className="text-xs text-muted">
+            Add this computer's key to the server's <span className="font-mono">~/.ssh/authorized_keys</span>.{" "}
+            {pub ? <div className="font-mono break-all select-all mt-1.5 p-2 rounded-lg bg-panel text-ink">{pub}</div>
+              : <button className="text-accent hover:underline" onClick={() => invoke<string>("ssh_public_key").then(setPub).catch((e) => setMsg(String(e)))}>Show key</button>}
+          </div>
+          <Message error>{msg}</Message>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function AppTab() {
+  const [dir, setDir] = useState("");
+  const [mem, setMem] = useState<{ id: number; text: string }[]>([]);
+  const loadMem = () => invoke<{ id: number; text: string }[]>("memories_list").then(setMem).catch(() => {});
+  useEffect(() => {
+    loadMem();
+    invoke<string>("data_dir").then(setDir).catch(() => {});
+  }, []);
+  return <>
+    <AppUpdates />
+    <Rollback />
+    <Section title="Storage" note="Chats, browser profiles and generated files stay on this computer. The model runs here too.">
+      <Row label="Data folder"><span className="text-xs text-muted break-all select-text">{dir || "–"}</span></Row>
+    </Section>
+    {mem.length > 0 && (
+      <Section title="Saved memories" note="Cross-chat memory is off. These are left over from older versions.">
+        {mem.map((m) => (
+          <Row key={m.id} label={<span className="text-muted">{m.text}</span>}>
+            <Button variant="danger" small onClick={() => invoke("memory_delete", { id: m.id }).then(loadMem)}>Forget</Button>
+          </Row>
+        ))}
+      </Section>
+    )}
+  </>;
+}
+
+function AppUpdates() {
+  const [version, setVersion] = useState("");
+  const [auto, setAuto] = useState<boolean | null>(null);
+  const [found, setFound] = useState<{ available: boolean; current: string; version?: string; notes?: string } | null>(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    invoke<boolean>("auto_update_get").then(setAuto).catch(() => {});
+    getVersion().then(setVersion).catch(() => {});
+  }, []);
+  async function check() {
+    setBusy("Checking…"); setMsg("");
+    try { const r = await invoke<typeof found>("app_update_check"); setFound(r); if (r && !r.available) setMsg("You have the newest version."); }
+    catch (e) { setMsg(String(e)); } finally { setBusy(""); }
+  }
+  async function install() {
+    setBusy("Downloading. LocalWORK restarts when it is installed…"); setMsg("");
+    try { await invoke("app_update_install"); } catch (e) { setMsg(String(e)); setBusy(""); }
+  }
+  return (
+    <Section title="Updates">
+      <Row label={`LocalWORK ${version || found?.current || ""}`.trim()} hint={busy || msg || (found?.available ? `Version ${found.version} is available.` : undefined)}>
+        {found?.available
+          ? <Button variant="primary" small disabled={!!busy} onClick={install}>Install {found.version}</Button>
+          : <Button small disabled={!!busy} onClick={check}>Check for updates</Button>}
+      </Row>
+      {found?.available && found.notes && <div className="px-3.5 py-2.5 text-xs text-muted whitespace-pre-wrap">{found.notes.slice(0, 300)}</div>}
+      <ToggleRow label="Update automatically when LocalWORK opens" hint="Installs signed releases from GitHub and restarts. Chats and settings are kept."
+        checked={auto ?? false} disabled={auto === null}
+        onChange={async on => { setAuto(on); try { await invoke("auto_update_set", { on }); } catch (error) { setAuto(!on); setMsg(String(error)); } }} />
+    </Section>
+  );
 }
 
 function Rollback() {
   const [vs, setVs] = useState<{ version: string; current: boolean }[]>([]);
   const [err, setErr] = useState("");
   useEffect(() => { invoke<{ version: string; current: boolean }[]>("rollback_list").then(setVs).catch(() => {}); }, []);
+  const older = vs.filter(v => !v.current);
+  if (!older.length) return null;
   return (
-    <section>
-      <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Versions</h3>
-      <div className="text-sm text-muted mb-1">Each version is saved when it first runs, and your chats are backed up before an update. Roll back if an update misbehaves.</div>
-      {vs.map((v) => (
-        <div key={v.version} className="flex items-center gap-2 py-1 text-sm">
-          <span className="flex-1">{v.version}{v.current ? " (running)" : ""}</span>
-          {!v.current && (
-            <button className="rounded-lg border border-line px-2 py-1 hover:border-accent" onClick={() => { if (confirm(`Roll back to version ${v.version}? The app will restart.`)) invoke("rollback_to", { version: v.version }).catch((e) => setErr(String(e))); }}>
-              Roll back to version
-            </button>
-          )}
-        </div>
+    <Section title="Previous versions" note="Your chats are backed up before every update. Roll back if an update misbehaves.">
+      {older.map((v) => (
+        <Row key={v.version} label={v.version}>
+          <Button small onClick={() => { if (confirm(`Roll back to version ${v.version}? The app will restart.`)) invoke("rollback_to", { version: v.version }).catch((e) => setErr(String(e))); }}>Roll back</Button>
+        </Row>
       ))}
-      {err && <div className="text-xs text-red-600">{err}</div>}
-    </section>
-  );
-}
-
-type Chk = { git: boolean; message?: string; head?: string; behind?: number; changes?: string[] };
-type Applied = { ok: boolean; before: string; after: string; restart: string | null; log_tail: string };
-
-function StrataUpdate() {
-  const [chk, setChk] = useState<Chk | null>(null);
-  const [res, setRes] = useState<Applied | null>(null);
-  const [busy, setBusy] = useState("");
-  const [err, setErr] = useState("");
-  async function check() {
-    setBusy("Checking…"); setErr(""); setRes(null);
-    try { setChk(await invoke<Chk>("strata_update_check")); } catch (e) { setErr(String(e)); }
-    setBusy("");
-  }
-  async function apply() {
-    if (!confirm("Update Strata (or PolyStrata) now? The model stops, updates, and restarts. Open chats are interrupted.")) return;
-    setBusy("Updating… this can take a few minutes"); setErr("");
-    try { setRes(await invoke<Applied>("strata_update_apply")); setChk(null); } catch (e) { setErr(String(e)); }
-    setBusy("");
-  }
-  return (
-    <section>
-      <h3 className="text-xs font-medium text-muted uppercase tracking-wide mb-1">Model engine</h3>
-      <div className="text-sm text-muted mb-1">Strata or PolyStrata runs the model. Checking looks only; nothing changes until you confirm.</div>
-      <button disabled={!!busy} onClick={check} className="rounded-lg border border-line px-3 py-1 text-sm hover:border-accent disabled:opacity-40">Check for model engine update</button>
-      {busy && <span className="ml-2 text-xs text-muted">{busy}</span>}
-      {chk && !chk.git && <div className="text-sm mt-2">{chk.message}</div>}
-      {chk?.git && chk.behind === 0 && <div className="text-sm mt-2">The engine is up to date ({chk.head}).</div>}
-      {chk?.git && !!chk.behind && (
-        <div className="mt-2 text-sm">
-          {chk.behind} new change{chk.behind > 1 ? "s" : ""} available:
-          <ul className="list-disc ml-5 text-xs text-muted my-1">{chk.changes?.map((c, i) => <li key={i}>{c}</li>)}</ul>
-          <button onClick={apply} className="rounded-lg bg-accent text-accent-fg px-3 py-1 text-sm">Update and restart the model</button>
-        </div>
-      )}
-      {res && (
-        <div className="mt-2 text-sm">
-          {res.ok ? `Updated (${res.before} to ${res.after}). The model is restarting; if it does not reach "ready", tell your coding agent.` : "The update did not finish cleanly."}
-          {!res.ok && <pre className="text-xs text-muted whitespace-pre-wrap mt-1">{[res.restart, res.log_tail].filter(Boolean).join(String.fromCharCode(10))}</pre>}
-        </div>
-      )}
-      {err && <div className="text-xs text-red-600 mt-1 break-all">{err}</div>}
-    </section>
+      {err && <div className="px-3.5 py-2"><Message error>{err}</Message></div>}
+    </Section>
   );
 }

@@ -100,3 +100,14 @@ textarea, input { caret-color: var(--color-ember); }
 /* UI chrome is not selectable; only chat messages, composer and form fields are */
 body { user-select: none; -webkit-user-select: none; cursor: default; }
 .prose, .prose *, .user-text, textarea, input, [contenteditable], pre, code { user-select: text; -webkit-user-select: text; }
+
+/* settings: on/off switch built on a real checkbox so it stays accessible */
+.switch { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 30px; height: 18px; border-radius: 999px; margin: 0;
+  background: var(--color-panel-2); border: 1px solid var(--color-line); cursor: pointer; transition: background-color .15s, border-color .15s; }
+.switch::before { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 999px; background: var(--color-muted);
+  transition: transform .15s var(--ease-out-soft), background-color .15s; }
+.switch:checked { background: var(--color-accent); border-color: var(--color-accent); }
+.switch:checked::before { transform: translateX(12px); background: var(--color-accent-fg); }
+.switch:disabled { opacity: .45; cursor: default; }
+.switch:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .switch, .switch::before { transition: none; } }

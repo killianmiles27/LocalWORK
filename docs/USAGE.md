@@ -25,7 +25,7 @@ Hover over one of your messages and choose Edit. In an empty composer, Up arrow 
 | Ctrl+N | New chat |
 | Ctrl+K | Search chats |
 | Ctrl+B | Show or hide the sidebar |
-| Ctrl+, | Settings |
+| Ctrl+, | Settings (Model, Tuning, Plugins, Connections, App) |
 | Up arrow (empty composer) | Edit your last message |
 | Enter / Shift+Enter | Send / new line |
 | Esc | Cancel an edit or clear the search |

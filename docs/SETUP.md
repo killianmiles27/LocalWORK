@@ -55,7 +55,7 @@ Then choose where projects live and whether web tools are on. The model indicato
 
 **Updates:** Settings → App → *Check for updates* installs a newer signed release. Turn on *Update automatically when LocalWORK opens* to have it check and install at each launch. It is off by default.
 
-Both paths can be changed later in **Settings → Model setup**. Stop and start the model after changing them. Existing conversations and files are retained.
+Both paths can be changed later in **Settings → Model → Engine and setup**. Stop and start the model after changing them. Existing conversations and files are retained.
 
 For scripted launches, `LOCALWORK_STRATA_ROOT` and `LOCALWORK_MODEL_CONFIG` provide defaults when no paths have been saved. A `strata` folder beside the executable can also be discovered. Saved selections take precedence. Settings live in `%LOCALAPPDATA%\Workbench\settings.json`; normal setup does not require editing that file.
 

@@ -13,7 +13,7 @@ const results = [];
 const invoke = (cmd, args) => page.evaluate(({ cmd, args }) => window.__TAURI_INTERNALS__.invoke(cmd, args), { cmd, args });
 const panel = page.getByRole("complementary", { name: "Document and visual workspace" });
 const selectFile = async path => {
-  await panel.locator("#workspace-file").selectOption(`file:${path}`);
+  await panel.getByRole("combobox", { name: "File or visual", exact: true }).selectOption(`file:${path}`);
   await panel.getByText("Preparing preview…", { exact: true }).waitFor({ state: "hidden", timeout: 50000 });
 };
 async function check(id, name, body) {
@@ -53,7 +53,7 @@ await check("T-W3", "Recovery/export copies preserve originals and refuse overwr
   await assert.rejects(() => invoke("document_preview", { id: "workspace-fixture", path: "../../outside.md", revision: null }));
 });
 await check("T-W4", "Open Intelligent UI controls, explicit follow-up and HTML export", async () => {
-  await panel.locator("#workspace-file").selectOption({ label: "Interactive fixture" });
+  await panel.getByRole("combobox", { name: "File or visual", exact: true }).selectOption({ label: "Interactive fixture" });
   const widget = panel.frameLocator("iframe");
   const contrast = await widget.locator("h2").evaluate(el => {
     const luminance = color => {
@@ -84,9 +84,10 @@ await check("T-W4", "Open Intelligent UI controls, explicit follow-up and HTML e
 });
 await check("T-W5", "Ask for changes fills the composer without sending", async () => {
   await selectFile("memo.md");
+  await page.locator("textarea").first().fill(""); // T-W4 leaves its follow-up in the composer; drafts append to it
   const before = await invoke("load_messages", { id: "workspace-fixture" });
-  await panel.getByRole("button", { name: "Ask for changes", exact: true }).click();
-  assert.match(await page.locator("textarea").first().inputValue(), /Revise the current file "memo\.md"/);
+  await panel.getByRole("button", { name: "Ask", exact: true }).click();
+  assert.match(await page.locator("textarea").first().inputValue(), /^Revise "memo\.md"\. /);
   assert.equal((await invoke("load_messages", { id: "workspace-fixture" })).length, before.length);
 });
 // Tauri intentionally makes invoke immutable. Intercept its documented fetch IPC
@@ -134,6 +135,9 @@ await check("T-D1", "External links use the OS command and leave the app in plac
   await assert.rejects(() => invoke("open_external", { url: "file:///C:/Windows/System32/cmd.exe" }));
 });
 await check("T-D2", "TPS is visible, configurable and persists across reload", async () => {
+  // The readout hides when the composer is narrow, so measure it with the file pane closed.
+  const hide = page.getByRole("button", { name: "Hide file pane", exact: true });
+  if (await hide.count()) await hide.click();
   await page.getByTestId("composer-tps").getByText("23.5 tok/s").waitFor({ timeout: 20000 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const toggle = page.getByRole("checkbox", { name: "Show tokens per second in composer" });

@@ -4,7 +4,7 @@ Plugins keep the core app generic. Anything specific to one machine (model files
 
 Plugins are **declarative**: a folder with a `plugin.json`. They inject no code into the UI or the Rust host. They can add model modes, skills, system-prompt text, stdio MCP servers and composer status items.
 
-Code: `src-tauri/src/plugins.rs` (loading, modes, effort), `src/StatusItems.tsx` (status bar), `src/ModeSwitcher.tsx` (mode and effort menu), `src/SettingsModel.tsx` (Plugins and Model tabs in Settings).
+Code: `src-tauri/src/plugins.rs` (loading, modes, effort), `src/StatusItems.tsx` (status bar), `src/ModeSwitcher.tsx` (mode and effort menu), `src/SettingsModel.tsx` (Plugins and Tuning tabs in Settings), `src/settings-ui.tsx` (shared Settings rows, sections and switches).
 
 ## Where plugins are found
 
@@ -63,7 +63,7 @@ A later folder overrides an earlier plugin with the same `id`. The app ships wit
 
 A `tooltip` can include `${path}` values from the source. To add a source, write a read-only Tauri command, register it in `lib.rs`, then add it to the allowlist. Never allowlist a command that changes state.
 
-Run configs that sit in `<strataRoot>/profiles` but that no plugin names are still listed, under the "Profiles" group. Settings → Model → *Save as new…* creates such profiles.
+Run configs that sit in `<strataRoot>/profiles` but that no plugin names are still listed, under the "Profiles" group. Settings → Tuning → *Duplicate* creates such profiles.
 
 ## Mode switching and effort
 
@@ -76,7 +76,7 @@ Run configs that sit in `<strataRoot>/profiles` but that no plugin names are sti
 `run_config_read` and `run_config_save` (in `src-tauri/src/runconfig.rs`) only touch the current config, a mode's config or a file in the profiles folder:
 - Saving over an existing file backs it up first (`.json.bak-<unix time>`).
 - The editor cannot change `exe`, `cwd`, `lib_dirs` or `env`.
-- *Save as new* writes `<profiles>/<name>.json` and gives the copy its own engine log.
+- *Duplicate* (Settings → Tuning) writes `<profiles>/<name>.json` and gives the copy its own engine log.
 
 ## The official plugins
 
@@ -85,7 +85,7 @@ Run configs that sit in `<strataRoot>/profiles` but that no plugin names are sti
 
 ## Sharing plugins
 
-- **Import:** Settings → Plugins → *Import .zip…* or *Import folder…*. The zip or folder can hold one plugin (its `plugin.json` at the top or in one subfolder) or a pack: several subfolders, each with a `plugin.json`. Importing replaces an installed copy with the same `id`.
+- **Import:** Settings → Plugins → *Import .zip* or *Import folder*. The zip or folder can hold one plugin (its `plugin.json` at the top or in one subfolder) or a pack: several subfolders, each with a `plugin.json`. Importing replaces an installed copy with the same `id`.
 - **Export:** each plugin's *Export* button writes a zip that Import accepts.
 - **Get plugins:** Settings → Plugins → *Get plugins* lists every folder with a `plugin.json` in the GitHub repositories you add (`owner/repo`, a repository link, or a `/tree/<branch>/<folder>` link). The official repository is listed by default. *Install* downloads the repository from GitHub and imports that folder like *Import folder…*; when the repository has a higher `version` than the installed copy, the button reads *Update*. Plugins that start programs arrive turned off. The list of repositories is saved as `pluginSources` in `settings.json`. Nothing is fetched while offline mode is on.
 - **Publish:** put the plugin in a public GitHub repository, one folder per plugin with the folder name equal to the `id`, and share the link. For an official plugin, open a pull request on [LocalWORK-plugins](https://github.com/killianmiles27/LocalWORK-plugins). `scripts/package-plugins.ps1` (reading a checkout of that repository) writes `dist-plugins/<id>_<version>.zip` for each plugin and `LocalWORK-recommended-plugins_<app version>.zip` with all of them, for the release.
