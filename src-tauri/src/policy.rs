@@ -600,11 +600,12 @@ mod unix_tests {
     }
 
     #[test]
-    fn linux_commands_outside_the_workspace_ask_in_automatic_mode() {
+    fn linux_commands_outside_the_workspace_need_a_step_by_step_approval() {
         let ws = Path::new("/home/me/projects/draft");
         for cmd in ["cat /home/me/.ssh/id_ed25519", "cp a.md ~/out.md", "yay -S foo"] {
-            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Ask { .. }), "{cmd}");
+            assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Ask { .. }), "{cmd}");
         }
+        assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": "sudo pacman -S foo"}), ws, true, &[]), Decision::Ask { .. }));
         for cmd in ["python3 build.py", "grep -r todo . > /dev/null", "cat /home/me/projects/draft/a.md"] {
             assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Allow), "{cmd}");
         }
