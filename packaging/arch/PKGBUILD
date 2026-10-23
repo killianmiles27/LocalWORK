@@ -12,7 +12,7 @@ provides=('localwork')
 conflicts=('localwork')
 options=('!strip' '!debug')
 source=("LocalWORK_${pkgver}_amd64.deb::${url}/releases/download/v${pkgver}/LocalWORK_${pkgver}_amd64.deb")
-sha256sums=('SKIP')
+sha256sums=('56dc274f2685f00f1dd36743d2a41b75ce10d1c8904c82b898c897a3e47ac7e6')
 
 package() {
   bsdtar -xf data.tar.* -C "$pkgdir"
