@@ -35,10 +35,9 @@ scripts/e2e/check-agent-context.py exercises the real agent against an isolated 
 Earlier single-machine experiments do not establish a supported hardware minimum or broad model success rate. Choose model/context/cache settings using Strata's current documentation and measurements on the target hardware. Do not apply one developer's benchmark configuration as a universal default.
 
 Execution stage hints are per run/request, not profile edits: only an explicit successful plan stage execution lowers native-provider reasoning effort while keeping configured thinking. Verification/analysis, tool errors and new tasks restore configured effort. Request wall/first-event timing is measured by the agent; OpenAI-compatible numeric timings (prompt/decode/cache) are retained only when the provider supplies them. These metadata events are never sent back to the model. Do not treat first streamed event wait as prefill time or promise a speedup from fixture checks.
-## Model library and optional cloud routing
 
-The picker groups profiles by config model_name, while localPickerConfigs controls visibility without deleting configurations. Profile submenus are bounded to the current window. Cloud model display choices are separate from the fetched provider catalogs. Privacy/model/app downloads show explicit stages and measured byte progress; upstream llama.cpp release markers are followed to find the CPU runtime.
+## Model library
+
+The picker groups profiles by config model_name, while localPickerConfigs controls visibility without deleting configurations. Profile submenus are bounded to the current window. Engine/model/plugin/app downloads show explicit stages and measured byte progress; unknown sizes never show a made-up percentage.
 
 The model library in first-run setup and Settings delegates supported model setup and calibration to upstream PolyStrata. Downloading an engine does not bundle weights; users explicitly choose each download. Existing Strata and per-config PolyStrata paths remain supported. Calibration requires stopping the running model and is not available for every family.
-
-The optional host router sends agent requests through an authenticated loopback proxy. Local only remains default. Automatic requires CPU privacy checking and currently uses availability, estimated context and repeated tool-error rules. It does not use Switchyard or a general task-capability classifier. Routed agents disable native Strata-only compaction. See [CLOUD.md](CLOUD.md) for trust boundaries, subscription-sign-in limitations and unverified live-service paths.

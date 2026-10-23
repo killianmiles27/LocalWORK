@@ -4,8 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import DownloadProgress, { type DownloadState } from "./DownloadProgress";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AppWindow, Cloud, Cpu, Globe, Puzzle, SlidersHorizontal, X } from "lucide-react";
-import CloudSettings from "./CloudSettings";
+import { AppWindow, Cpu, Globe, Puzzle, SlidersHorizontal, X } from "lucide-react";
 import ModelLibrary from "./ModelLibrary";
 import LocalPickerSettings from "./LocalPickerSettings";
 import { ModelEditor, Plugins } from "./SettingsModel";
@@ -14,7 +13,6 @@ import { Button, Message, Meter, Row, Section, ToggleRow, Value, input } from ".
 const TABS = [
   { id: "Model", icon: Cpu },
   { id: "Tuning", icon: SlidersHorizontal },
-  { id: "Cloud", icon: Cloud },
   { id: "Plugins", icon: Puzzle },
   { id: "Connections", icon: Globe },
   { id: "App", icon: AppWindow },
@@ -61,7 +59,6 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
           <div className="min-h-0 flex-1 overflow-auto px-3 sm:px-6 pb-6 space-y-6">
             {tab === "Model" && <ModelTab status={status} showTps={showTps} onShowTps={onShowTps} />}
             {tab === "Tuning" && <ModelEditor state={status.state} />}
-            {tab === "Cloud" && <CloudSettings />}
             {tab === "Plugins" && <Plugins />}
             {tab === "Connections" && <ConnectionsTab />}
             {tab === "App" && <AppTab />}
@@ -131,7 +128,7 @@ function ModelTab({ status, showTps, onShowTps }: { status: St; showTps: boolean
 
     <LocalPickerSettings />
     <EngineSetup />
-    <ModelLibrary onChanged={() => window.dispatchEvent(new Event("cloud-changed"))} />
+    <ModelLibrary onChanged={() => window.dispatchEvent(new Event("models-changed"))} />
   </>;
 }
 
@@ -212,7 +209,7 @@ function ConnectionsTab() {
   }, []);
   return <>
     <Section title="Internet" note="Commands you approve and programs started by plugins are not blocked by either switch.">
-      <ToggleRow label="Offline mode" hint="Turns off cloud models, web tools, SSH, the plugin store and update checks. Chats used offline ask before going online later."
+      <ToggleRow label="Offline mode" hint="Turns off web tools, SSH, the plugin store and update checks. Chats used offline ask before going online later."
         checked={offline ?? false} disabled={offline === null}
         onChange={async on => { setOffline(on); try { await invoke("set_offline", { on }); window.dispatchEvent(new Event("offline-changed")); } catch (error) { setOffline(!on); window.alert(String(error)); } }} />
       <ToggleRow label="Enable web search and browsing" hint="Lets the assistant search and open web pages."
@@ -302,7 +299,7 @@ function AppTab() {
   return <>
     <AppUpdates />
     <Rollback />
-    <Section title="Storage" note="Chats, browser profiles and generated files are saved on this computer. Cloud models receive conversation data only when cloud routing is enabled.">
+    <Section title="Storage" note="Chats, browser profiles and generated files stay on this computer. The model runs here too.">
       <Row label="Data folder"><span className="text-xs text-muted break-all select-text">{dir || "–"}</span></Row>
     </Section>
     {mem.length > 0 && (

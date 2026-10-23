@@ -59,8 +59,6 @@ The first-run wizard asks whether you already have a model:
 
 Then choose where projects live and whether web tools are on. The model indicator turns ready once the model has loaded, which can take a while the first time.
 
-Cloud use is optional and off by default. See [cloud providers, routing and privacy](CLOUD.md) for setup and limits. Cloud chats still need the configured Python runtime for Workbench tools.
-
 **Make it fast:** once the model runs, ask it to *tune yourself for this PC*. The model-tuning skill reads your hardware and Strata's options, then writes launch profiles (Sprint 16K, 64K, 128K, 256K) that you switch between in the mode menu. On the same PC, tuned settings can take a model from 16K context at 30 tokens/s to 256K at 40+.
 
 **Add extras:** the app ships without plugins. Settings → Plugins → *Get plugins* lists the [official plugins](https://github.com/killianmiles27/LocalWORK-plugins) (CPU/GPU bar, electricity cost per task) with an *Install* button each, and you can add other GitHub plugin repositories there.

@@ -1,6 +1,6 @@
 [package]
 name = "localwork"
-version = "0.1.3"
+version = "0.1.4"
 description = "Local Work-Style AI desktop app"
 license = "Apache-2.0"
 repository = "https://github.com/killianmiles27/LocalWORK"
@@ -27,14 +27,11 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 zip = { version = "4", default-features = false, features = ["deflate"] }
 toml_edit = "0.25"
-ring = "0.17"
 base64 = "0.22"
-url = "2"
 sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "component"] }
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_Security",
-  "Win32_Security_Credentials",
   "Win32_System_JobObjects",
   "Win32_System_Threading",
   "Win32_UI_Shell",

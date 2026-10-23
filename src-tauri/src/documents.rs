@@ -364,10 +364,13 @@ pub async fn document_preview(
             }
             ("html", result?)
         } else if kind == "pdf" {
-            (
-                "external",
-                "PDF previews are available in your installed PDF viewer.".into(),
-            )
+            // The pane shows the bytes in the WebView's built-in PDF viewer through a blob URL.
+            use base64::Engine;
+            let bytes = read_bounded(&source, MAX_PREVIEW)?;
+            if !bytes.starts_with(b"%PDF-") {
+                return Err("This file does not look like a PDF".into());
+            }
+            ("pdf", base64::engine::general_purpose::STANDARD.encode(bytes))
         } else {
             (
                 if kind == "html" { "html" } else { "text" },

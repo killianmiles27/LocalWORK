@@ -9,7 +9,6 @@ const modes = [
   { id: "gemma-256", modelId: "gemma-4", modelLabel: "Gemma 4", profileLabel: "256K", label: "gemma-256", config: "gemma-256.json", context: 262144, found: true, active: false, pickerVisible: true },
   { id: "swift-iq2-xs", modelId: "swift-iq2", modelLabel: "Swift IQ2 XS (older)", profileLabel: "128K", label: "swift-iq2-xs", config: "old.json", context: 131072, found: true, active: false, pickerVisible: false },
 ];
-const config = { routing: "manual", cloudDefault: null, privacyGate: "off", providers: [], chatgpt: { signedIn: true, models: ["gpt-6.1-sol"], visibleModels: null } };
 const calls: { cmd: string; args: any }[] = [];
 const listeners = new Map<number, (event: any) => void>();
 let callbackId = 0;
@@ -20,10 +19,7 @@ let callbackId = 0;
     calls.push({ cmd, args });
     switch (cmd) {
       case "modes_list": return { modes, effort: { effort: "medium", config: "medium", override: null, options: ["none", "low", "medium", "high"] } };
-      case "cloud_get": return structuredClone(config);
-      case "chat_route_get": return { routing: config.routing, model: null, locked: false };
       case "mode_switch": return;
-      case "chat_route_set": return;
       case "plugin:event|listen": return args.handler;
       case "plugin:event|unlisten": listeners.delete(args.eventId); return;
       default: throw new Error(`Unexpected IPC ${cmd}`);
@@ -31,4 +27,4 @@ let callbackId = 0;
   },
 };
 
-createRoot(document.getElementById("root")!).render(<main className="bg-bg text-ink"><div style={{ position: "fixed", left: "min(600px, 48vw)", bottom: 32 }}><ModeSwitcher ready state="ready" onKey={() => {}} onError={e => { throw new Error(e); }} conv="fixture" ensureConversation={async () => "fixture"} running={false} /></div></main>);
+createRoot(document.getElementById("root")!).render(<main className="bg-bg text-ink"><div style={{ position: "fixed", left: "min(600px, 48vw)", bottom: 32 }}><ModeSwitcher ready state="ready" onKey={() => {}} onError={e => { throw new Error(e); }} running={false} /></div></main>);

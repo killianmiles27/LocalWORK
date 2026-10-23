@@ -12,7 +12,7 @@ export type VisualItem = { id: string; title: string; html: string; designSystem
 /** The file the assistant is changing right now, if any. */
 export type Activity = { path: string; busy: boolean; nonce: number };
 type FileEntry = { path: string; name: string; kind: string; size: number; modified: number | null };
-type Preview = { path: string; kind: string; format: "html" | "text" | "external"; content: string };
+type Preview = { path: string; kind: string; format: "html" | "text" | "pdf"; content: string };
 type Revision = { id: string; created: number; size: number };
 type Note = { quote: string; where: string; comment: string };
 type Picked = { text: string; where: string; top: number; left: number };
@@ -49,6 +49,19 @@ function blocks(md: string): string[] {
   }
   if (cur.length) out.push(cur.join("\n"));
   return out;
+}
+
+/** PDF bytes (base64) in the WebView's built-in viewer. No sandbox attribute: it disables that viewer. */
+function PdfFrame({ data, title }: { data: string; title: string }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    const raw = atob(data), buf = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+    const u = URL.createObjectURL(new Blob([buf], { type: "application/pdf" }));
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [data]);
+  return url ? <iframe src={url} title={title} className="h-full min-h-[70vh] w-full rounded-lg border border-line bg-card" /> : null;
 }
 
 function notesMessage(file: string, notes: Note[]): string {
@@ -327,7 +340,7 @@ export default function Workspace({ id, refresh, visuals, requested, browserTick
               onScroll={y => seen.current.set(selectedFile, { ...seen.current.get(selectedFile), scroll: y })}
               onSelect={frameSelect} onEdit={officeEdit} />
           : preview?.format === "html" ? <SandboxedUi html={preview.content} title={title} expanded />
-          : preview?.format === "external" ? <p className="text-sm text-muted p-6">{preview.content} Use Open above.</p>
+          : preview?.format === "pdf" ? <PdfFrame data={preview.content} title={title} />
           : preview?.kind === "md" ? <article className="prose bg-card rounded-lg p-6">{blocks(preview.content).map((b, i) =>
               <div key={i} className={freshBlocks && !freshBlocks.has(b) ? "lw-changed" : undefined}><Md components={{ img: ({ alt }) => <span>{alt ? `[Image: ${alt}]` : "[Image]"}</span>, a: ({ children }) => <span className="text-accent">{children}</span> }}>{b}</Md></div>)}</article>
           : preview ? <pre className="text-sm whitespace-pre-wrap break-words rounded-lg bg-card p-4">{preview.content.split(/\r?\n/).map((line, i) =>

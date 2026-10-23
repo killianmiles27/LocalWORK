@@ -21,7 +21,7 @@ try {
   const menu = page.getByRole("menu", { name: "Choose model" });
   const modelRows = menu.locator('button[role="menuitem"][aria-haspopup="menu"]');
   await page.waitForFunction(() => document.querySelectorAll('[role="menu"][aria-label="Choose model"] button[role="menuitem"][aria-haspopup="menu"]').length === 2);
-  assert.equal(await modelRows.count(), 2, "only Swift Q2 and Gemma 4 should appear as local model rows");
+  assert.equal(await modelRows.count(), 2, "only Swift Q2 and Gemma 4 should appear as model rows");
   await menu.getByRole("menuitem", { name: /Swift Q2/ }).hover();
   const profiles = page.getByRole("menu", { name: "Swift Q2 profiles" });
   await profiles.waitFor();
@@ -31,7 +31,6 @@ try {
   await page.screenshot({ path: resolve(reviewDir, "wide-right-submenu.png") });
   await profiles.getByRole("menuitemradio", { name: "256K" }).click();
   await page.waitForFunction(() => window.calls.some(c => c.cmd === "mode_switch" && c.args.id === "swift-q2-256"));
-  await page.waitForFunction(() => window.calls.some(c => c.cmd === "chat_route_set" && c.args.model === "local"));
 
   await trigger.click();
   const keyboardMenu = page.getByRole("menu", { name: "Choose model" });
@@ -56,5 +55,5 @@ try {
     if (viewport.width === 460) await page.screenshot({ path: resolve(reviewDir, "short-narrow-window.png") });
   }
   assert.deepEqual(errors, []);
-  console.log("PASS model picker: two local rows, two Swift profiles, mode switch pins local, right-side submenu, keyboard navigation and viewport-safe resizing; mocked IPC only");
+  console.log("PASS model picker: two model rows, two Swift profiles, mode switch, right-side submenu, keyboard navigation and viewport-safe resizing; mocked IPC only");
 } finally { await browser?.close(); await server.close(); }

@@ -35,7 +35,7 @@
 
 Say you've got a spreadsheet with fifteen years of your finances in it. Would you upload that to a chatbot? Yeah, me neither. That's why I made LocalWORK.
 
-By default the model runs on your PC, so your files stay on your PC. Local use needs no account or subscription. Optional cloud providers and ChatGPT subscription sign-in live in Settings → Cloud, with clear Local/Cloud choices and an optional CPU privacy filter. Cloud services have their own limits and costs; see [cloud and privacy](docs/CLOUD.md). You hand it a folder or some files, tell it what you want, and it does the work: reading the files, running the numbers, and writing the documents. You watch it happen in a pane next to the chat, and you can click into the result and edit it yourself.
+The model runs on your PC, so your files stay on your PC. There's no account, no subscription, no usage limits and no ads. You hand it a folder or some files, tell it what you want, and it does the work: reading the files, running the numbers, and writing the documents. You watch it happen in a pane next to the chat, and you can click into the result and edit it yourself.
 
 What LocalWORK itself adds:
 
@@ -55,7 +55,7 @@ The installer has the app and its tools. It does **not** include a model. The fi
 
 Updates are signed. You can check for them in Settings > App, or turn on automatic updates there (it's off by default).
 
-The chat picker groups local models with their profiles in a side menu. Choose which local profiles and cloud models appear through Settings; downloads show progress next to their controls.
+The chat picker groups local models with their profiles in a side menu. Choose which profiles appear in Settings → Model; downloads show progress next to their controls.
 
 ## What it does
 

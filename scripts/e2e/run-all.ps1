@@ -506,7 +506,7 @@ if (Wanted 'T-W1') {
 }
 
 # ---------------------------------------------------------------- uninstall
-if ((Wanted 'T-A1') -or (Wanted 'T-A2') -or (Wanted 'T-C1') -or (Wanted 'T-P1') -or (Wanted 'T-R1') -or (($Only -contains 'T-G1') -and $RealStrata)) {
+if ((Wanted 'T-A1') -or (Wanted 'T-A2') -or (Wanted 'T-C1') -or (Wanted 'T-P1') -or (($Only -contains 'T-G1') -and $RealStrata)) {
   New-Env
   $app = Start-App
   try {
@@ -516,7 +516,6 @@ if ((Wanted 'T-A1') -or (Wanted 'T-A2') -or (Wanted 'T-C1') -or (Wanted 'T-P1') 
       $nodeExe = Join-Path $repoRoot 'vendor\node\node.exe'
       $drivers = @()
       if ((Wanted 'T-P1') -and -not $RealStrata) { $drivers += 'setup' }
-      if ((Wanted 'T-R1') -and -not $RealStrata) { $drivers += 'routing' }
       if (Wanted 'T-A1') { $drivers += 'automatic' }
       if ((Wanted 'T-A2') -and -not $RealStrata) { $drivers += 'stop' }
       if (Wanted 'T-C1') { $drivers += 'context' }

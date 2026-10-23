@@ -110,7 +110,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
         {step === 0 && (
           <>
             <h2 className="text-lg font-medium mb-1">Welcome to LocalWORK</h2>
-            <p className="text-sm text-muted mb-3">LocalWORK is a work assistant that runs on an AI model on your own computer. Cloud AI is optional and off by default. First, a look at this PC:</p>
+            <p className="text-sm text-muted mb-3">LocalWORK is a work assistant that runs on an AI model on your own computer. Nothing you write is sent to a cloud AI. First, a look at this PC:</p>
             <Line ok={!!hw?.gpu} label="Graphics card" value={hw ? (hw.gpu ? `${hw.gpu.name} · ${g(hw.gpu.vram_gib)} video memory` : "No NVIDIA card detected (AMD cards may still work)") : "checking…"} />
             <Line ok={!!hw?.gpu && Number(hw.gpu.driver.split(".")[0]) >= 580} label="Driver" value={hw?.gpu ? `${hw.gpu.driver}${Number(hw.gpu.driver.split(".")[0]) < 580 ? " (Strata needs 580 or newer)" : ""}` : hw ? "not found" : "checking…"} />
             <Line ok={(hw?.ram_gib ?? 0) >= 30} label="Memory" value={hw ? g(hw.ram_gib) + ((hw.ram_gib ?? 0) < 30 ? " (Strata needs 32 GB)" : "") : "checking…"} />

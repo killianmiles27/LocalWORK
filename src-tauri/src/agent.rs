@@ -33,7 +33,6 @@ struct Inner {
 
 pub struct Agent {
     pub conv: String,
-    routing_mode: String,
     pub workspace: PathBuf,
     child: Mutex<Option<Child>>,
     inner: Mutex<Inner>,
@@ -335,15 +334,8 @@ pub fn get_or_start(
     st: &strata::Shared,
     conv: &str,
 ) -> Result<Arc<Agent>, String> {
-    let existing = agents.lock().unwrap().get(conv).cloned();
-    if let Some(a) = existing {
-        if a.busy() || a.routing_mode == crate::router::routing() {
-            return Ok(a);
-        }
-        // A routing change during a turn must take effect once that turn ends,
-        // including local agents that did not previously use the proxy.
-        agents.lock().unwrap().remove(conv);
-        a.retire();
+    if let Some(a) = agents.lock().unwrap().get(conv) {
+        return Ok(a.clone());
     }
     let (workspace, has_session) = {
         let c = db.lock().unwrap();
@@ -352,13 +344,12 @@ pub fn get_or_start(
     };
     let (port, key, model) = {
         let g = st.lock().unwrap();
-        if g.status.state != "ready" && !crate::router::available(&db, Some(conv)) {
+        if g.status.state != "ready" {
             return Err("The model is not ready yet.".into());
         }
         (g.status.port, g.key.clone(), g.status.model.clone())
     };
-    // A routed chat can change providers each turn; native Strata compaction cannot validate cloud context.
-    let native = crate::router::endpoint(conv).is_none() && http::get(port, "/health", None, std::time::Duration::from_secs(3))
+    let native = http::get(port, "/health", None, std::time::Duration::from_secs(3))
         .is_some_and(|(code, body)| code == 200 && native_compaction_supported(&body));
     write_compact_config(&workspace, native)?;
     let vendor = paths::vendor_dir();
@@ -368,9 +359,7 @@ pub fn get_or_start(
         .ok_or_else(|| "The configured Workbench Python runtime is unavailable.".to_string())?;
     let exe = vendor.join("aionrs.exe");
     let mut cmd = Command::new(&exe);
-    // With cloud routing on, the agent talks to the router proxy, which picks local or cloud per request.
-    let (base, key) = crate::router::endpoint(conv).unwrap_or((format!("http://127.0.0.1:{port}/v1"), key));
-    cmd.args(["--json-stream", "--provider", "openai", "--base-url", &base])
+    cmd.args(["--json-stream", "--provider", "openai", "--base-url", &format!("http://127.0.0.1:{port}/v1")])
         .env("API_KEY", &key)
         .env("LOCALWORK_PYTHON", python_runtime)
         // 60 turns ran out on long browse-and-write tasks; hitting the budget forces a tool-less final answer.
@@ -403,7 +392,6 @@ pub fn get_or_start(
     let stdin = child.stdin.take().ok_or("no agent stdin")?;
     let agent = Arc::new(Agent {
         conv: conv.to_string(),
-        routing_mode: crate::router::routing(),
         workspace: workspace.clone(),
         child: Mutex::new(Some(child)),
         inner: Mutex::new(Inner { stdin: Some(stdin), ..Default::default() }),
@@ -764,7 +752,6 @@ mod context_tests {
     fn idle_agent(quiet_for: Duration) -> Agent {
         Agent {
             conv: "c".into(),
-            routing_mode: "local".into(),
             workspace: PathBuf::from(r"C:\work"),
             child: Mutex::new(None),
             inner: Mutex::new(Inner { processing: true, user_turn: true, ..Default::default() }),

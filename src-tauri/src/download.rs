@@ -1,4 +1,4 @@
-//! Large-file downloads (engines, models, the privacy filter) with resume, progress events and cancel.
+//! Large-file downloads (engines and models) with resume, progress events and cancel.
 //! Only https hosts the app knows are allowed, so a page or plugin cannot point the downloader anywhere else.
 use serde_json::json;
 use std::collections::HashSet;
@@ -50,19 +50,6 @@ fn resumed_total(header: &str, have: u64) -> Option<u64> {
     let (start, end) = range.split_once('-')?;
     let (start, end, total) = (start.parse::<u64>().ok()?, end.parse::<u64>().ok()?, total.parse::<u64>().ok()?);
     (start == have && end >= start && end < total).then_some(total)
-}
-
-/// Small upstream release marker, never an executable or a model download.
-pub fn text(url: &str) -> Result<String, String> {
-    let u = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
-    if !host_ok(&u) { return Err("The release marker is not on an allowed host.".into()); }
-    let r = client(Some(Duration::from_secs(30)))?.get(u).send()
-        .map_err(|e| format!("Could not read release marker: {e}"))?
-        .error_for_status().map_err(|e| format!("Could not read release marker: {e}"))?;
-    let mut data = String::new();
-    r.take(1025).read_to_string(&mut data).map_err(|e| e.to_string())?;
-    if data.len() > 1024 { return Err("The release marker is too large.".into()); }
-    Ok(data)
 }
 
 pub fn stage(app: &AppHandle, id: &str, state: &str, message: &str) {
