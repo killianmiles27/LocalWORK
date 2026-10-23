@@ -551,7 +551,7 @@ pub fn unzip(zip_path: &Path, to: &Path) -> Result<(), String> {
     for i in 0..z.len() {
         let mut item = z.by_index(i).map_err(|e| e.to_string())?;
         // enclosed_name refuses absolute paths and `..`, so nothing lands outside the staging folder.
-        let Some(rel) = item.enclosed_name() else { return Err(format!("Unsafe path in the .zip: {}", item.name())); };
+        let Some(rel) = item.enclosed_name() else { return Err(format!("Unsafe path in the .zip: {}", item.name().unwrap_or_default())); };
         let dest = to.join(rel);
         if item.is_dir() { std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?; continue; }
         total += item.size();

@@ -25,7 +25,7 @@ rand = "0.8"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "blocking", "system-proxy"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-zip = { version = "4", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 toml_edit = "0.25"
 base64 = "0.22"
 sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "component"] }
