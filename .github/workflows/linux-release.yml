@@ -1,0 +1,57 @@
+name: Linux build
+
+# Builds the Linux packages (AppImage, deb, rpm) without signing them. The release is signed
+# on the maintainer's machine; the signing key never leaves it (see docs/release.md).
+on:
+  workflow_dispatch:
+  push:
+    branches: [linux-port]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04 # oldest supported glibc, so the AppImage runs on more distributions
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf file xdg-utils rpm
+      - name: Pinned runtime tools
+        run: bash scripts/fetch-vendor-linux.sh
+      - name: Bundle
+        env:
+          # Updater signatures are made locally after download.
+          TAURI_CONFIG: '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: |
+          npm ci
+          npm run tauri -- build
+      - name: Check the packaged tools are executable
+        run: |
+          deb=$(ls src-tauri/target/release/bundle/deb/*.deb)
+          tools=$(dpkg-deb -c "$deb" | grep -E 'vendor/(aionrs|officecli|node/node|whisper/whisper-cli)$')
+          echo "$tools"
+          [ "$(echo "$tools" | wc -l)" = 4 ] || { echo 'A bundled tool is missing'; exit 1; }
+          if echo "$tools" | grep -v '^-rwxr-xr-x'; then echo 'A bundled tool lost its executable bit'; exit 1; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-bundles
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 7

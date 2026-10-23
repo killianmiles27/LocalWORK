@@ -20,8 +20,11 @@ pub enum Decision {
     Deny(String),
 }
 
+/// Path separator used by the string comparisons below.
+const SEP: char = if cfg!(windows) { '\\' } else { '/' };
+
 fn norm(p: &str) -> PathBuf {
-    let mut s = p.replace('/', "\\");
+    let mut s = if cfg!(windows) { p.replace('/', "\\") } else { p.replace('\\', "/") };
     if s.starts_with("\\\\?\\") {
         s = s[4..].to_string();
     }
@@ -44,13 +47,16 @@ fn norm(p: &str) -> PathBuf {
 }
 
 fn inside(path: &Path, root: &Path) -> bool {
-    let a = path.to_string_lossy().to_lowercase();
-    let b = root.to_string_lossy().trim_end_matches('\\').to_lowercase();
-    a == b || a.starts_with(&format!("{b}\\"))
+    // Linux paths are case-sensitive, so only Windows folds case.
+    let fold = |s: &str| if cfg!(windows) { s.to_lowercase() } else { s.to_string() };
+    let a = fold(&path.to_string_lossy());
+    let b = fold(&root.to_string_lossy());
+    let b = if b.len() > 1 { b.trim_end_matches(SEP) } else { b.as_str() };
+    a == b || a.starts_with(&format!("{b}{SEP}"))
 }
 
 fn resolve_arg_path(s: &str, workspace: &Path) -> PathBuf {
-    let p = PathBuf::from(s.replace('/', "\\"));
+    let p = PathBuf::from(if cfg!(windows) { s.replace('/', "\\") } else { s.replace('\\', "/") });
     if p.is_absolute() { norm(s) } else { norm(&workspace.join(p).to_string_lossy()) }
 }
 
@@ -116,7 +122,16 @@ fn officecli_writes_output(tool: &str, args: &Value) -> bool {
     }))
 }
 
+#[cfg(windows)]
 const PROTECTED: &[&str] = &["c:\\windows", "c:\\program files", "c:\\programdata"];
+#[cfg(not(windows))]
+const PROTECTED: &[&str] = &["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/boot", "/var", "/opt", "/root", "/sys", "/proc", "/dev"];
+
+/// The app's own data folder outside Windows (on Windows it is matched by name below).
+fn data_dir_lower() -> Option<String> {
+    if cfg!(windows) { return None; }
+    Some(norm(&crate::paths::data_dir().to_string_lossy()).to_string_lossy().to_lowercase())
+}
 
 // Consequential actions that ask even in Automatic mode: they reach past this computer or set up code
 // that runs later on its own. The segment and wrapper handling follows Eigent's permission policy
@@ -150,11 +165,13 @@ fn guarded(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit
     }
     let workspace = &norm(&workspace.to_string_lossy());
     let paths = arg_paths(tool, args, workspace);
+    let data = data_dir_lower();
     for p in &paths {
         let l = p.to_string_lossy().to_lowercase();
-        if PROTECTED.iter().any(|x| l == *x || l.starts_with(&format!("{x}\\")))
+        if PROTECTED.iter().any(|x| l == *x || l.starts_with(&format!("{x}{SEP}")))
             || l.contains("\\appdata\\local\\workbench\\")
             || l.ends_with("\\appdata\\local\\workbench")
+            || data.as_ref().is_some_and(|d| l == *d || l.starts_with(&format!("{d}{SEP}")))
         {
             return Decision::Deny(format!("{} is a protected location", p.display()));
         }
@@ -206,6 +223,10 @@ fn autorun_path(path: &str) -> bool {
         || p.ends_with("\\.vscode\\tasks.json")
         || p.contains("\\start menu\\programs\\startup")
         || p.ends_with("profile.ps1")
+        // Linux: shell start-up files, desktop autostart entries and user systemd units.
+        || p.contains("\\.config\\autostart\\") || p.contains("\\.config\\systemd\\")
+        || [".bashrc", ".bash_profile", ".bash_login", ".profile", ".zshrc", ".zprofile", ".zshenv", ".xprofile"]
+            .iter().any(|f| p.ends_with(&format!("\\{f}")))
 }
 
 /// Split a command line into simple commands on unquoted `;`, `|`, `||`, `&`, `&&` and newlines.
@@ -279,10 +300,13 @@ fn unwrap<'a>(seg: &'a str, w: &[(String, usize)]) -> Option<std::borrow::Cow<'a
             }
             None
         }
-        "sh" | "bash" | "wsl" => (1..w.len()).find(|&i| flag(i) == "-c").and_then(|i| w.get(i + 1).map(|x| x.0.clone().into())),
+        // `-c`, or combined short flags such as `-lc` and `-ec`.
+        "sh" | "bash" | "wsl" | "zsh" | "dash" | "ksh" | "fish" => (1..w.len())
+            .find(|&i| { let f = flag(i); f == "-c" || (f.starts_with('-') && !f.starts_with("--") && f.contains('c')) })
+            .and_then(|i| w.get(i + 1).map(|x| x.0.clone().into())),
         "env" => (1..w.len()).find(|&i| !w[i].0.contains('=') && !w[i].0.starts_with('-')).and_then(rest_from),
         "start" => (1..w.len()).find(|&i| !w[i].0.starts_with('/') && !w[i].0.is_empty()).and_then(rest_from),
-        "call" | "&" | "nohup" | "exec" | "time" => rest_from(1),
+        "call" | "&" | "nohup" | "exec" | "time" | "setsid" | "nice" | "xargs" => rest_from(1),
         _ => None,
     }
 }
@@ -316,7 +340,7 @@ fn simple_consequential(seg: &str, w: &[(String, usize)]) -> Option<&'static str
     let lower = seg.to_lowercase();
     match prog.as_str() {
         "powershell" | "pwsh" if args.iter().any(|a| a == "-e" || a == "-ec" || pwsh_param(a, "-encodedcommand")) => return Some(HIDDEN),
-        "runas" | "sudo" | "gsudo" => return Some(PRIVILEGE),
+        "runas" | "sudo" | "gsudo" | "doas" | "pkexec" | "su" | "run0" => return Some(PRIVILEGE),
         "start-process" | "saps" if args.iter().zip(args.iter().skip(1)).any(|(a, v)| pwsh_param(a, "-verb") && v == "runas") => return Some(PRIVILEGE),
         "git" => {
             let mut i = 0;
@@ -366,12 +390,15 @@ fn simple_consequential(seg: &str, w: &[(String, usize)]) -> Option<&'static str
         "schtasks" if has(&["/create", "/change"]) => return Some(AUTORUN),
         "register-scheduledtask" | "new-service" => return Some(AUTORUN),
         "sc" if matches!(sub, "create" | "config") => return Some(AUTORUN),
+        "crontab" if !has(&["-l"]) => return Some(AUTORUN),
+        "systemctl" if matches!(sub, "enable" | "link" | "edit" | "set-property" | "preset") => return Some(AUTORUN),
+        "at" | "batch" => return Some(AUTORUN),
         _ => {}
     }
     let reader = ["cat", "type", "get-content", "gc", "more", "dir", "ls", "get-childitem", "gci", "select-string", "sls", "findstr", "test-path", "get-item", "gi", "get-itemproperty", "gp"].contains(&prog.as_str())
         || (prog == "reg" && sub == "query");
     let writes_here = !reader || seg.contains('>');
-    let autorun_text = Regex::new(r"(?i)\.git[\\/]+hooks\b|\.git[\\/]+config\b|\.vscode[\\/]+tasks\.json|start menu[\\/]+programs[\\/]+startup|shell:startup|\$profile\b|profile\.ps1\b|currentversion[\\/]+run(once)?\b|[\\/]winlogon\b").unwrap();
+    let autorun_text = Regex::new(r"(?i)\.git[\\/]+hooks\b|\.git[\\/]+config\b|\.vscode[\\/]+tasks\.json|start menu[\\/]+programs[\\/]+startup|shell:startup|\$profile\b|profile\.ps1\b|currentversion[\\/]+run(once)?\b|[\\/]winlogon\b|\.(bashrc|bash_profile|bash_login|zshrc|zprofile|zshenv|xprofile)\b|[\\/~]\.profile\b|\.config[\\/]+(autostart|systemd)\b").unwrap();
     if writes_here && autorun_text.is_match(&lower) {
         return Some(AUTORUN);
     }
@@ -426,8 +453,8 @@ fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool, remembered: &[
         let escapes = drive.captures_iter(cmd).any(|c| {
             let p = c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)).unwrap();
             !inside(&norm(p.as_str()), workspace)
-        }) || cmd.contains("..\\") || cmd.contains("../");
-        if !risky.is_match(cmd) && !escapes {
+        }) || unix_path_escapes(cmd, workspace) || cmd.contains("..\\") || cmd.contains("../");
+        if !risky.is_match(cmd) && !unix_risky(cmd) && !escapes {
             return Decision::Allow;
         }
     }
@@ -435,6 +462,27 @@ fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool, remembered: &[
         return Decision::Allow;
     }
     Decision::Ask { class: Class::Exec, reason: RUN_COMMAND.into(), can_remember: true }
+}
+
+/// Linux programs that install software, change the system or reach other computers.
+fn unix_risky(cmd: &str) -> bool {
+    !cfg!(windows)
+        && Regex::new(r"(?i)\b(sudo|doas|pkexec|su|ssh|scp|rsync|apt|apt-get|dpkg|pacman|yay|paru|makepkg|dnf|yum|zypper|rpm|flatpak|snap|systemctl|crontab|pip3|pipx)\b")
+            .unwrap()
+            .is_match(cmd)
+}
+
+/// Absolute (`/x`) and home (`~/x`) paths in a Linux command line that point outside the workspace.
+fn unix_path_escapes(cmd: &str, workspace: &Path) -> bool {
+    if cfg!(windows) { return false; }
+    let re = Regex::new(r#"(?:^|[\s"'=(:])((?:/|~/|~$)[^\s"';|&)<>]*)"#).unwrap();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let escapes = re.captures_iter(cmd).any(|c| {
+        let raw = c.get(1).unwrap().as_str();
+        let p = match raw.strip_prefix('~') { Some(rest) => format!("{home}{rest}"), None => raw.to_string() };
+        !matches!(p.as_str(), "/dev/null" | "/dev/stdout" | "/dev/stderr") && !inside(&norm(&p), workspace)
+    });
+    escapes
 }
 
 fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, outside: bool, has_path: bool) -> Decision {
@@ -526,7 +574,44 @@ fn browser_decision(args: &Value, auto_edit: bool) -> Decision {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
+mod unix_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn linux_paths_stay_in_the_workspace() {
+        let ws = Path::new("/home/me/projects/draft");
+        assert!(inside(&norm("/home/me/projects/draft/a.md"), ws));
+        assert!(!inside(&norm("/home/me/projects/draft/../secret.txt"), ws));
+        assert!(!inside(&norm("/home/me/projects/drafty/a.md"), ws));
+        assert!(!inside(&norm("/home/me/projects/Draft/a.md"), ws));
+        assert!(matches!(guarded("Write", "edit", &json!({"file_path": "/etc/passwd"}), ws, true, &[]), Decision::Deny(_)));
+    }
+
+    #[test]
+    fn linux_consequential_commands() {
+        assert_eq!(consequential("bash -lc 'git push'"), Some(PUBLISH));
+        assert_eq!(consequential("sudo pacman -S foo"), Some(PRIVILEGE));
+        assert_eq!(consequential("crontab job.txt"), Some(AUTORUN));
+        assert_eq!(consequential("crontab -l"), None);
+        assert_eq!(consequential("systemctl --user enable foo.service"), Some(AUTORUN));
+        assert_eq!(consequential("echo x >> ~/.bashrc"), Some(AUTORUN));
+    }
+
+    #[test]
+    fn linux_commands_outside_the_workspace_ask_in_automatic_mode() {
+        let ws = Path::new("/home/me/projects/draft");
+        for cmd in ["cat /home/me/.ssh/id_ed25519", "cp a.md ~/out.md", "yay -S foo"] {
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Ask { .. }), "{cmd}");
+        }
+        for cmd in ["python3 build.py", "grep -r todo . > /dev/null", "cat /home/me/projects/draft/a.md"] {
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Allow), "{cmd}");
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use serde_json::json;

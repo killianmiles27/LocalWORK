@@ -130,14 +130,14 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
         {step === 2 && path === "strata" && (
           <>
             <h2 className="text-lg font-medium mb-1">Connect Strata or PolyStrata</h2>
-            <p className="text-sm text-muted mb-3">Choose the Strata or PolyStrata folder (the one with START-HERE.bat). The model you set up there is picked automatically. With several models, switch between them later from the model menu.</p>
+            <p className="text-sm text-muted mb-3">Choose the Strata or PolyStrata folder (the one with START-HERE.bat or its Linux setup script). The model you set up there is picked automatically. With several models, switch between them later from the model menu.</p>
             <Line ok={!!hw?.strata_found} label={hw?.engine ?? "Strata"} value={hw?.strata_found ? hw.strata_root : `Not found at ${hw?.strata_root ?? "…"}`} />
             <Line ok={!!hw?.model_config_found} label="Model" value={hw?.model_config_found ? "Selected" : "Not selected yet"} />
             <div className="flex flex-wrap gap-2 mt-2">
               <button onClick={pickStrata} className={small}>Choose Strata folder…</button>
               {hw?.strata_found && <button onClick={pickModelConfig} className={small}>Choose model file…</button>}
             </div>
-            {hw?.strata_found && !hw.model_config_found && <p className="text-xs text-muted mt-3">Choose the strata-&lt;model&gt;.json file in the Strata folder. If there is none, run START-HERE.bat there first.</p>}
+            {hw?.strata_found && !hw.model_config_found && <p className="text-xs text-muted mt-3">Choose the strata-&lt;model&gt;.json file in the Strata folder. If there is none, run its setup there first (START-HERE.bat on Windows).</p>}
           </>
         )}
         {step === 2 && path === "server" && (

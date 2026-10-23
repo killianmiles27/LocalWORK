@@ -18,7 +18,7 @@ const REPO: &str = "VecSzn/PolyStrata";
 const CANCELLED: &str = "Cancelled.";
 const DL_ID: &str = "engine-install";
 const HF_DL_ID: &str = "hf-model-download";
-const POLY_EXE: &str = "strata-poly.exe";
+const POLY_EXE: &str = if cfg!(windows) { "strata-poly.exe" } else { "strata-poly" };
 
 static PID: Mutex<Option<u32>> = Mutex::new(None);
 static CANCEL: AtomicBool = AtomicBool::new(false);
@@ -49,7 +49,7 @@ fn root() -> PathBuf {
     PathBuf::from(strata::setting("strataRoot", &paths::default_strata_root()))
 }
 fn venv_py(root: &Path) -> PathBuf {
-    root.join(".venv").join("Scripts").join("python.exe")
+    paths::venv_python(root)
 }
 fn poly_marker(root: &Path) -> bool {
     root.join(".engine-tag").is_file() || root.join("polystrata.py").is_file()
@@ -87,7 +87,7 @@ fn model_is_running() -> bool {
     if fs::read_to_string(pids).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v.as_array().cloned()).into_iter().flatten().any(|v| {
             v["role"].as_str() == Some("strata") && v["pid"].as_u64().zip(v["exe"].as_str()).is_some_and(|(pid, exe)| {
-                supervisor::image_path(pid as u32).is_some_and(|actual| actual.eq_ignore_ascii_case(exe))
+                supervisor::image_path(pid as u32).is_some_and(|actual| supervisor::same_image(&actual, exe))
             })
         }) { return true; }
     let ports = [8080, strata::setting("serverPort", "8080").parse().unwrap_or(8080)];
@@ -184,7 +184,7 @@ fn find_python() -> Option<PathBuf> {
         let p = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
         p.is_file().then_some(p)
     };
-    if let Some(p) = probe(Path::new("py"), &["-3"]).or_else(|| probe(Path::new("python"), &[])) {
+    if let Some(p) = probe(Path::new("py"), &["-3"]).or_else(|| probe(Path::new("python3"), &[])).or_else(|| probe(Path::new("python"), &[])) {
         return Some(p);
     }
     let base = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Programs").join("Python");

@@ -1,0 +1,23 @@
+# Arch Linux package for LocalWORK, repackaged from the release's .deb.
+# Build and install:  makepkg -si
+pkgname=localwork-bin
+pkgver=0.1.5
+pkgrel=1
+pkgdesc="Local work-style AI desktop app"
+arch=('x86_64')
+url="https://github.com/killianmiles27/LocalWORK"
+license=('Apache-2.0')
+depends=('webkit2gtk-4.1' 'gtk3' 'openssh' 'xdg-utils' 'python')
+provides=('localwork')
+conflicts=('localwork')
+options=('!strip' '!debug')
+source=("LocalWORK_${pkgver}_amd64.deb::${url}/releases/download/v${pkgver}/LocalWORK_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+
+package() {
+  bsdtar -xf data.tar.* -C "$pkgdir"
+  # The bundled tools must stay executable.
+  chmod 755 "$pkgdir/usr/lib/LocalWORK/vendor/aionrs" "$pkgdir/usr/lib/LocalWORK/vendor/officecli" \
+    "$pkgdir/usr/lib/LocalWORK/vendor/node/node" "$pkgdir/usr/lib/LocalWORK/vendor/whisper/whisper-cli"
+  install -Dm644 "$pkgdir/usr/lib/LocalWORK/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -88,6 +88,11 @@ pub fn rollback_to(app: tauri::AppHandle, version: String) -> Result<(), String>
         use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd").args(["/c", &script]).creation_flags(0x0800_0000 | 0x0000_0008).spawn().map_err(|e| e.to_string())?;
     }
+    #[cfg(not(windows))]
+    {
+        let _ = script;
+        return Err("Rolling back is only available on Windows. On Linux, install the older package from the releases page.".into());
+    }
     app.exit(0);
     Ok(())
 }

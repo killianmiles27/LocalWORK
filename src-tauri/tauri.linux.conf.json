@@ -1,0 +1,23 @@
+{
+  "bundle": {
+    "targets": ["appimage", "deb", "rpm"],
+    "icon": ["icons/icon.png"],
+    "resources": {
+      "../vendor/aionrs.exe": null,
+      "../vendor/officecli.exe": null,
+      "../vendor/aionrs": "vendor/aionrs",
+      "../vendor/officecli": "vendor/officecli"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "openssh-client", "xdg-utils"]
+      },
+      "rpm": {
+        "depends": ["webkit2gtk4.1", "gtk3", "openssh-clients", "xdg-utils"]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  }
+}

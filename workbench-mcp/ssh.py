@@ -1,11 +1,14 @@
 """ssh_exec: run one command on a configured SSH host with the system OpenSSH client.
-Hosts, the key and the pinned host keys live in %LOCALAPPDATA%/Workbench/ssh (managed by the app's Settings)."""
+Hosts, the key and the pinned host keys live in the app's data folder under ssh/ (managed by the app's Settings)."""
 import json, os, subprocess
 
 CREATE_NO_WINDOW = 0x08000000
 
 
 def _dir():
+    db = os.environ.get("WORKBENCH_DB")
+    if db:
+        return os.path.join(os.path.dirname(db), "ssh")
     return os.path.join(os.environ.get("LOCALAPPDATA", ""), "Workbench", "ssh")
 
 

@@ -32,7 +32,7 @@ fn strata_root() -> PathBuf {
 }
 
 fn strata_ok(root: &PathBuf) -> bool {
-    root.join(".venv").join("Scripts").join("python.exe").exists() && root.join("serve").join("server.py").exists()
+    paths::venv_python(root).exists() && root.join("serve").join("server.py").exists()
 }
 
 /// PolyStrata is a Strata fork with the same folder layout and server; its root has polystrata.py.
@@ -122,7 +122,7 @@ pub fn use_own_strata() -> Result<(), String> {
 pub fn set_strata_root(path: String) -> Result<Value, String> {
     let p = PathBuf::from(&path);
     if !strata_ok(&p) {
-        return Err("That folder is not a ready Strata or PolyStrata installation. Choose the folder containing serve\\server.py and .venv\\Scripts\\python.exe. Run its START-HERE.bat first if needed.".into());
+        return Err("That folder is not a ready Strata or PolyStrata installation. Choose the folder containing serve/server.py and its .venv. Run its setup (START-HERE.bat on Windows) first if needed.".into());
     }
     write_setting("strataRoot", &path)?;
     write_setting("modelSource", "strata")?;

@@ -1,14 +1,22 @@
 //! Process containment: one Job Object (KILL_ON_JOB_CLOSE) holds the host and everything it spawns,
 //! every child is started with CREATE_NO_WINDOW, and pids.json lets the next start clean up after a crash.
+//! On Linux each child leads its own process group, so kill_tree takes the whole group; the app's exit
+//! handler stops children, and pids.json covers a crashed host on the next start.
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
 use std::ffi::c_void;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
+#[cfg(windows)]
 use windows::core::PWSTR;
+#[cfg(windows)]
 use windows::Win32::Foundation::CloseHandle;
+#[cfg(windows)]
 use windows::Win32::System::JobObjects::*;
+#[cfg(windows)]
 use windows::Win32::System::Threading::*;
 
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -16,6 +24,7 @@ static PIDS_LOCK: Mutex<()> = Mutex::new(());
 
 /// Put the host process itself in a kill-on-close job; children inherit membership with no spawn race.
 /// When the host dies for any reason the last handle closes and Windows kills the whole tree.
+#[cfg(windows)]
 pub fn init_job() -> Result<(), String> {
     unsafe {
         let job = CreateJobObjectW(None, None).map_err(|e| e.to_string())?;
@@ -35,8 +44,20 @@ pub fn init_job() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+pub fn init_job() -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
 pub fn hidden(cmd: &mut Command) -> &mut Command {
     cmd.creation_flags(CREATE_NO_WINDOW)
+}
+
+#[cfg(unix)]
+pub fn hidden(cmd: &mut Command) -> &mut Command {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0)
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -46,6 +67,7 @@ pub struct PidRec {
     pub role: String,
 }
 
+#[cfg(windows)]
 pub fn image_path(pid: u32) -> Option<String> {
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
@@ -58,11 +80,27 @@ pub fn image_path(pid: u32) -> Option<String> {
     }
 }
 
+#[cfg(unix)]
+pub fn image_path(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok().map(|p| p.to_string_lossy().into_owned())
+}
+
+#[cfg(windows)]
 pub fn kill_tree(pid: u32) {
     let mut c = Command::new("taskkill");
     c.args(["/PID", &pid.to_string(), "/T", "/F"]);
     hidden(&mut c);
     let _ = c.output();
+}
+
+/// Children started through `hidden` lead their own process group, so the group id is the pid.
+#[cfg(unix)]
+pub fn kill_tree(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    let _ = Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).output();
+    let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).output();
 }
 
 fn read_pids(path: &Path) -> Vec<PidRec> {
@@ -101,7 +139,7 @@ pub fn cleanup_stale(data: &Path) -> usize {
     let mut killed = 0;
     for r in read_pids(&p) {
         if let Some(img) = image_path(r.pid) {
-            if img.eq_ignore_ascii_case(&r.exe) {
+            if same_image(&img, &r.exe) {
                 kill_tree(r.pid);
                 killed += 1;
             }
@@ -109,4 +147,13 @@ pub fn cleanup_stale(data: &Path) -> usize {
     }
     write_pids(&p, &[]);
     killed
+}
+
+/// Linux resolves symlinks in /proc/<pid>/exe (a venv python points at the system one), so compare resolved paths.
+pub fn same_image(actual: &str, recorded: &str) -> bool {
+    if cfg!(windows) {
+        return actual.eq_ignore_ascii_case(recorded);
+    }
+    let resolved = std::fs::canonicalize(recorded).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| recorded.to_string());
+    actual == recorded || actual == resolved
 }

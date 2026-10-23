@@ -357,7 +357,7 @@ pub fn get_or_start(
         .ok_or_else(|| "Workbench tools are missing. Choose a configured Strata folder in Settings and check that workbench-mcp/server.py is installed beside LocalWORK.".to_string())?;
     let python_runtime = workbench_python_command(&workbench)
         .ok_or_else(|| "The configured Workbench Python runtime is unavailable.".to_string())?;
-    let exe = vendor.join("aionrs.exe");
+    let exe = vendor.join(paths::exe("aionrs"));
     let mut cmd = Command::new(&exe);
     cmd.args(["--json-stream", "--provider", "openai", "--base-url", &format!("http://127.0.0.1:{port}/v1")])
         .env("API_KEY", &key)
@@ -463,7 +463,7 @@ fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Option<Value> {
             .and_then(|v| v.get("strataRoot").and_then(|x| x.as_str().map(String::from)))
             .unwrap_or_else(paths::default_strata_root),
     );
-    let python = root.join(".venv").join("Scripts").join("python.exe");
+    let python = paths::venv_python(&root);
     let script = paths::resource_dir("workbench-mcp").join("server.py");
     if !python.exists() || !script.exists() {
         return None;
@@ -473,11 +473,11 @@ fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Option<Value> {
         "command": python.to_string_lossy(),
         "args": ["-u", script.to_string_lossy()],
         "env": {
-            "OFFICECLI_EXE": app_vendor.join("officecli.exe").to_string_lossy(),
+            "OFFICECLI_EXE": app_vendor.join(paths::exe("officecli")).to_string_lossy(),
             "WORKBENCH_DATA": paths::data_dir().join("cache").to_string_lossy(),
             "WORKBENCH_DB": paths::data_dir().join("workbench.db").to_string_lossy(),
             "WORKBENCH_SKILLS": std::env::join_paths(plugins::skill_dirs()).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
-            "BROWSER_NODE": app_vendor.join("node").join("node.exe").to_string_lossy(),
+            "BROWSER_NODE": app_vendor.join("node").join(paths::exe("node")).to_string_lossy(),
             "BROWSER_CLI": app_vendor.join("playwright").join("node_modules").join("@playwright").join("cli").join("playwright-cli.js").to_string_lossy(),
             "BROWSER_BROWSERS": app_vendor.join("browsers").to_string_lossy(),
             "BROWSER_PROFILES": paths::data_dir().join("browser").to_string_lossy(),

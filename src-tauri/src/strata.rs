@@ -134,12 +134,12 @@ pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
     let root = PathBuf::from(setting("strataRoot", &paths::default_strata_root()));
     let cfg = setting("modelConfig", &paths::default_model_config());
     let engine_root = server_root(&cfg, &root);
-    let venv = |d: &PathBuf| d.join(".venv").join("Scripts").join("python.exe");
+    let venv = |d: &PathBuf| paths::venv_python(d);
     let python = if venv(&engine_root).is_file() { venv(&engine_root) } else { venv(&root) };
     let server = engine_root.join("serve").join("server.py");
     if !python.exists() || !server.exists() || !PathBuf::from(&cfg).exists() {
         let m = if !python.is_file() || !server.is_file() {
-            format!("Strata is not configured. In Settings, choose its folder (the one containing serve\\server.py and .venv\\Scripts\\python.exe). Install Strata and run SETUP.bat first if needed. Checked: {}", root.display())
+            format!("Strata is not configured. In Settings, choose its folder (the one containing serve/server.py and its .venv). Install Strata and run its setup first if needed. Checked: {}", root.display())
         } else {
             format!("No model configuration was found at {}. In Settings, choose a Strata model JSON file.", cfg)
         };

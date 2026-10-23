@@ -1,11 +1,8 @@
 //! SSH host management for Settings: hosts list, ed25519 key, host-key pinning. Uses the system OpenSSH.
 use crate::paths;
 use serde_json::{json, Value};
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-
-const NO_WINDOW: u32 = 0x0800_0000;
 
 fn dir() -> PathBuf {
     let d = paths::data_dir().join("ssh");
@@ -14,6 +11,9 @@ fn dir() -> PathBuf {
 }
 
 fn tool(name: &str) -> PathBuf {
+    if cfg!(not(windows)) {
+        return PathBuf::from(name);
+    }
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
     let p = PathBuf::from(root).join("System32").join("OpenSSH").join(format!("{name}.exe"));
     if p.exists() { p } else { PathBuf::from(name) }
@@ -21,7 +21,7 @@ fn tool(name: &str) -> PathBuf {
 
 fn run(c: &mut Command, input: Option<&str>) -> Result<String, String> {
     use std::io::Write;
-    c.creation_flags(NO_WINDOW).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    crate::supervisor::hidden(c).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut ch = c.spawn().map_err(|e| e.to_string())?;
     if let Some(mut si) = ch.stdin.take() {
         if let Some(t) = input { let _ = si.write_all(t.as_bytes()); }

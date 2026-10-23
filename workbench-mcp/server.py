@@ -2,7 +2,7 @@
 Tools: officecli (wrapper around the bundled OfficeCLI), web_search, web_fetch, memory_*, workspace_info."""
 import datetime, json, os, shutil, stat, subprocess, sys, tempfile
 
-OFFICECLI = os.environ.get("OFFICECLI_EXE", "officecli.exe")
+OFFICECLI = os.environ.get("OFFICECLI_EXE", "officecli" + (".exe" if os.name == "nt" else ""))
 CREATE_NO_WINDOW = 0x08000000
 MAX_INLINE_COMMANDS_UTF16_UNITS = 24000
 

@@ -475,7 +475,7 @@ fn data_dir() -> String {
 fn close_browsers() {
     let v = paths::vendor_dir();
     let cli = v.join("playwright").join("node_modules").join("@playwright").join("cli").join("playwright-cli.js");
-    let node = v.join("node").join("node.exe");
+    let node = v.join("node").join(paths::exe("node"));
     if !cli.exists() || !node.exists() {
         return;
     }

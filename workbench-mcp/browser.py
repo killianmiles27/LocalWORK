@@ -8,7 +8,7 @@ import hashlib, ipaddress, json, os, re, shlex, socket, subprocess, sys, tempfil
 from urllib.parse import urlparse
 
 CREATE_NO_WINDOW = 0x08000000
-NODE = os.environ.get("BROWSER_NODE", "node.exe")
+NODE = os.environ.get("BROWSER_NODE", "node" + (".exe" if os.name == "nt" else ""))
 CLI = os.environ.get("BROWSER_CLI", "")
 BROWSERS = os.environ.get("BROWSER_BROWSERS", "")
 PROFILES = os.environ.get("BROWSER_PROFILES", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".browser"))
@@ -81,8 +81,9 @@ def _profile_dir(suffix=""):
 
 def _headless_shell():
     for root, _dirs, files in os.walk(BROWSERS):
-        if "chrome-headless-shell.exe" in files:
-            return os.path.join(root, "chrome-headless-shell.exe")
+        for name in ("chrome-headless-shell.exe", "chrome-headless-shell"):
+            if name in files:
+                return os.path.join(root, name)
     raise RuntimeError("The bundled browser is not installed (vendor\\browsers is missing).")
 
 

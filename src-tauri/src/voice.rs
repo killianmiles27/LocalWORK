@@ -24,7 +24,7 @@ fn whisper_dir() -> PathBuf {
 
 fn missing() -> Option<String> {
     let d = whisper_dir();
-    for f in ["whisper-cli.exe", MODEL_FILE] {
+    for f in [paths::exe("whisper-cli").as_str(), MODEL_FILE] {
         if !d.join(f).exists() {
             return Some(format!("Voice input needs {f} in {} (see vendor\\README.md)", d.display()));
         }
@@ -79,7 +79,7 @@ fn transcribe(wav: &[u8]) -> Result<String, String> {
     let _ = std::fs::remove_file(&txt_path);
 
     let dir = whisper_dir();
-    let exe = dir.join("whisper-cli.exe");
+    let exe = dir.join(paths::exe("whisper-cli"));
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8);
     let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
@@ -92,6 +92,12 @@ fn transcribe(wav: &[u8]) -> Result<String, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log2));
+    // The Linux build ships whisper.cpp's shared libraries next to the binary.
+    #[cfg(unix)]
+    cmd.env("LD_LIBRARY_PATH", match std::env::var_os("LD_LIBRARY_PATH") {
+        Some(old) if !old.is_empty() => { let mut p = dir.clone().into_os_string(); p.push(":"); p.push(old); p }
+        _ => dir.clone().into_os_string(),
+    });
     supervisor::hidden(&mut cmd);
     let result = (|| {
         let mut child = cmd.spawn().map_err(|e| format!("could not start whisper-cli: {e}"))?;

@@ -198,8 +198,7 @@ pub async fn documents_list(s: State<'_, App>, id: String) -> Result<Value, Stri
                 let entry = entry.map_err(|e| e.to_string())?;
                 let ty = entry.file_type().map_err(|e| e.to_string())?;
                 let path = entry.path();
-                use std::os::windows::fs::MetadataExt;
-                if ty.is_symlink() || entry.metadata().map_err(|e|e.to_string())?.file_attributes() & 0x400 != 0 { continue; }
+                if ty.is_symlink() || is_reparse_point(&entry)? { continue; }
                 if !path.canonicalize().map_err(|e| e.to_string())?.starts_with(&root) { continue; }
                 if ty.is_dir() {
                     let name = entry.file_name();
@@ -266,7 +265,7 @@ fn native_path(file: &Path) -> String {
 }
 
 fn office_output(args: &[&std::ffi::OsStr]) -> Result<String, String> {
-    let mut command = Command::new(paths::vendor_dir().join("officecli.exe"));
+    let mut command = Command::new(paths::vendor_dir().join(paths::exe("officecli")));
     command
         .env("OFFICECLI_SKIP_UPDATE", "1")
         .args(args)
@@ -404,8 +403,12 @@ pub fn document_open(
     let kind = kind(&file).ok_or("Unsupported document type")?;
     // Explorer does not consistently accept canonicalize()'s extended-length prefix.
     let explorer_path = native_path(&file);
-    let mut command = Command::new("explorer.exe");
-    if reveal || !matches!(kind.as_str(), "docx" | "xlsx" | "pptx" | "pdf") {
+    let select = reveal || !matches!(kind.as_str(), "docx" | "xlsx" | "pptx" | "pdf");
+    let mut command = if cfg!(windows) { Command::new("explorer.exe") } else { Command::new("xdg-open") };
+    if cfg!(not(windows)) {
+        // xdg-open cannot select a file; reveal opens the containing folder instead.
+        command.arg(if select { file.parent().unwrap_or(&file) } else { file.as_path() });
+    } else if select {
         command.arg("/select,").arg(&explorer_path);
     } else {
         command.arg(&explorer_path);
@@ -767,4 +770,15 @@ mod tests {
             );
         }
     }
+}
+
+#[cfg(windows)]
+fn is_reparse_point(entry: &fs::DirEntry) -> Result<bool, String> {
+    use std::os::windows::fs::MetadataExt;
+    Ok(entry.metadata().map_err(|e| e.to_string())?.file_attributes() & 0x400 != 0)
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_entry: &fs::DirEntry) -> Result<bool, String> {
+    Ok(false)
 }
