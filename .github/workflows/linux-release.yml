@@ -5,8 +5,7 @@ name: Linux build
 on:
   workflow_dispatch:
   push:
-    branches: [linux-port]
-    tags: ['v*']
+    branches: [main]
 
 permissions:
   contents: read

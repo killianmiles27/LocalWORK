@@ -1,0 +1,40 @@
+name: Linux publish
+
+# Copies the Linux packages from a finished "Linux build" run into an existing release, so they
+# go from GitHub to GitHub instead of through the maintainer's connection. The AppImage .sig is
+# made locally from the same run's AppImage and uploaded with the rest of the release.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: ID of the successful "Linux build" run
+        required: true
+      tag:
+        description: Release tag, for example v0.1.5
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Upload the packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'run_id must be a number'; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'tag must look like v1.2.3'; exit 1; }
+          [ "$(gh run view "$RUN_ID" --json workflowName,conclusion --jq '.workflowName + " " + .conclusion')" = 'Linux build success' ] \
+            || { echo 'That run is not a successful Linux build'; exit 1; }
+          gh run download "$RUN_ID" -n linux-bundles -D bundles
+          mapfile -t files < <(find bundles -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \))
+          [ "${#files[@]}" = 3 ] || { echo "Expected 3 packages, found ${#files[@]}"; exit 1; }
+          sha256sum "${files[@]}"
+          gh release upload "$TAG" "${files[@]}" --clobber

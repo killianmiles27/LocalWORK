@@ -32,13 +32,21 @@ The supported updater download is a signed Windows installer EXE. ZIP updater ex
 
 ## Linux packages
 
-The Linux build workflow (`.github/workflows/linux-release.yml`) builds unsigned AppImage, deb and rpm packages on Ubuntu 22.04 for every push to `linux-port` and every `v*` tag. It checks that the bundled tools keep their executable bit and uses no secrets. Download its `linux-bundles` artifact with `gh run download <run id> -n linux-bundles`, then sign the AppImage on the trusted machine:
+The Linux build workflow (`.github/workflows/linux-release.yml`) builds unsigned AppImage, deb and rpm packages on Ubuntu 22.04 for every push to `main`, or on demand from the Actions tab. It checks that the bundled tools keep their executable bit and uses no secrets. Download its `linux-bundles` artifact with `gh run download <run id> -n linux-bundles`, then sign the AppImage on the trusted machine:
 
 ```bash
 npx tauri signer sign -f <path to the private key> LocalWORK_<version>_amd64.AppImage
 ```
 
 That writes `LocalWORK_<version>_amd64.AppImage.sig`. Add a `linux-x86_64` entry to latest.json whose URL is the AppImage and whose signature is the content of that file. Deb and rpm installs do not self-update. Put the deb's SHA-256 into `packaging/arch/PKGBUILD` (`sha256sums`) and the version into `pkgver`, then attach the PKGBUILD to the release as well.
+
+The packages are large, so let GitHub copy them into the release instead of uploading them from your machine. After the release exists, run:
+
+```bash
+gh workflow run linux-publish.yml -f run_id=<run id> -f tag=v<version>
+```
+
+`.github/workflows/linux-publish.yml` downloads that run's `linux-bundles` artifact and uploads the AppImage, deb and rpm to the release. Use the same run whose AppImage you signed: a rebuilt AppImage has different bytes and the signature would not match. The job prints the SHA-256 of each file, so you can compare it with the AppImage you signed. Upload the `.sig`, latest.json and the PKGBUILD yourself.
 
 ## Publish deliberately
 
