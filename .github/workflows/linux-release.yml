@@ -33,12 +33,10 @@ jobs:
       - name: Pinned runtime tools
         run: bash scripts/fetch-vendor-linux.sh
       - name: Bundle
-        env:
-          # Updater signatures are made locally after download.
-          TAURI_CONFIG: '{"bundle":{"createUpdaterArtifacts":false}}'
+        # Updater signatures are made locally after download.
         run: |
           npm ci
-          npm run tauri -- build
+          npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - name: Check the packaged tools are executable
         run: |
           deb=$(ls src-tauri/target/release/bundle/deb/*.deb)

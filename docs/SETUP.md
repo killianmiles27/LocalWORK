@@ -75,7 +75,7 @@ bash scripts/fetch-vendor-linux.sh
 npm run tauri -- build --no-bundle
 ```
 
-`fetch-vendor-linux.sh` checks every download against a pinned hash, builds the patched agent, and installs the web tool libraries for Python 3.11 to 3.14. The executable is `src-tauri/target/release/localwork`. `npm run tauri -- build` with `TAURI_CONFIG='{"bundle":{"createUpdaterArtifacts":false}}'` makes unsigned AppImage, deb and rpm packages.
+`fetch-vendor-linux.sh` checks every download against a pinned hash, builds the patched agent, and installs the web tool libraries for Python 3.11 to 3.14. The executable is `src-tauri/target/release/localwork`. `npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":false}}'` makes unsigned AppImage, deb and rpm packages.
 
 For a portable folder or installer, preserve the runtime resources; copying only the EXE will not work. `scripts/deploy-local.ps1 -Destination 'D:\Apps\LocalWORK'` updates an **existing** installation and keeps a backup. For installer packaging, signing, and redistribution checks, use [release.md](release.md).
 
