@@ -3,6 +3,22 @@
 ## What you need
 
 - Windows 10 or 11, 64-bit, with Microsoft Edge WebView2. The installer can fetch WebView2 if it is missing; that step needs internet access.
+- Or 64-bit Linux with a desktop session: Ubuntu 22.04 or newer, Debian 12, Fedora 39 or newer, Arch, or a similar distribution with WebKitGTK 4.1, GTK 3, OpenSSH, xdg-utils and Python 3.11 or later.
+
+## Install on Linux
+
+Download one package from the [latest release](https://github.com/killianmiles27/LocalWORK/releases/latest):
+
+| Package | Install | Updates |
+| --- | --- | --- |
+| `LocalWORK_<version>_amd64.AppImage` | `chmod +x LocalWORK_*.AppImage`, then run it | In the app |
+| `LocalWORK_<version>_amd64.deb` (Ubuntu, Debian, Mint) | `sudo apt install ./LocalWORK_*_amd64.deb` | Install the next .deb |
+| `LocalWORK-<version>-1.x86_64.rpm` (Fedora, openSUSE) | `sudo dnf install ./LocalWORK-*.rpm` | Install the next .rpm |
+| Arch, Manjaro, EndeavourOS | Download `PKGBUILD` from the release into an empty folder, then `makepkg -si` | Rebuild with the next PKGBUILD |
+
+Only the AppImage updates itself; the updater cannot replace files installed by a package manager. The AppImage needs FUSE 2 (`libfuse2` on Ubuntu, `fuse2` on Arch); without it, run it with `--appimage-extract-and-run`.
+
+App data lives in `$XDG_DATA_HOME/Workbench` (usually `~/.local/share/Workbench`). Strata and PolyStrata work the same way as on Windows; the Strata folder must contain `serve/server.py` and `.venv/bin/python`. Voice typing, web tools, OfficeCLI and the agent are bundled. Rollback to an earlier version is not available on Linux; keep the previous package instead.
 - A model: a [Strata installation](https://github.com/Niko1221/Strata) (recommended; the first-run wizard can walk you through it), or [PolyStrata](https://github.com/VecSzn/PolyStrata) for models beyond Qwen, or any OpenAI-compatible server on this PC, such as LM Studio or Ollama. You also need enough GPU memory, system memory and disk space for that model. Follow Strata's current hardware requirements rather than treating one developer's PC as a minimum specification.
 - Internet access for initial downloads. After setup, local inference and file work can run without a hosted AI service. Web tools still need the network.
 
@@ -46,6 +62,20 @@ npm run tauri -- build --no-bundle
 Replace the example Python path with the one in your Strata installation. No particular drive or folder name is required. The vendor script downloads OfficeCLI, portable Node, Playwright, Chromium, whisper.cpp, and a voice model. The agent build uses a pinned source revision and LocalWORK's tracked compaction patch. These commands require internet access and can take several minutes.
 
 The executable is `src-tauri\target\release\localwork.exe`. Running it from the build directory uses the repository's runtime resources. To work on the UI, use `npm run tauri -- dev` after preparing those resources. A plain Cargo build is not a replacement for the Tauri release build.
+
+### Building on Linux
+
+Install Git, curl, Python 3.11 or later with pip, Node.js 22.12 or later with npm, stable Rust, and the [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux). On Ubuntu: `sudo apt install build-essential libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf file`. On Arch: `sudo pacman -S --needed base-devel webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg openssl patchelf file`.
+
+```bash
+git clone https://github.com/killianmiles27/LocalWORK.git
+cd LocalWORK
+npm ci
+bash scripts/fetch-vendor-linux.sh
+npm run tauri -- build --no-bundle
+```
+
+`fetch-vendor-linux.sh` checks every download against a pinned hash, builds the patched agent, and installs the web tool libraries for Python 3.11 to 3.14. The executable is `src-tauri/target/release/localwork`. `npm run tauri -- build` with `TAURI_CONFIG='{"bundle":{"createUpdaterArtifacts":false}}'` makes unsigned AppImage, deb and rpm packages.
 
 For a portable folder or installer, preserve the runtime resources; copying only the EXE will not work. `scripts/deploy-local.ps1 -Destination 'D:\Apps\LocalWORK'` updates an **existing** installation and keeps a backup. For installer packaging, signing, and redistribution checks, use [release.md](release.md).
 

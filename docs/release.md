@@ -30,6 +30,16 @@ Unsigned local development uses `npm run tauri -- build --no-bundle` and does no
 
 The supported updater download is a signed Windows installer EXE. ZIP updater extraction is disabled, removing an unused vulnerable dependency. Do not publish ZIP update artifacts or enable that feature without reviewing its dependency advisories.
 
+## Linux packages
+
+The Linux build workflow (`.github/workflows/linux-release.yml`) builds unsigned AppImage, deb and rpm packages on Ubuntu 22.04 for every push to `linux-port` and every `v*` tag. It checks that the bundled tools keep their executable bit and uses no secrets. Download its `linux-bundles` artifact with `gh run download <run id> -n linux-bundles`, then sign the AppImage on the trusted machine:
+
+```bash
+npx tauri signer sign -f <path to the private key> LocalWORK_<version>_amd64.AppImage
+```
+
+That writes `LocalWORK_<version>_amd64.AppImage.sig`. Add a `linux-x86_64` entry to latest.json whose URL is the AppImage and whose signature is the content of that file. Deb and rpm installs do not self-update. Put the deb's SHA-256 into `packaging/arch/PKGBUILD` (`sha256sums`) and the version into `pkgver`, then attach the PKGBUILD to the release as well.
+
 ## Publish deliberately
 
 After reviewing and testing the actual release artifacts, create a GitHub release for the matching tag. Attach the installer, its signature, and latest.json.
@@ -45,6 +55,10 @@ The installer is the plain app with no plugins. Plugins ship as separate assets:
     "windows-x86_64": {
       "signature": "CONTENTS OF THE GENERATED SIGNATURE FILE",
       "url": "https://github.com/OWNER/REPOSITORY/releases/download/v0.1.0/INSTALLER.exe"
+    },
+    "linux-x86_64": {
+      "signature": "CONTENTS OF THE APPIMAGE SIGNATURE FILE",
+      "url": "https://github.com/OWNER/REPOSITORY/releases/download/v0.1.0/LocalWORK_0.1.0_amd64.AppImage"
     }
   }
 }

@@ -438,7 +438,7 @@ fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool, remembered: &[
     let safe_git_log = Regex::new(r"(?i)^\s*git\s+log\s*$").unwrap();
     let safe_git_diff = Regex::new(r"(?i)^\s*git\s+diff\s*$").unwrap();
     let safe_git_status = Regex::new(r"(?i)^\s*git\s+status(?:\s+(?:--short|-s|--branch|--porcelain(?:=v[12])?))*\s*$").unwrap();
-    if (readonly.is_match(cmd) || safe_git_branch.is_match(cmd) || safe_git_log.is_match(cmd) || safe_git_diff.is_match(cmd) || safe_git_status.is_match(cmd)) && !shell_syntax.is_match(cmd) && !unsafe_git_diff_output.is_match(cmd) {
+    if (readonly.is_match(cmd) || safe_git_branch.is_match(cmd) || safe_git_log.is_match(cmd) || safe_git_diff.is_match(cmd) || safe_git_status.is_match(cmd)) && !shell_syntax.is_match(cmd) && !unsafe_git_diff_output.is_match(cmd) && !unix_path_escapes(cmd, workspace) {
         return Decision::Allow;
     }
     if auto_edit && !cmd.trim().is_empty() {

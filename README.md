@@ -7,13 +7,13 @@
 <h3 align="center">Your AI. Your PC. Your business.</h3>
 
 <p align="center">
-  A Windows desktop assistant that runs on your own computer. It chats, reads your files, and builds real Word, Excel and PowerPoint documents right beside the chat.
+  A desktop assistant for Windows and Linux that runs on your own computer. It chats, reads your files, and builds real Word, Excel and PowerPoint documents right beside the chat.
 </p>
 
 <p align="center">
   <a href="https://github.com/killianmiles27/LocalWORK/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/killianmiles27/LocalWORK?include_prereleases&label=release"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <img alt="Platform: Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey">
+  <img alt="Platform: Windows and Linux x64" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20x64-lightgrey">
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-lightgrey">
 </p>
 
@@ -40,7 +40,7 @@ The model runs on your PC, so your files stay on your PC. There's no account, no
 What LocalWORK itself adds:
 
 - **Real Office work.** Word, Excel and PowerPoint files built and edited in place, with previews you can type into, revision history, template matching, and spreadsheet tools that keep track of where the numbers came from. This is the main point of the app.
-- **One install, no Docker.** A normal Windows installer. It starts the model for you, waits until it's ready, and unloads it when you're idle.
+- **One install, no Docker.** A normal Windows installer, or an AppImage, .deb, .rpm or Arch package on Linux. It starts the model for you, waits until it's ready, and unloads it when you're idle.
 - **Built for local models.** Local models are slower and make more mistakes than the big cloud ones, so a lot of the work went into keeping long tasks on track: recovering cut-off replies, catching loops, and checking the finished files.
 
 The model side is someone else's work. LocalWORK runs models through [Strata](https://github.com/Niko1221/Strata) by Niko1221 (or [PolyStrata](https://github.com/VecSzn/PolyStrata) for models beyond Qwen). Strata is the reason a model around 125 billion parameters fits on a regular gaming PC at all, so the credit for that goes to them. The Office editing runs on [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI), and the agent is a patched copy of [aionrs](https://github.com/iOfficeAI/aionrs), both by iOfficeAI. For a lot of everyday stuff the result holds its own against the free chatbots you already use. It is not going to beat the big paid ones at everything, and I'm not going to pretend it does.
@@ -137,7 +137,7 @@ With Strata on a decent graphics card, replies come out faster than you can read
 
 ## What you need
 
-- Windows 10 or 11, 64-bit. macOS and Linux aren't built or tested.
+- Windows 10 or 11, 64-bit, or a 64-bit Linux desktop (Ubuntu 22.04 or newer, Fedora, Arch and similar). macOS isn't built or tested.
 - For the recommended Strata setup: a regular gaming PC with a 12 GB+ graphics card and 32 GB of RAM, plus plenty of disk space for the model.
 - Or any OpenAI-compatible server already running on your PC, like LM Studio or Ollama. In that case your hardware needs are whatever that model needs.
 - Internet for the first install and model download. After that the model and file work run locally. Web tools still need the network.
@@ -146,7 +146,7 @@ The [setup guide](docs/SETUP.md) covers all of this in detail, including buildin
 
 ## Heads up
 
-Automatic mode is on by default so normal work doesn't ask you for permission every five seconds. It still asks before things it recognizes as destructive, but that check is a heuristic. **It is not a sandbox.** Tools run with your Windows user's permissions. Give it a separate working folder, keep backups, and use a VM or a separate account for anything you don't trust.
+Automatic mode is on by default so normal work doesn't ask you for permission every five seconds. It still asks before things it recognizes as destructive, but that check is a heuristic. **It is not a sandbox.** Tools run with your user account's permissions. Give it a separate working folder, keep backups, and use a VM or a separate account for anything you don't trust.
 
 Chats and browser profiles are stored locally and LocalWORK doesn't encrypt them. Office previews are close but not exact, and Word page counts need Word installed. Long tasks can repeat steps or lose details when the context gets compacted. There's no guarantee a task finishes correctly, so check the output.
 
