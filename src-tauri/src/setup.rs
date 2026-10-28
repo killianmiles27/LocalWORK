@@ -1,7 +1,7 @@
 //! First-run wizard support (hardware check, Strata folder detection) and the Strata update check.
-use crate::{paths, strata, supervisor, App};
+use crate::{paths, python, strata, supervisor, App};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, State};
@@ -28,7 +28,7 @@ fn run(prog: &str, args: &[&str], dir: Option<&PathBuf>) -> Option<String> {
 }
 
 fn strata_root() -> PathBuf {
-    PathBuf::from(strata::setting("strataRoot", &paths::default_strata_root()))
+    strata_root_setting().unwrap_or_default()
 }
 
 fn strata_ok(root: &PathBuf) -> bool {
@@ -163,6 +163,54 @@ pub fn set_model_config(path: String) -> Result<Value, String> {
 
 fn write_setting(key: &str, value: &str) -> Result<(), String> {
     write_setting_value(key, json!(value))
+}
+
+/// settings.json as an object; `{}` when it is missing or unreadable.
+pub fn settings() -> Value {
+    std::fs::read_to_string(paths::data_dir().join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+/// Where Strata lives: the saved folder, or the packaged/env default when none is saved.
+pub fn strata_root_setting() -> Option<PathBuf> {
+    let root = settings().get("strataRoot").and_then(Value::as_str).map(str::trim).filter(|r| !r.is_empty()).map(PathBuf::from);
+    root.or_else(|| {
+        let root = PathBuf::from(paths::default_strata_root());
+        (!root.as_os_str().is_empty()).then_some(root)
+    })
+}
+
+/// Which interpreter runs the Workbench tools, and what to install when there is none.
+#[tauri::command(async)]
+pub fn python_for_tools() -> Value {
+    let setting = settings().get("workbenchPython").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()).map(String::from);
+    let root = strata_root_setting();
+    let mut out = json!({"setting": setting, "external": strata::external()});
+    match python::find(setting.as_deref(), root.as_deref()) {
+        Some(found) => out["found"] = json!({
+            "path": found.path.to_string_lossy(),
+            "version": found.version_text(),
+            "source": found.source.label(),
+        }),
+        None => out["missing"] = json!(python::missing_message(strata::external(), root.as_deref())),
+    }
+    out
+}
+
+/// Choose the interpreter for the Workbench tools. A null or empty path goes back to automatic.
+#[tauri::command(async)]
+pub fn set_workbench_python(path: Option<String>) -> Result<Value, String> {
+    let picked = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    let Some(picked) = picked else {
+        write_setting("workbenchPython", "")?;
+        return Ok(json!({"ok": true, "setting": null}));
+    };
+    let found = python::check(Path::new(&picked))?;
+    write_setting("workbenchPython", &picked)?;
+    Ok(json!({"ok": true, "setting": picked, "path": found.path.to_string_lossy(), "version": found.version_text()}))
 }
 
 /// Merge one key into settings.json, keeping everything else in it.
