@@ -1,12 +1,12 @@
 # Security
 
-LocalWORK is early software that can run commands and change files with the current Windows user's permissions. It has approval checks, not an OS sandbox. Use a dedicated working folder and backups. Use a separate account or VM for untrusted documents, repositories, and websites, especially on a sensitive network.
+LocalWORK is early software that can run commands and change files with the current user's OS permissions. It has approval checks, not an OS sandbox. Use a dedicated working folder and backups. Use a separate account or VM for untrusted documents, repositories, and websites, especially on a sensitive network.
 
 ## Report a vulnerability
 
 Use [GitHub's private vulnerability reporting](https://github.com/killianmiles27/LocalWORK/security/advisories/new) if it is enabled. If that form is unavailable, open an issue asking for a private reporting channel **without posting the exploit, credentials, private files, or personal logs**. No monitored security email or response-time guarantee is advertised.
 
-Include the affected commit/version, Windows version, minimal reproduction, expected behavior, and impact. Redact secrets. The maintained source branch is `main`; this is not a promise to maintain every older build.
+Include the affected commit/version, OS and version, minimal reproduction, expected behavior, and impact. Redact secrets. The maintained source branch is `main`; this is not a promise to maintain every older build.
 
 ## Boundaries
 

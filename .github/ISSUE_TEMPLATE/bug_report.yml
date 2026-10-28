@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a problem with LocalWORK
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        If you attach a chat export, review it first and remove private data.
+  - type: textarea
+    id: what-did-you-do
+    attributes:
+      label: What did you do?
+      description: Include the steps to reproduce the problem.
+      placeholder: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LocalWORK version
+      placeholder: e.g. 0.1.5
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: e.g. Windows 11 or Fedora 42
+    validations:
+      required: true
+  - type: textarea
+    id: model-engine
+    attributes:
+      label: Model and engine
+      description: Include the model name and engine (Strata, PolyStrata, or another server).
+      placeholder: e.g. Qwen3-30B-A3B via Strata
+    validations:
+      required: false
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: e.g. NVIDIA RTX 4070, or N/A
+    validations:
+      required: false
