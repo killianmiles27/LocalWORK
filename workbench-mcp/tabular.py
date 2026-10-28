@@ -421,7 +421,8 @@ def _read(path, args):
     else:
         limit = args.get("limit", 100)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200: raise ValueError("limit must be between 1 and 200")
-        r1, r2, c1, c2 = table["header_row"], min(max(table["sparse"], default=r1), r1 + limit), 1, len(table["headers"])
+        r1 = table["header_row"]
+        r2, c1, c2 = min(max(table["sparse"], default=r1), r1 + limit), 1, len(table["headers"])
     rows = []
     text_truncated = False
     next_cell = None
