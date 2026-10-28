@@ -48,6 +48,23 @@ gh workflow run linux-publish.yml -f run_id=<run id> -f tag=v<version>
 
 `.github/workflows/linux-publish.yml` downloads that run's `linux-bundles` artifact and uploads the AppImage, deb and rpm to the release. Use the same run whose AppImage you signed: a rebuilt AppImage has different bytes and the signature would not match. The job prints the SHA-256 of each file, so you can compare it with the AppImage you signed. Upload the `.sig`, latest.json and the PKGBUILD yourself.
 
+## Windows installer from any machine
+
+The Windows build workflow (`.github/workflows/windows-release.yml`) builds the unsigned NSIS installer on a GitHub Windows runner, for every push to `main` or on demand. It fetches the pinned tools, builds the patched agent, installs the web libraries for Python 3.11 to 3.14 (`install-mcp-libs.ps1 -PythonVersions`, so no Strata is needed on the runner), and checks the installer contains the bundled tools. It uses no secrets, so you can release Windows from a Linux machine:
+
+```bash
+gh run download <windows run id> -n windows-installer
+npx tauri signer sign -f <path to the private key> LocalWORK_<version>_x64-setup.exe
+```
+
+Add a `windows-x86_64` entry to latest.json whose URL is the installer and whose signature is the content of the `.sig`. Then pass the same run to the publish workflow, which copies the installer into the release next to the Linux packages:
+
+```bash
+gh workflow run linux-publish.yml -f run_id=<linux run id> -f windows_run_id=<windows run id> -f tag=v<version>
+```
+
+As with the AppImage, sign the installer from the same run you publish. Before a release, also install it on a real Windows PC or test account; the build checks do not run the app.
+
 ## Publish deliberately
 
 After reviewing and testing the actual release artifacts, create a GitHub release for the matching tag. Attach the installer, its signature, and latest.json.

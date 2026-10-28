@@ -1,9 +1,15 @@
 # Installs the web tool libraries for the workbench MCP server into workbench-mcp\libs (self-contained, does not touch the model environment).
+# With -PythonVersions it runs on a build machine instead (no Strata needed): it installs binary wheels
+# for each listed CPython version side by side, so the installer works with whichever Python the
+# user's Strata uses. Example: -PythonVersions 3.12,3.13,3.11,3.14
 param([string]$Python,
-      [string]$Dest = (Join-Path $PSScriptRoot '..\workbench-mcp\libs'))
+      [string]$Dest = (Join-Path $PSScriptRoot '..\workbench-mcp\libs'),
+      [string[]]$PythonVersions)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-if (-not $Python) {
+if ($PythonVersions) {
+    if (-not $Python) { $Python = (Get-Command python -ErrorAction Stop).Source }
+} elseif (-not $Python) {
     $strataRoot = $env:LOCALWORK_STRATA_ROOT
     if (-not $strataRoot) { $strataRoot = Join-Path (Split-Path -Parent $repo) 'strata' }
     $Python = Join-Path $strataRoot '.venv\Scripts\python.exe'
@@ -40,8 +46,37 @@ function Get-PinMismatches([string]$Target, [string]$RequirementsFile) {
     })
 }
 
+if ($PythonVersions) {
+    # Each version goes into its own staging folder first: pip --target --upgrade replaces whole
+    # package folders, which would delete the compiled modules of the versions installed before it.
+    # Pure-Python files are identical across versions and compiled ones carry the version in their
+    # names (etree.cp312-win_amd64.pyd), so merging without overwriting keeps every version working.
+    $destFull = [System.IO.Path]::GetFullPath($Dest)
+    foreach ($v in $PythonVersions) {
+        $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("localwork-libs-$v-" + [guid]::NewGuid().ToString('N'))
+        try {
+            & $Python -m pip install --disable-pip-version-check --no-input --only-binary=:all: --implementation cp --python-version $v --platform win_amd64 --requirement $requirements --target $stage
+            if ($LASTEXITCODE -ne 0) {
+                if ($v -in @('3.12', '3.13')) { throw "Web libraries for Python $v failed (pip exit $LASTEXITCODE)." }
+                Write-Warning "No wheels for Python $v; skipped"
+                continue
+            }
+            $stageFull = [System.IO.Path]::GetFullPath($stage)
+            foreach ($file in Get-ChildItem -LiteralPath $stage -Recurse -File) {
+                $target = Join-Path $destFull $file.FullName.Substring($stageFull.Length).TrimStart('\', '/')
+                if (-not (Test-Path -LiteralPath $target)) {
+                    New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+                    Copy-Item -LiteralPath $file.FullName -Destination $target
+                }
+            }
+        } finally {
+            if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+        }
+    }
+}
+
 $mismatches = Get-PinMismatches -Target $Dest -RequirementsFile $requirements
-if ($mismatches.Count -gt 0) {
+if ($mismatches.Count -gt 0 -and -not $PythonVersions) {
     & $Python -m pip install --disable-pip-version-check --no-input --upgrade --requirement $requirements --target $Dest
     if ($LASTEXITCODE -ne 0) { throw "Installing the pinned web dependencies failed (pip exit $LASTEXITCODE). Check network access and Python's pip installation." }
     $mismatches = Get-PinMismatches -Target $Dest -RequirementsFile $requirements

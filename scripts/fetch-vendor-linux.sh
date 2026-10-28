@@ -66,13 +66,21 @@ fi
 
 # Web tool libraries for the workbench MCP server. The model's Python version differs between
 # distributions, so binary wheels for several CPython versions go into one folder: their compiled
-# modules carry the version in the file name and sit side by side.
+# modules carry the version in the file name and sit side by side. Each version is installed into its
+# own staging folder and merged without overwriting: pip --target --upgrade replaces whole package
+# folders, which would delete the compiled modules of every version installed before it.
 libs="$root/workbench-mcp/libs"
+mkdir -p "$libs"
 for v in 3.12 3.13 3.11 3.14; do
-  python3 -m pip install --disable-pip-version-check --no-input --upgrade --only-binary=:all: \
+  stage="$work/libs-$v"
+  if ! python3 -m pip install --disable-pip-version-check --no-input --only-binary=:all: \
     --implementation cp --python-version "$v" --platform manylinux2014_x86_64 --platform manylinux_2_28_x86_64 \
-    --requirement "$root/workbench-mcp/requirements-web.txt" --target "$libs" \
-    || { case "$v" in 3.12|3.13) echo "Web libraries for Python $v failed" >&2; exit 1;; *) echo "No wheels for Python $v; skipped";; esac; }
+    --requirement "$root/workbench-mcp/requirements-web.txt" --target "$stage"; then
+    case "$v" in 3.12|3.13) echo "Web libraries for Python $v failed" >&2; exit 1;; *) echo "No wheels for Python $v; skipped"; continue;; esac
+  fi
+  (cd "$stage" && find . -type f -print0) | while IFS= read -r -d '' f; do
+    [ -e "$libs/$f" ] || { mkdir -p "$(dirname "$libs/$f")"; cp -p "$stage/$f" "$libs/$f"; }
+  done
 done
 
 echo "Pinned Linux vendor setup verified"

@@ -1,6 +1,6 @@
 name: Linux publish
 
-# Copies the Linux packages from a finished "Linux build" run into an existing release, so they
+# Copies the Linux packages (and optionally the Windows installer) from a finished "Linux build" run into an existing release, so they
 # go from GitHub to GitHub instead of through the maintainer's connection. The AppImage .sig is
 # made locally from the same run's AppImage and uploaded with the rest of the release.
 on:
@@ -12,6 +12,9 @@ on:
       tag:
         description: Release tag, for example v0.1.5
         required: true
+      windows_run_id:
+        description: Optional ID of the successful "Windows build" run whose installer you signed
+        required: false
 
 permissions:
   contents: write
@@ -27,6 +30,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_ID: ${{ inputs.run_id }}
+          WIN_RUN_ID: ${{ inputs.windows_run_id }}
           TAG: ${{ inputs.tag }}
         run: |
           [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'run_id must be a number'; exit 1; }
@@ -38,3 +42,13 @@ jobs:
           [ "${#files[@]}" = 3 ] || { echo "Expected 3 packages, found ${#files[@]}"; exit 1; }
           sha256sum "${files[@]}"
           gh release upload "$TAG" "${files[@]}" --clobber
+          if [ -n "$WIN_RUN_ID" ]; then
+            [[ "$WIN_RUN_ID" =~ ^[0-9]+$ ]] || { echo 'windows_run_id must be a number'; exit 1; }
+            [ "$(gh run view "$WIN_RUN_ID" --json workflowName,conclusion --jq '.workflowName + " " + .conclusion')" = 'Windows build success' ] \
+              || { echo 'That run is not a successful Windows build'; exit 1; }
+            gh run download "$WIN_RUN_ID" -n windows-installer -D windows
+            mapfile -t win < <(find windows -type f -name '*-setup.exe')
+            [ "${#win[@]}" = 1 ] || { echo "Expected 1 installer, found ${#win[@]}"; exit 1; }
+            sha256sum "${win[@]}"
+            gh release upload "$TAG" "${win[@]}" --clobber
+          fi

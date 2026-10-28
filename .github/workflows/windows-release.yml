@@ -1,0 +1,68 @@
+name: Windows build
+
+# Builds the Windows installer without signing it, so it can be made from a Linux machine. The
+# updater signature is made locally from this run's installer (see docs/release.md); the signing
+# key never leaves the maintainer's machine.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Pinned runtime tools
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/fetch-vendor.ps1
+          if ($LASTEXITCODE) { throw 'Vendor tools failed' }
+      - name: Patched agent
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/build-agent.ps1 -SourceDirectory "$env:RUNNER_TEMP/aionrs"
+          if ($LASTEXITCODE) { throw 'Agent build failed' }
+      - name: Web tool libraries for Python 3.11 to 3.14
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/install-mcp-libs.ps1 -PythonVersions 3.12,3.13,3.11,3.14
+          if ($LASTEXITCODE) { throw 'Web libraries failed' }
+      - name: Bundle
+        # Updater signatures are made locally after download. Bash keeps the JSON quoting simple.
+        shell: bash
+        run: |
+          npm ci
+          npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Check the installer contents
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $exe) { throw 'No installer was produced' }
+          $listing = (& 7z l $exe.FullName) -join "`n"
+          foreach ($need in 'aionrs.exe', 'officecli.exe', 'node.exe', 'whisper-cli.exe', 'chrome-headless-shell.exe', 'server.py') {
+            if ($listing -notmatch [regex]::Escape($need)) { throw "The installer is missing $need" }
+          }
+          foreach ($v in '312', '313') {
+            if ($listing -notmatch "etree\.cp$v-win_amd64\.pyd") { throw "The web libraries for Python 3.$($v.Substring(1)) are missing" }
+          }
+          (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-installer
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 7
