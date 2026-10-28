@@ -532,7 +532,7 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         }
         return if auto_edit || remembered { Decision::Allow } else { Decision::Ask { class: Class::Write, reason: "Create or change an Office document".into(), can_remember: true } };
     }
-    if t.contains("workspace_info") || t.contains("load_skill") || t.contains("read_attachment") || t.contains("show_chart") || t.contains("show_table") || t.contains("show_diagram") || t.contains("publish_artifact") || t.contains("update_plan") || t.contains("ask_user") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
+    if t.contains("workspace_info") || t.contains("load_skill") || t.contains("read_attachment") || t.contains("show_chart") || t.contains("show_table") || t.contains("show_diagram") || t.contains("publish_artifact") || t.contains("update_plan") || t.contains("ask_user") || t.contains("web_search") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
         return Decision::Allow;
     }
     if outside {

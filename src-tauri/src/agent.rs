@@ -441,18 +441,7 @@ For these kinds of task, call the load_skill tool with the skill name first and 
 fn system_prompt(db: &Db) -> String {
     // Cross-chat memory is switched off: every chat starts fresh and knows nothing about the user.
     let _ = db;
-    let notes: Vec<(i64, String)> = vec![];
-    let base = format!("{SYSTEM_PROMPT}{}{}", skill_list(), plugins::prompt_addenda());
-    if notes.is_empty() {
-        return base;
-    }
-    let list: Vec<String> = notes.iter().map(|(_, t)| format!("- {t}")).collect();
-    format!("{base}
-
-# What you remember about the user
-{}
-(Use memory_search for older notes. Save new durable facts with memory_save.)", list.join("
-"))
+    format!("{SYSTEM_PROMPT}{}{}", skill_list(), plugins::prompt_addenda())
 }
 
 fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Option<Value> {
