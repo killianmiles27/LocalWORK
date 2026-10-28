@@ -64,7 +64,11 @@ Messages sent while the model is busy wait above the composer. Edit or remove th
 
 Automatic mode starts enabled and is saved across restarts. Routine edits, tool use, and ordinary workspace commands proceed without repeated prompts. Recognized destructive commands, credential entry, external submissions, and other consequential actions can still ask for approval. Automatic mode always asks before a command publishes or pushes something online (`git push`, `npm`/`cargo`/`twine publish`, `gh` writes), sends data to another computer (`ssh`, `scp`, `rsync`, uploads with `curl` or `Invoke-WebRequest`), runs as administrator, or changes something that runs code automatically (scheduled tasks, services, Git hooks, the Startup folder, PowerShell profiles). Commands wrapped in `cmd /c`, `powershell -Command` or `sh -c` are checked inside the wrapper, and encoded PowerShell commands always ask.
 
-*Allow this command for this chat* allows only that exact command text again in the same chat, not every command. Other tools keep *Allow for this chat*.
+Working outside the chat's folder also asks in Automatic mode: reading or writing a file elsewhere, and fetching a web address whose query string or long path segment looks like encoded data rather than an ordinary link. Approving one of those remembers that outside folder for the same tool in that chat, so it does not repeat for every file in it.
+
+Some locations are refused in every mode, with no approval that allows them: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, OS keyrings, browser profile folders, and `.env` files outside the working folder. This applies to file tools and to paths named in shell commands, and it is checked after resolving symlinks.
+
+*Allow this command for this chat* allows only that exact command text again in the same chat, not every command. Other tools keep *Allow for this chat*; for a file outside the folder, the approval covers the folder that file was in.
 
 If a run makes no progress for 10 minutes, the chat shows a notice so you can press Stop. The run is not ended for you. If the agent stops unexpectedly while a tool was writing a file, the chat names that file so you can check it.
 
