@@ -9,7 +9,7 @@ const transpile = (source, jsx = false) => ts.transpileModule(source, { compiler
   target: ts.ScriptTarget.ES2022, module: jsx ? ts.ModuleKind.CommonJS : ts.ModuleKind.ESNext,
   jsx: ts.JsxEmit.React, jsxFactory: "createElement",
 } }).outputText;
-const js = transpile(readFileSync(new URL("../../src/documentChanges.ts", import.meta.url), "utf8"));
+const js = transpile(readFileSync(new URL("../../src/document-diff.ts", import.meta.url), "utf8"));
 const { applyDocumentChange, lineDiff, linePreview } = await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`);
 // Execute the real pane and handlers with controlled hooks/IPC, as in task-templates.test.mjs.
 const paneSource = readFileSync(new URL("../../src/DocumentChanges.tsx", import.meta.url), "utf8").replace(/^import .*;\n/gm, "");

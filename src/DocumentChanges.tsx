@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import OfficeFrame from "./OfficeFrame";
 import SandboxedUi from "./SandboxedUi";
-import { applyDocumentChange, lineDiff, linePreview, type LineDiff } from "./documentChanges";
+import { applyDocumentChange, lineDiff, linePreview, type LineDiff } from "./document-diff";
 
 type Preview = { path: string; kind: string; format: "html" | "text" | "pdf"; content: string };
 type Props = {

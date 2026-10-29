@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-const url = new URL("../../src/documentChanges.ts", import.meta.url);
+const url = new URL("../../src/document-diff.ts", import.meta.url);
 const source = readFileSync(url, "utf8");
 const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
 const { lineDiff, undoHunk, linePreview, applyDocumentChange } = await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`);
