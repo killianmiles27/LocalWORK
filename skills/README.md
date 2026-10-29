@@ -18,6 +18,7 @@ Task recipes the agent loads with `load_skill` when a task calls for one. Each f
 | action-items | Decisions, deadlines and owners from notes, meetings and documents |
 | email | Summarise email exports, extract actions and draft replies locally |
 | knowledge-base | A linked markdown wiki built from the user's sources |
+| local-search | Index/search a workspace offline with `index_workspace` / `search_workspace`, then open and cite only the best sources |
 | debugging | Root-cause debugging before changing code |
 | coding | Working in a code project |
 | ssh-admin | Servers the user has added in Settings |
