@@ -19,9 +19,11 @@ import urllib.error
 import urllib.request
 
 import pyatspi
+from linux_smoke_support import message_persisted, recent_messages, select_python
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAT_MARKER = 'Fixture authenticated streaming chat: /v1/chat/completions'
+MESSAGE = 'Hello from the Linux smoke test'
 
 
 def descendants(node):
@@ -72,9 +74,11 @@ def main(appimage):
             with socket.socket() as sock:
                 sock.bind(('127.0.0.1', 0))
                 port = sock.getsockname()[1]
+            python = select_python(os.environ.get('LOCALWORK_SMOKE_PYTHON'), sys.executable)
+            print(f'Workbench Python: {python}', flush=True)
             (data / 'settings.json').write_text(json.dumps({
                 'modelSource': 'server', 'serverPort': str(port), 'serverKey': 'fixture-key',
-                'workbenchPython': os.environ.get('LOCALWORK_SMOKE_PYTHON', sys.executable),
+                'workbenchPython': python,
             }))
             with sqlite3.connect(data / 'workbench.db') as db:
                 db.execute('CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT NOT NULL)')
@@ -107,9 +111,12 @@ def main(appimage):
                 subprocess.run(['xdotool', 'mousemove', '--sync', str(bounds.x + bounds.width // 2),
                                 str(bounds.y + bounds.height // 2), 'click', '1'], check=True, timeout=5)
                 subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '1',
-                                'Hello from the Linux smoke test'], check=True, timeout=10)
+                                MESSAGE], check=True, timeout=10)
                 wait_for('enabled Send button after typing', lambda: (button if (button := find_control('Send')) and button.getState().contains(pyatspi.STATE_ENABLED) else None), processes)
                 subprocess.run(['xdotool', 'key', '--clearmodifiers', 'Return'], check=True, timeout=5)
+                wait_for('send did not reach the app (no persisted user message; agent startup may have failed)',
+                         lambda: message_persisted(data / 'workbench.db', MESSAGE), processes, seconds=30)
+                print('User message persisted; waiting for authenticated model request.', flush=True)
                 wait_for('authenticated streaming chat request to stub', lambda: CHAT_MARKER in (work / 'stub.log').read_text(), processes)
                 print('Packaged app displayed the composer and sent a chat request to the stub.', flush=True)
         except Exception:
@@ -122,10 +129,38 @@ def main(appimage):
                         print(''.join(deque(log, maxlen=100)), file=sys.stderr)
                 else:
                     print('(not created)', file=sys.stderr)
-            logs = data / 'logs'
-            if logs.exists():
-                for path in logs.glob('*.log'):
-                    print(f'--- {path.name} ---\n{path.read_text(errors="replace")}', file=sys.stderr)
+            try:
+                print('--- recent messages (role, body) ---', file=sys.stderr)
+                for role, body in recent_messages(data / 'workbench.db'):
+                    print(f'{role}: {body}', file=sys.stderr)
+            except Exception as error:
+                print(f'Could not read messages: {error}', file=sys.stderr)
+            for path in sorted([p for p in (data / 'logs').rglob('*') if p.is_file()] + list(data.glob('*.log'))):
+                try:
+                    with path.open(errors='replace') as log:
+                        print(f'--- {path.relative_to(data)} (last 100 lines) ---\n{"".join(deque(log, maxlen=100))}', file=sys.stderr)
+                except OSError as error:
+                    print(f'Could not read {path}: {error}', file=sys.stderr)
+            print('--- visible AT-SPI tree (including model status and UI errors) ---', file=sys.stderr)
+            try:
+                for index, node in enumerate(descendants(pyatspi.Registry.getDesktop(0))):
+                    if index >= 2000:
+                        print('(tree truncated)', file=sys.stderr)
+                        break
+                    try:
+                        if not node.getState().contains(pyatspi.STATE_SHOWING):
+                            continue
+                        name = node.name or ''
+                        try:
+                            text = node.queryText().getText(0, -1)[:1000]
+                        except Exception:
+                            text = ''
+                        if name or text:
+                            print(f'{node.getRoleName()}: name={name!r} text={text!r}', file=sys.stderr)
+                    except Exception:
+                        continue
+            except Exception as error:
+                print(f'Could not read AT-SPI tree: {error}', file=sys.stderr)
             raise
         finally:
             for _, process in reversed(processes):
