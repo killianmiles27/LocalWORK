@@ -1,4 +1,5 @@
 """Contract checks for the deterministic desktop model fixture."""
+import ast
 import json
 import os
 from pathlib import Path
@@ -33,11 +34,37 @@ class StubStrataTest(unittest.TestCase):
                             break
                         except (OSError, urllib.error.URLError):
                             time.sleep(.05)
-                    request = urllib.request.Request(url + '/v1/chat/completions', data=json.dumps({'messages': [{'role': 'user', 'content': 'hello'}]}).encode(), headers={'Authorization': 'Bearer fixture-key', 'Content-Type': 'application/json'})
-                    with urllib.request.urlopen(request, timeout=5) as response:
-                        self.assertEqual(json.load(response)['choices'][0]['message']['content'], 'Fixture reply')
+                    # Read the exact marker used by the smoke harness without importing pyatspi.
+                    tree = ast.parse(Path('scripts/e2e/linux-smoke.py').read_text())
+                    markers = [ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+                               and any(isinstance(target, ast.Name) and target.id == 'CHAT_MARKER' for target in node.targets)]
+                    self.assertEqual(len(markers), 1, 'smoke harness must define CHAT_MARKER')
+                    marker = markers[0]
+                    self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                                        and node.func.id == 'wait_for' and any(
+                                            isinstance(child, ast.Name) and child.id == 'CHAT_MARKER'
+                                            for child in ast.walk(node)) for node in ast.walk(tree)),
+                                    'smoke harness must wait for CHAT_MARKER')
+                    body = json.dumps({'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]}).encode()
+                    def request(key, path='/v1/chat/completions'):
+                        return urllib.request.Request(url + path, data=body, headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
+                    with self.assertRaises(urllib.error.HTTPError) as denied:
+                        urllib.request.urlopen(request('wrong-key'), timeout=5)
+                    self.assertEqual(denied.exception.code, 401)
+                    denied.exception.close()
                     output.seek(0)
-                    self.assertIn('Fixture chat request: /v1/chat/completions', output.read())
+                    self.assertNotIn(marker, output.read())
+                    # A different endpoint must not satisfy the chat assertion either.
+                    with urllib.request.urlopen(request('fixture-key', '/other'), timeout=5) as response:
+                        response.read()
+                    output.seek(0)
+                    self.assertNotIn(marker, output.read())
+                    with urllib.request.urlopen(request('fixture-key'), timeout=5) as response:
+                        self.assertIn(b'Fixture reply', response.read())
+                    output.seek(0)
+                    logged = output.read()
+                    self.assertIn(marker, logged)
+                    self.assertNotIn('fixture-key', logged)
                 finally:
                     if os.name == 'nt':
                         subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], check=False, capture_output=True)

@@ -21,6 +21,7 @@ import urllib.request
 import pyatspi
 
 ROOT = Path(__file__).resolve().parents[2]
+CHAT_MARKER = 'Fixture authenticated streaming chat: /v1/chat/completions'
 
 
 def descendants(node):
@@ -109,7 +110,7 @@ def main(appimage):
                                 'Hello from the Linux smoke test'], check=True, timeout=10)
                 wait_for('enabled Send button after typing', lambda: (button if (button := find_control('Send')) and button.getState().contains(pyatspi.STATE_ENABLED) else None), processes)
                 subprocess.run(['xdotool', 'key', '--clearmodifiers', 'Return'], check=True, timeout=5)
-                wait_for('authenticated chat request to stub', lambda: 'Fixture chat request: /v1/chat/completions' in (work / 'stub.log').read_text(), processes)
+                wait_for('authenticated streaming chat request to stub', lambda: CHAT_MARKER in (work / 'stub.log').read_text(), processes)
                 print('Packaged app displayed the composer and sent a chat request to the stub.', flush=True)
         except Exception:
             traceback.print_exc()
