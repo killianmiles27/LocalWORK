@@ -253,15 +253,20 @@ class LocalSearch(unittest.TestCase):
 
     def test_chunk_line_end_matches_source_and_stable_rebuild(self):
         text = "".join(f"Line {i:02} " + "a " * 40 + "\n" for i in range(1, 51))
-        (self.workspace / "lines.md").write_text(text, encoding="utf-8")
-        self.index()
-        hits = self.search(query="Line", path_filter="lines.md", mode="fts", limit=20)["results"]
-        self.assertGreater(len(hits), 1)
-        for hit in hits:
-            part = text[hit["open"]["start"]:hit["open"]["start"] + hit["open"]["max_chars"]]
-            self.assertEqual(int(part.splitlines()[-1].split()[1]), hit["location"]["line_end"])
-        self.index(full_rebuild=True)
-        self.assertEqual(hits, self.search(query="Line", path_filter="lines.md", mode="fts", limit=20)["results"])
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                source = text.replace("\n", newline)
+                (self.workspace / "lines.md").write_bytes(source.encode("utf-8"))
+                self.index()
+                hits = self.search(query="Line", path_filter="lines.md", mode="fts", limit=20)["results"]
+                self.assertGreater(len(hits), 1)
+                for hit in hits:
+                    part = source[hit["open"]["start"]:hit["open"]["start"] + hit["open"]["max_chars"]]
+                    self.assertEqual(int(part.splitlines()[-1].split()[1]), hit["location"]["line_end"])
+                    opened = self.call("read_attachment", **hit["open"])["content"][0]["text"]
+                    self.assertIn(part, opened)
+                self.index(full_rebuild=True)
+                self.assertEqual(hits, self.search(query="Line", path_filter="lines.md", mode="fts", limit=20)["results"])
 
     def test_long_lines_have_exact_offsets_and_bounded_output(self):
         (self.workspace / "long.txt").write_text("x" * 2500 + " distinctivepassage " + "y" * 2500, encoding="utf-8")
