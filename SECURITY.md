@@ -28,6 +28,6 @@ Conversation databases, cached pages, saved attachments, logs, and browser cooki
 
 ## Distribution
 
-App updates require the configured updater signing key. This is separate from Windows Authenticode signing. The supported updater artifact is a signed Windows installer EXE; ZIP update extraction is disabled. Forks must configure their own update endpoint and signing key before distributing builds.
+App updates require the configured updater signing key. This is separate from Windows Authenticode signing. The supported updater artifacts are the signed Windows installer EXE and, since v0.1.5, the signed Linux AppImage; both update from `latest.json`. ZIP update extraction is disabled. Installs from the .deb, .rpm or Arch package do not self-update; install the next package over them. Forks must configure their own update endpoint and signing key before distributing builds.
 
 See [the audit record](docs/PUBLIC_READINESS.md) for checks performed and remaining release work. A scan without findings is not a guarantee of security.
