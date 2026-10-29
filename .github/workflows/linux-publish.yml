@@ -23,10 +23,12 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write
+      attestations: write
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Upload the packages
+      - name: Prepare the packages
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -61,4 +63,15 @@ jobs:
           export LC_ALL=C
           assets=(*)
           sha256sum -- "${assets[@]}" | tee SHA256SUMS
-          gh release upload "$TAG" "${assets[@]}" SHA256SUMS --clobber
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: publish/*
+      - name: Upload the packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          cd publish
+          gh release upload "$TAG" * --clobber

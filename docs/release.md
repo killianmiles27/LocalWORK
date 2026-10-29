@@ -50,6 +50,14 @@ gh workflow run linux-publish.yml -f run_id=<run id> -f tag=v<version>
 
 Download `SHA256SUMS` and the covered assets into the same directory, then run `sha256sum -c SHA256SUMS`. This checks their bytes against the checksum file; it does not authenticate the file or replace updater signature verification.
 
+The publish job also creates GitHub provenance attestations for the AppImage, deb, rpm, PKGBUILD, `SHA256SUMS`, and optional Windows installer. Verify each downloaded file, for example:
+
+```bash
+gh attestation verify LocalWORK_<version>_amd64.AppImage -R killianmiles27/LocalWORK
+```
+
+These attestations identify the **publish workflow**, which copies artifacts from separate Linux and Windows build runs and downloads the locally prepared PKGBUILD; they do not attest how those artifacts were built. The Windows workflow uploads a CI artifact, not release assets, so the publish job attests the installer when included. Signatures, latest.json and plugins attached separately are not covered by this job's attestations. Attestations do not replace updater signatures.
+
 ## Windows installer from any machine
 
 The Windows build workflow (`.github/workflows/windows-release.yml`) builds the unsigned NSIS installer on a GitHub Windows runner, for every push to `main` or on demand. It fetches the pinned tools, builds the patched agent, installs the web libraries for Python 3.11 to 3.14 (`install-mcp-libs.ps1 -PythonVersions`, so no Strata is needed on the runner), and checks the installer contains the bundled tools. It uses no secrets, so you can release Windows from a Linux machine:

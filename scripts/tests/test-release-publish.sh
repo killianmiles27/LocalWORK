@@ -35,15 +35,29 @@ case "$1 $2" in
 esac
 EOF
 chmod +x "$tmp/bin/gh"
-awk '/^        run: \|$/ { inside=1; next } inside && /^          / { sub(/^          /, ""); print; next } inside { exit }' \
-  "$root/.github/workflows/linux-publish.yml" > "$tmp/publish.sh"
+workflow="$root/.github/workflows/linux-publish.yml"
+awk -v dir="$tmp" '
+  /^        run: \|$/ { inside=1; count++; next }
+  inside && /^          / { sub(/^          /, ""); print > (dir "/step" count ".sh"); next }
+  inside { inside=0 }
+  END { if (count != 2) { print "Expected separate preparation and upload steps" > "/dev/stderr"; exit 1 } }
+' "$workflow"
+subject_path=$(awk '/^          subject-path: / { print $2 }' "$workflow")
+[ -n "$subject_path" ] || { printf 'Missing attestation subject path\n' >&2; exit 1; }
 export PATH="$tmp/bin:$PATH" FIXTURES="$tmp/fixtures" RUN_ID=1 TAG=v1.2.3
 
 for windows in no yes; do
   mkdir -p "$tmp/$windows"
   export PUBLISHED="$tmp/$windows/published"
   if [ "$windows" = yes ]; then export WIN_RUN_ID=2; else export WIN_RUN_ID=; fi
-  (cd "$tmp/$windows" && bash -e "$tmp/publish.sh")
+  (cd "$tmp/$windows" && bash -eo pipefail "$tmp/step1.sh")
+  # The configured subject glob must select exactly the bytes subsequently uploaded.
+  (cd "$tmp/$windows" && for file in $subject_path; do cp "$file" "$tmp/$windows/attested-${file##*/}"; done)
+  (cd "$tmp/$windows" && bash -eo pipefail "$tmp/step2.sh")
+  for file in "$PUBLISHED/"*; do
+    cmp "$file" "$tmp/$windows/attested-${file##*/}"
+  done
+  [ "$(find "$tmp/$windows" -maxdepth 1 -type f -name 'attested-*' | wc -l)" -eq "$(find "$PUBLISHED" -maxdepth 1 -type f | wc -l)" ]
   [ -f "$PUBLISHED/SHA256SUMS" ] || { printf 'Missing SHA256SUMS (%s)\n' "$windows" >&2; exit 1; }
   (cd "$PUBLISHED" && sha256sum --check SHA256SUMS)
   expected=4
@@ -63,7 +77,7 @@ done
 rm "$FIXTURES/release/PKGBUILD"
 mkdir -p "$tmp/missing"
 export PUBLISHED="$tmp/missing/published" WIN_RUN_ID=
-if (cd "$tmp/missing" && bash -e "$tmp/publish.sh"); then
+if (cd "$tmp/missing" && bash -eo pipefail "$tmp/step1.sh"); then
   printf 'Publish succeeded without PKGBUILD\n' >&2
   exit 1
 fi
