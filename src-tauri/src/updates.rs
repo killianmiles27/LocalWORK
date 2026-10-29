@@ -1,5 +1,6 @@
 //! App updates from GitHub releases (signed latest.json). Opt-in: with `auto_update` on, LocalWORK checks once
 //! at launch and installs a newer version by itself. Nothing is fetched while offline mode is on.
+use crate::sync::LockExt;
 use crate::{setup, store, App};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -46,17 +47,17 @@ pub async fn app_update_install(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command(async)]
 pub fn auto_update_get(s: State<App>) -> bool {
-    store::kv_get(&s.db.lock().unwrap(), "auto_update").as_deref() == Some("1")
+    store::kv_get(&s.db.guard(), "auto_update").as_deref() == Some("1")
 }
 
 #[tauri::command(async)]
 pub fn auto_update_set(s: State<App>, on: bool) {
-    store::kv_set(&s.db.lock().unwrap(), "auto_update", if on { "1" } else { "0" });
+    store::kv_set(&s.db.guard(), "auto_update", if on { "1" } else { "0" });
 }
 
 /// Launch-time check, only when the user opted in and offline mode is off. Failures are logged, not shown.
 pub fn on_launch(app: &AppHandle) {
-    let on = store::kv_get(&app.state::<App>().db.lock().unwrap(), "auto_update").as_deref() == Some("1");
+    let on = store::kv_get(&app.state::<App>().db.guard(), "auto_update").as_deref() == Some("1");
     if !on || setup::offline() || cfg!(debug_assertions) {
         return;
     }

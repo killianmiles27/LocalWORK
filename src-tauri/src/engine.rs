@@ -4,6 +4,7 @@
 //! streamed as `engine-log` {line} and appended to `<data>/logs/engine-setup.log`. `engine_cancel` stops it.
 //! The engine zip uses `download::fetch` (host allowlist, `download-progress` events, id `engine-install`).
 //! Model downloads are done by PolyStrata's own setup.py (through pip/Hugging Face), not by the app downloader.
+use crate::sync::LockExt;
 use crate::{download, http, paths, runconfig, setup, strata, supervisor};
 use serde_json::{json, Value};
 use std::fs::{self, File};
@@ -140,7 +141,7 @@ fn run(app: &AppHandle, mut cmd: Command, quiet: bool) -> Result<(i32, String), 
         .env("PYTHONUNBUFFERED", "1").env("PYTHONIOENCODING", "utf-8").env("PYTHONUTF8", "1");
     supervisor::hidden(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("Could not start the program: {e}"))?;
-    *PID.lock().unwrap() = Some(child.id());
+    *PID.guard() = Some(child.id());
     let (tx, rx) = mpsc::channel::<String>();
     if let Some(o) = child.stdout.take() { pump(o, tx.clone()); }
     if let Some(o) = child.stderr.take() { pump(o, tx.clone()); }
@@ -151,7 +152,7 @@ fn run(app: &AppHandle, mut cmd: Command, quiet: bool) -> Result<(i32, String), 
         if all.len() < (1 << 20) { all.push_str(&l); all.push('\n'); }
     }
     let st = child.wait().map_err(|e| e.to_string());
-    *PID.lock().unwrap() = None;
+    *PID.guard() = None;
     if CANCEL.load(SeqCst) {
         return Err(CANCELLED.into());
     }
@@ -286,7 +287,7 @@ pub fn engine_cancel() {
     CANCEL.store(true, SeqCst);
     download::cancel(DL_ID);
     download::cancel(HF_DL_ID);
-    if let Some(p) = *PID.lock().unwrap() {
+    if let Some(p) = *PID.guard() {
         supervisor::kill_tree(p);
     }
 }

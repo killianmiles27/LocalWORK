@@ -21,9 +21,11 @@ mod store;
 mod templates;
 mod strata;
 mod supervisor;
+pub mod sync;
 mod updates;
 mod voice;
 
+use crate::sync::LockExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -136,12 +138,12 @@ fn effort_set(s: State<App>, effort: Option<String>) -> Result<Value, String> {
 #[tauri::command(async)]
 fn mode_switch(app: AppHandle, s: State<App>, id: String, reload: Option<bool>) -> Result<Value, String> {
     let m = plugins::find_mode(&id).ok_or_else(|| format!("no mode {id}"))?;
-    if m["active"] == true && reload != Some(true) && s.strata.lock().unwrap().status.state == "ready" {
+    if m["active"] == true && reload != Some(true) && s.strata.guard().status.state == "ready" {
         return Ok(m);
     }
     let cfg = m["config"].as_str().unwrap_or("").to_string();
     setup::set_model_config(cfg)?;
-    let ags: Vec<_> = s.agents.lock().unwrap().drain().map(|(_, a)| a).collect();
+    let ags: Vec<_> = s.agents.guard().drain().map(|(_, a)| a).collect();
     for a in ags {
         a.shutdown();
     }
@@ -167,7 +169,7 @@ fn run_config_import(path: String) -> Result<String, String> {
 
 #[tauri::command(async)]
 fn model_status(s: State<App>) -> strata::Status {
-    s.strata.lock().unwrap().status.clone()
+    s.strata.guard().status.clone()
 }
 
 #[tauri::command(async)]
@@ -186,9 +188,9 @@ async fn model_telemetry(s: State<'_, App>) -> Result<Value, String> {
 
 #[tauri::command(async)]
 fn set_auto_edit(s: State<App>, id: Option<String>, on: bool) {
-    store::kv_set(&s.db.lock().unwrap(), "auto_edit", if on { "1" } else { "0" });
+    store::kv_set(&s.db.guard(), "auto_edit", if on { "1" } else { "0" });
     let _ = id;
-    let agents = s.agents.lock().unwrap();
+    let agents = s.agents.guard();
     for a in agents.values() {
         a.set_auto_edit(on);
     }
@@ -201,7 +203,7 @@ fn model_start(app: AppHandle, s: State<App>) -> Result<(), String> {
 
 #[tauri::command(async)]
 fn model_stop(app: AppHandle, s: State<App>) {
-    let ags: Vec<_> = s.agents.lock().unwrap().values().cloned().collect();
+    let ags: Vec<_> = s.agents.guard().values().cloned().collect();
     for a in ags {
         a.shutdown();
     }
@@ -210,12 +212,12 @@ fn model_stop(app: AppHandle, s: State<App>) {
 
 #[tauri::command(async)]
 fn list_conversations(s: State<App>) -> Vec<Value> {
-    store::list_convs(&s.db.lock().unwrap())
+    store::list_convs(&s.db.guard())
 }
 
 #[tauri::command(async)]
 fn open_workspace(s: State<App>, id: String) -> Result<(), String> {
-    let workspace = store::conv_info(&s.db.lock().unwrap(), &id)
+    let workspace = store::conv_info(&s.db.guard(), &id)
         .map(|(_, workspace, _)| workspace)
         .ok_or_else(|| "Unknown chat".to_string())?;
     desktop::reveal_folder(&workspace)
@@ -228,12 +230,12 @@ fn create_conversation(app: AppHandle, s: State<App>, workspace: Option<String>)
         Some(path) => desktop::existing_workspace(&path)?,
         None => default_workspace(&app, &s, &id)?,
     };
-    store::create_conv(&s.db.lock().unwrap(), &id, &workspace).map_err(|e| e.to_string())?;
+    store::create_conv(&s.db.guard(), &id, &workspace).map_err(|e| e.to_string())?;
     Ok(id)
 }
 
 fn default_workspace(app: &AppHandle, s: &State<App>, id: &str) -> Result<String, String> {
-    let parent = store::kv_get(&s.db.lock().unwrap(), "projects_folder")
+    let parent = store::kv_get(&s.db.guard(), "projects_folder")
         .filter(|path| !path.trim().is_empty())
         .map(std::path::PathBuf::from)
         .map(Ok)
@@ -248,7 +250,7 @@ fn default_workspace(app: &AppHandle, s: &State<App>, id: &str) -> Result<String
 fn export_markdown(app: AppHandle, s: State<App>, id: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (title, msgs) = {
-        let c = s.db.lock().unwrap();
+        let c = s.db.guard();
         (store::conv_info(&c, &id).map(|x| x.0).ok_or("Unknown chat")?, store::messages(&c, &id, 0))
     };
     let name: String = title.chars().filter(|c| !"<>:\"/\\|?*".contains(*c) && !c.is_control()).take(80).collect();
@@ -266,10 +268,10 @@ fn export_markdown(app: AppHandle, s: State<App>, id: String) -> Result<Option<S
 
 #[tauri::command(async)]
 fn delete_conversation(s: State<App>, id: String) {
-    if let Some(a) = s.agents.lock().unwrap().remove(&id) {
+    if let Some(a) = s.agents.guard().remove(&id) {
         a.shutdown();
     }
-    store::delete_conv(&s.db.lock().unwrap(), &id);
+    store::delete_conv(&s.db.guard(), &id);
 }
 
 #[tauri::command(async)]
@@ -278,7 +280,7 @@ fn conversation_rename(s: State<App>, id: String, title: String) -> Result<(), S
     if t.is_empty() {
         return Err("A chat needs a name".into());
     }
-    let c = s.db.lock().unwrap();
+    let c = s.db.guard();
     store::rename(&c, &id, &t);
     // A name the user chose is never replaced by the automatic one.
     store::kv_set(&c, &format!("titled:{id}"), "1");
@@ -287,27 +289,27 @@ fn conversation_rename(s: State<App>, id: String, title: String) -> Result<(), S
 
 #[tauri::command(async)]
 fn conversation_pin(s: State<App>, id: String, on: bool) {
-    store::set_pinned(&s.db.lock().unwrap(), &id, on);
+    store::set_pinned(&s.db.guard(), &id, on);
 }
 
 #[tauri::command(async)]
 fn search_conversations(s: State<App>, q: String) -> Vec<String> {
-    store::search(&s.db.lock().unwrap(), &q)
+    store::search(&s.db.guard(), &q)
 }
 
 /// Edit and regenerate: cuts the chat back to before user message `msg_id` and returns its text for resending.
 #[tauri::command(async)]
 fn conversation_rewind(s: State<App>, id: String, msg_id: i64) -> Result<String, String> {
-    let running = s.agents.lock().unwrap().get(&id).cloned();
+    let running = s.agents.guard().get(&id).cloned();
     if let Some(a) = running {
         if a.busy() {
             return Err("Wait for the current reply to finish, or stop it first.".into());
         }
         // The agent rereads its session file on the next message.
-        s.agents.lock().unwrap().remove(&id);
+        s.agents.guard().remove(&id);
         a.retire();
     }
-    rewind::rewind(&s.db.lock().unwrap(), &id, msg_id)
+    rewind::rewind(&s.db.guard(), &id, msg_id)
 }
 
 #[tauri::command]
@@ -318,16 +320,16 @@ fn quit_anyway(app: AppHandle) {
 
 #[tauri::command(async)]
 fn load_messages(s: State<App>, id: String, after: Option<i64>) -> Vec<Value> {
-    store::messages(&s.db.lock().unwrap(), &id, after.unwrap_or(0))
+    store::messages(&s.db.guard(), &id, after.unwrap_or(0))
 }
 
 #[tauri::command(async)]
 fn agent_send(app: AppHandle, s: State<App>, id: String, text: String) -> Result<(), String> {
     let a = agent::get_or_start(&app, &s.agents, &s.db, &s.strata, &id)?;
-    let enabled = store::kv_get(&s.db.lock().unwrap(), "auto_edit").map(|v| v != "0").unwrap_or(true);
+    let enabled = store::kv_get(&s.db.guard(), "auto_edit").map(|v| v != "0").unwrap_or(true);
     a.set_auto_edit(enabled);
     {
-        let c = s.db.lock().unwrap();
+        let c = s.db.guard();
         setup::note_chat_sent(&c, &id);
         store::add_msg(&c, &id, "user", &json!({"text": text}));
         if let Some((title, _, _)) = store::conv_info(&c, &id) {
@@ -342,7 +344,7 @@ fn agent_send(app: AppHandle, s: State<App>, id: String, text: String) -> Result
 }
 
 fn attach_dir(s: &State<App>, id: &str) -> Result<std::path::PathBuf, String> {
-    let ws = store::conv_info(&s.db.lock().unwrap(), id).map(|x| x.1).ok_or("Unknown chat")?;
+    let ws = store::conv_info(&s.db.guard(), id).map(|x| x.1).ok_or("Unknown chat")?;
     let d = std::path::Path::new(&ws).join("attachments");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     Ok(d)
@@ -398,7 +400,7 @@ fn agent_compact(app: AppHandle, s: State<App>, id: String) -> Result<(), String
 }
 
 fn live_dir(s: &State<App>, id: &str) -> Result<std::path::PathBuf, String> {
-    let db = s.db.lock().map_err(|_| "Database lock unavailable")?;
+    let db = s.db.guard();
     let (_, ws, _) = store::conv_info(&db, id).ok_or("Unknown chat")?;
     Ok(std::path::PathBuf::from(ws).join(".browser").join("live"))
 }
@@ -425,13 +427,13 @@ fn browser_frame(s: State<App>, id: String, file: String) -> Result<tauri::ipc::
 
 #[tauri::command(async)]
 fn context_usage(s: State<App>, id: String) -> Value {
-    let used = store::kv_get(&s.db.lock().unwrap(), &format!("ctx:{id}")).and_then(|v| v.parse::<u64>().ok());
+    let used = store::kv_get(&s.db.guard(), &format!("ctx:{id}")).and_then(|v| v.parse::<u64>().ok());
     json!({"used": used, "window": strata::context_window()})
 }
 
 #[tauri::command(async)]
 fn agent_stop(s: State<App>, id: String) {
-    let agent = s.agents.lock().unwrap().remove(&id);
+    let agent = s.agents.guard().remove(&id);
     if let Some(a) = agent {
         a.stop_turn();
         // Upstream can stall while shutting down an MCP session after Stop.
@@ -442,30 +444,30 @@ fn agent_stop(s: State<App>, id: String) {
 
 #[tauri::command(async)]
 fn agent_answer(s: State<App>, id: String, call_id: String, allow: bool, remember: bool) {
-    if let Some(a) = s.agents.lock().unwrap().get(&id) {
+    if let Some(a) = s.agents.guard().get(&id) {
         a.answer(&call_id, allow, remember);
     }
 }
 
 #[tauri::command(async)]
 fn get_setting(s: State<App>, key: String) -> Option<String> {
-    store::kv_get(&s.db.lock().unwrap(), &key)
+    store::kv_get(&s.db.guard(), &key)
 }
 
 #[tauri::command(async)]
 fn set_setting(s: State<App>, key: String, value: String) {
-    store::kv_set(&s.db.lock().unwrap(), &key, &value);
+    store::kv_set(&s.db.guard(), &key, &value);
 }
 
 #[tauri::command(async)]
 fn memories_list(s: State<App>) -> Vec<Value> {
-    let c = s.db.lock().unwrap();
+    let c = s.db.guard();
     store::recent_memories(&c, 500).into_iter().map(|(id, text)| json!({"id": id, "text": text})).collect()
 }
 
 #[tauri::command(async)]
 fn memory_delete(s: State<App>, id: i64) {
-    store::delete_memory(&s.db.lock().unwrap(), id);
+    store::delete_memory(&s.db.guard(), id);
 }
 
 #[tauri::command(async)]
@@ -491,7 +493,7 @@ fn close_browsers() {
 
 fn shutdown(state: &App) {
     let t0 = Instant::now();
-    let ags: Vec<_> = state.agents.lock().unwrap().drain().map(|(_, a)| a).collect();
+    let ags: Vec<_> = state.agents.guard().drain().map(|(_, a)| a).collect();
     for a in &ags {
         a.shutdown();
     }
@@ -536,7 +538,7 @@ pub fn run() {
                 if QUIT_CONFIRMED.load(Ordering::SeqCst) {
                     return;
                 }
-                let busy = window.state::<App>().agents.lock().unwrap().values().filter(|a| a.busy()).count();
+                let busy = window.state::<App>().agents.guard().values().filter(|a| a.busy()).count();
                 if busy > 0 {
                     api.prevent_close();
                     let _ = window.emit("close-blocked", busy);

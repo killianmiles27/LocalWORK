@@ -7,6 +7,7 @@
 //! `host:power_stats` estimates electricity use: the GPU's measured draw (nvidia-smi) plus the CPU's rated
 //! watts scaled by its load plus a fixed amount for the rest of the machine. The sampler integrates that
 //! over time, per agent turn ("task") and per app session, and the plugin's price per kWh turns it into cost.
+use crate::sync::LockExt;
 use crate::supervisor;
 use serde_json::{json, Value};
 use std::process::Command;
@@ -44,13 +45,13 @@ const PERIOD: Duration = Duration::from_millis(1500);
 
 pub fn get() -> Value {
     wake();
-    cache().lock().unwrap().value.clone()
+    cache().guard().value.clone()
 }
 
 /// Keep the sampler running (it stops itself after IDLE without a request and without a task).
 fn wake() {
     let start = {
-        let mut c = cache().lock().unwrap();
+        let mut c = cache().guard();
         c.last_ask = Instant::now();
         let start = !c.running;
         c.running = true;
@@ -64,7 +65,7 @@ fn wake() {
 /// An agent turn started: energy from now on counts toward this task.
 pub fn task_begin() {
     {
-        let mut c = cache().lock().unwrap();
+        let mut c = cache().guard();
         c.power.task_wh = 0.0;
         c.power.task_secs = 0.0;
         c.power.task_start = Some(Instant::now());
@@ -74,7 +75,7 @@ pub fn task_begin() {
 }
 
 pub fn task_end() {
-    let mut c = cache().lock().unwrap();
+    let mut c = cache().guard();
     if let Some(t) = c.power.task_start.take() { c.power.task_secs = t.elapsed().as_secs_f64(); }
 }
 
@@ -84,7 +85,7 @@ pub fn power(settings: &Value) -> Value {
     let num = |k: &str, d: f64| settings.get(k).and_then(Value::as_f64).filter(|x| x.is_finite() && *x >= 0.0).unwrap_or(d);
     let price = num("pricePerKwh", 0.17);
     wake();
-    let mut c = cache().lock().unwrap();
+    let mut c = cache().guard();
     c.power.cpu_watts = num("cpuWatts", 65.0);
     c.power.base_watts = num("baseWatts", 40.0);
     let p = &c.power;
@@ -137,7 +138,7 @@ fn sampler() {
         let gpu_w = v["gpu"]["power_w"].as_f64();
         let cpu_load = sys.global_cpu_usage() as f64 / 100.0;
         {
-            let mut c = cache().lock().unwrap();
+            let mut c = cache().guard();
             c.value = v;
             let dt_h = last.elapsed().as_secs_f64().min(10.0) / 3600.0;
             last = Instant::now();

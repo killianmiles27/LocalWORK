@@ -2,6 +2,7 @@
 //! every child is started with CREATE_NO_WINDOW, and pids.json lets the next start clean up after a crash.
 //! On Linux each child leads its own process group, so kill_tree takes the whole group; the app's exit
 //! handler stops children, and pids.json covers a crashed host on the next start.
+use crate::sync::LockExt;
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::ffi::c_void;
@@ -115,7 +116,7 @@ fn write_pids(path: &Path, v: &[PidRec]) {
 }
 
 pub fn record(data: &Path, rec: PidRec) {
-    let _g = PIDS_LOCK.lock();
+    let _g = PIDS_LOCK.guard();
     let p = data.join("pids.json");
     let mut v = read_pids(&p);
     v.retain(|r| r.pid != rec.pid);
@@ -124,7 +125,7 @@ pub fn record(data: &Path, rec: PidRec) {
 }
 
 pub fn forget(data: &Path, pid: u32) {
-    let _g = PIDS_LOCK.lock();
+    let _g = PIDS_LOCK.guard();
     let p = data.join("pids.json");
     let mut v = read_pids(&p);
     v.retain(|r| r.pid != pid);
@@ -134,7 +135,7 @@ pub fn forget(data: &Path, pid: u32) {
 /// Kill anything a previous run left behind. A pid is only killed if its image still matches what we recorded
 /// (pids get reused), so an unrelated process is never touched.
 pub fn cleanup_stale(data: &Path) -> usize {
-    let _g = PIDS_LOCK.lock();
+    let _g = PIDS_LOCK.guard();
     let p = data.join("pids.json");
     let mut killed = 0;
     for r in read_pids(&p) {

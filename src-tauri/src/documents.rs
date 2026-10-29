@@ -1,4 +1,5 @@
 //! Workspace deliverables and immutable, local revision snapshots.
+use crate::sync::LockExt;
 use crate::{paths, store, supervisor, App};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -71,7 +72,7 @@ pub fn resolve_file(workspace: &Path, path: &str) -> Result<PathBuf, String> {
 }
 
 fn workspace(s: &State<'_, App>, id: &str) -> Result<PathBuf, String> {
-    let db = s.db.lock().map_err(|_| "Database lock unavailable")?;
+    let db = s.db.guard();
     store::conv_info(&db, id)
         .map(|x| PathBuf::from(x.1))
         .ok_or_else(|| "Unknown chat".into())
@@ -136,9 +137,7 @@ fn snapshot_at(data: &Path, workspace: &Path, path: &str) -> Result<(), String> 
         Ok(_) => {}
     }
     let file = resolve_file(workspace, path)?;
-    let _guard = REVISION_LOCK
-        .lock()
-        .map_err(|_| "Revision lock unavailable")?;
+    let _guard = REVISION_LOCK.guard();
     let bytes = read_bounded(&file, 32 * 1024 * 1024)?;
     let dir = revision_dir(data, &file);
     for record in records(data, &file)? {
@@ -673,6 +672,27 @@ mod tests {
         assert!(resolve_file(&ws, "../outside.md").is_err());
         assert!(resolve_file(&ws, temp.0.join("outside.md").to_str().unwrap()).is_err());
     }
+    #[test]
+    fn a_panicking_snapshot_does_not_break_later_revisions() {
+        let temp = Temp::new();
+        let ws = temp.0.join("workspace");
+        let data = temp.0.join("data");
+        fs::create_dir(&ws).unwrap();
+        fs::write(ws.join("report.md"), "one").unwrap();
+        // A panic while a snapshot held the revision lock used to poison it, so every later save failed.
+        // Recovering leaves the lock poisoned for the rest of this test binary, which `guard()` tolerates.
+        assert!(std::thread::spawn(|| {
+            let _g = REVISION_LOCK.guard();
+            panic!("a snapshot panicked while holding the revision lock");
+        })
+        .join()
+        .is_err());
+        assert!(REVISION_LOCK.lock().is_err(), "the panic must poison the revision lock");
+        snapshot_at(&data, &ws, "report.md").unwrap();
+        let file = resolve_file(&ws, "report.md").unwrap();
+        assert_eq!(records(&data, &file).unwrap().len(), 1);
+    }
+
     #[test]
     fn revisions_deduplicate_and_preserve_changed_bytes() {
         let temp = Temp::new();
