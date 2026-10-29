@@ -1,7 +1,7 @@
 """Workbench MCP server (stdio, JSON-RPC 2.0, newline-delimited). Python stdlib only.
 Tools: officecli (wrapper around the bundled OfficeCLI), tabular, office_recipe, web_search, web_fetch,
 browser, read_attachment, read_email, ssh_exec, load_skill, the inline display tools (show_*, assemble_document,
-render_ui), ask_user, workspace_info.
+render_ui), ask_user, workspace_info, index_workspace, search_workspace.
 Cross-chat memory is switched off, so there are no memory tools. The memories table from older versions is
 only read and cleared in Settings; memory_save, memory_search and memory_forget are refused here."""
 import datetime, json, os, shutil, stat, subprocess, sys, tempfile
@@ -13,8 +13,9 @@ MAX_INLINE_COMMANDS_UTF16_UNITS = 24000
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from efficiency_tools import TOOLS as EFFICIENCY_TOOLS, dispatch as efficiency_dispatch
+from local_search import TOOLS as SEARCH_TOOLS
 
-TOOLS = EFFICIENCY_TOOLS + [
+TOOLS = EFFICIENCY_TOOLS + SEARCH_TOOLS + [
     {
         "name": "officecli",
         "description": "Create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files with OfficeCLI. "
@@ -274,6 +275,9 @@ def preflight_report(commands, paths):
 
 
 def call_tool(name, args):
+    if name in ("index_workspace", "search_workspace"):
+        from local_search import index_workspace, search_workspace
+        return json.dumps((index_workspace if name == "index_workspace" else search_workspace)(args), ensure_ascii=False)
     if name in ("tabular", "office_recipe"):
         return efficiency_dispatch(name, args, call_tool, OFFICECLI)
 

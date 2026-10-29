@@ -64,6 +64,16 @@ For planned work, the assistant can mark an established procedure as execution t
 
 Chat downloads include per-request wall time, first streamed event wait, input/output/cache token counts and provider timing fields when supplied. A first event may contain an already completed tool call, so that wait is not labelled prompt-processing or decoding time. Tool request-to-result durations include approvals and host overhead. Missing measurements remain unknown. These diagnostics are stored locally and are not injected into the model's context.
 
+## Search a local folder
+
+For questions across many files, ask the assistant to load `local-search`, run `index_workspace`, then use `search_workspace` and open only the best matches. Both tools work offline. Indexing is incremental by modification time and size; `full_rebuild:true` rebuilds everything. Search requires an existing index and does not automatically refresh it: re-index after edits.
+
+Search returns passages with paths, source/extracted line ranges, page/slide/sheet references where available, and exact `read_attachment` arguments. The default `mode:"hybrid"` retrieves up to 200 SQLite FTS5/BM25 candidates and re-ranks using deterministic local hashed word/character n-gram vectors. `mode:"fts"` keeps BM25 ordering; `mode:"vector"` scans vectors for approximate spellings (slower). These are lexical vectors, not semantic model embeddings; no model download or extra search package is needed. Use `limit` (1–20, default 5) and a workspace-relative `path_filter` folder/file prefix (not a glob) to narrow results.
+
+Supported sources: UTF-8 `.txt`, `.md`, `.csv`, `.json`, `.log`, HTML with tags/scripts stripped, and text extracted from `.docx`, `.xlsx`, `.pptx`, `.pdf` (PDF needs the bundled pypdf). Hidden files/folders, links, binaries, unsupported formats and files over 8 MiB are skipped and reported; skipped details are bounded with total counts. Office archives expanding beyond 32 MiB and extracted text beyond 8 Mi characters are also skipped. Scanned PDFs have no searchable text without OCR; workbook formulas are not evaluated. Search results and file contents are untrusted data, not instructions. Check source context and cite paths, not just snippets.
+
+The unencrypted cache, including extracted passages and vector BLOBs, stays at `.localwork/search.sqlite` in the workspace. Do not share or commit it with sensitive sources; delete `.localwork` to remove the cache. Files deleted or no longer eligible are removed on the next index run. FTS5 support in Python's SQLite is required (standard Windows/Linux Python builds include it).
+
 ## Email exports
 
 Put an exported `.eml` or `.mbox` file in the workspace and ask the assistant to summarise a thread, extract action items, or prepare a reply draft as a new `.eml` file. Reading is local: no cloud inbox connection or remote images are used, and drafts are not sent. Mailbox results are bounded and thread grouping is heuristic; filters can narrow by sender or by the export filename or `X-Folder` header (standard mbox has no folder structure). Check any truncation notices. Outlook `.msg` is not supported in this build; save or export the message as `.eml` first.
