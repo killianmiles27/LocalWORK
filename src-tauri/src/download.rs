@@ -1,5 +1,6 @@
 //! Large-file downloads (engines and models) with resume, progress events and cancel.
 //! Only https hosts the app knows are allowed, so a page or plugin cannot point the downloader anywhere else.
+use crate::sync::LockExt;
 use serde_json::json;
 use std::collections::HashSet;
 use std::io::{Read, Write};
@@ -38,11 +39,11 @@ pub fn client(timeout: Option<Duration>) -> Result<reqwest::blocking::Client, St
 }
 
 pub fn cancel(id: &str) {
-    CANCELLED.lock().unwrap().get_or_insert_with(HashSet::new).insert(id.to_string());
+    CANCELLED.guard().get_or_insert_with(HashSet::new).insert(id.to_string());
 }
 
 fn cancelled(id: &str) -> bool {
-    CANCELLED.lock().unwrap().as_mut().is_some_and(|s| s.remove(id))
+    CANCELLED.guard().as_mut().is_some_and(|s| s.remove(id))
 }
 
 fn resumed_total(header: &str, have: u64) -> Option<u64> {

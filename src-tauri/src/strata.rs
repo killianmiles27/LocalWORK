@@ -1,6 +1,7 @@
 //! Launches and watches the local Strata model server.
 //! Contract (MODEL-HANDOFF.md): server.py + selected-model.json, explicit --host/--port, no --open,
 //! random per-launch STRATA_API_KEY, public /health, ownership verified with the protected /v1/models.
+use crate::sync::LockExt;
 use crate::{http, paths, supervisor};
 use rand::Rng;
 use serde::Serialize;
@@ -56,7 +57,7 @@ fn parse_max_context(body: &str) -> Option<u64> {
 
 fn set(app: &AppHandle, s: &Shared, state: &str, detail: &str) {
     let st = {
-        let mut g = s.lock().unwrap();
+        let mut g = s.guard();
         g.status.state = state.into();
         g.status.detail = detail.into();
         g.status.clone()
@@ -97,7 +98,7 @@ fn connect_external(app: &AppHandle, s: &Shared) -> Result<(), String> {
     let key = setting("serverKey", "");
     let bearer = if key.is_empty() { "local".to_string() } else { key };
     let gen = {
-        let mut g = s.lock().unwrap();
+        let mut g = s.guard();
         g.gen += 1;
         g.key = bearer.clone();
         g.status.port = port;
@@ -123,7 +124,7 @@ pub fn server_root(cfg: &str, strata_root: &PathBuf) -> PathBuf {
 
 pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
     {
-        let g = s.lock().unwrap();
+        let g = s.guard();
         if g.status.state == "starting" || g.status.state == "ready" {
             return Ok(());
         }
@@ -182,7 +183,7 @@ pub fn start(app: &AppHandle, s: &Shared) -> Result<(), String> {
     );
 
     let gen = {
-        let mut g = s.lock().unwrap();
+        let mut g = s.guard();
         g.gen += 1;
         g.child = Some(child);
         g.key = key.clone();
@@ -203,7 +204,7 @@ fn monitor(app: AppHandle, s: Shared, gen: u64, port: u16, key: String, pid: u32
     loop {
         std::thread::sleep(Duration::from_millis(1000));
         let state = {
-            let mut g = s.lock().unwrap();
+            let mut g = s.guard();
             if g.gen != gen {
                 return;
             }
@@ -231,7 +232,7 @@ fn monitor(app: AppHandle, s: Shared, gen: u64, port: u16, key: String, pid: u32
             if state == "starting" {
                 match found {
                     Ok(model) => {
-                        s.lock().unwrap().status.model = model;
+                        s.guard().status.model = model;
                         set(&app, &s, "ready", "Connected to your model server");
                     }
                     Err(e) if t0.elapsed() > Duration::from_secs(60) => {
@@ -287,7 +288,7 @@ fn monitor(app: AppHandle, s: Shared, gen: u64, port: u16, key: String, pid: u32
 pub fn stop(app: Option<&AppHandle>, s: &Shared) {
     LIVE_CTX.store(0, Ordering::Relaxed);
     let child = {
-        let mut g = s.lock().unwrap();
+        let mut g = s.guard();
         g.gen += 1;
         g.child.take()
     };
@@ -298,7 +299,7 @@ pub fn stop(app: Option<&AppHandle>, s: &Shared) {
         supervisor::forget(&paths::data_dir(), pid);
     }
     let st = {
-        let mut g = s.lock().unwrap();
+        let mut g = s.guard();
         g.status.state = "stopped".into();
         g.status.detail = "Model is not running".into();
         g.status.clone()
@@ -334,7 +335,7 @@ pub fn context_window() -> u64 {
 pub fn info(s: &Shared) -> serde_json::Value {
     use serde_json::{json, Value};
     let (port, key, model) = {
-        let g = s.lock().unwrap();
+        let g = s.guard();
         (g.status.port, g.key.clone(), g.status.model.clone())
     };
     let cfg = setting("modelConfig", &paths::default_model_config());
@@ -373,7 +374,7 @@ pub fn info(s: &Shared) -> serde_json::Value {
 /// the chat's live context size while a turn runs.
 pub fn telemetry(s: &Shared) -> (Option<f64>, Option<u64>) {
     let (port, key, ready) = {
-        let g = s.lock().unwrap();
+        let g = s.guard();
         (g.status.port, g.key.clone(), g.status.state == "ready")
     };
     if !ready || port == 0 {
@@ -417,8 +418,8 @@ fn cpu_stats(s: &Shared) -> (String, f32, Option<f64>) {
     use std::sync::OnceLock;
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     static SYS: OnceLock<Mutex<System>> = OnceLock::new();
-    let pid = s.lock().unwrap().child.as_ref().map(|c| c.id());
-    let mut sys = SYS.get_or_init(|| Mutex::new(System::new())).lock().unwrap();
+    let pid = s.guard().child.as_ref().map(|c| c.id());
+    let mut sys = SYS.get_or_init(|| Mutex::new(System::new())).guard();
     sys.refresh_cpu_usage();
     if pid.is_some() {
         // Memory only: a full refresh (command lines, disk, CPU per process) is what made Settings slow.

@@ -1,6 +1,7 @@
 //! Push-to-talk dictation: the WebView sends a 16 kHz mono WAV, whisper.cpp's `whisper-cli` turns it into text on the CPU,
 //! and the transcript goes back to the composer. The process lives for one clip only, inside the host's Job Object.
 //! "Tidy up" asks the local model to turn a long ramble into a clear request.
+use crate::sync::LockExt;
 use crate::{http, paths, strata, supervisor};
 use serde_json::{json, Value};
 use std::io::Read;
@@ -146,7 +147,7 @@ language the speaker used.";
 #[tauri::command]
 pub async fn voice_tidy(s: State<'_, crate::App>, text: String) -> Result<String, String> {
     let (state, port, key, model) = {
-        let g = s.strata.lock().unwrap();
+        let g = s.strata.guard();
         (g.status.state.clone(), g.status.port, g.key.clone(), g.status.model.clone())
     };
     if state != "ready" {

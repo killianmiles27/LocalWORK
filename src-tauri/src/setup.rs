@@ -1,4 +1,5 @@
 //! First-run wizard support (hardware check, Strata folder detection) and the Strata update check.
+use crate::sync::LockExt;
 use crate::{paths, python, strata, supervisor, App};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -231,11 +232,11 @@ pub fn write_setting_value(key: &str, value: Value) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn set_web_access(s: State<App>, on: bool) {
     WEB_OFF.store(!on, Ordering::SeqCst);
-    crate::store::kv_set(&s.db.lock().unwrap(), "web_access", if on { "on" } else { "off" });
+    crate::store::kv_set(&s.db.guard(), "web_access", if on { "on" } else { "off" });
 }
 
 pub fn init(db: &crate::agent::Db) {
-    let c = db.lock().unwrap();
+    let c = db.guard();
     if crate::store::kv_get(&c, "web_access").as_deref() == Some("off") {
         WEB_OFF.store(true, Ordering::SeqCst);
     }
@@ -277,13 +278,13 @@ pub fn offline_get() -> bool {
 #[tauri::command(async)]
 pub fn set_offline(s: State<App>, on: bool) {
     OFFLINE.store(on, Ordering::SeqCst);
-    crate::store::kv_set(&s.db.lock().unwrap(), "offline", if on { "1" } else { "0" });
+    crate::store::kv_set(&s.db.guard(), "offline", if on { "1" } else { "0" });
 }
 
 /// `chat`: this chat ran offline and is still kept offline. `global`: offline mode is on.
 #[tauri::command(async)]
 pub fn chat_offline_get(s: State<App>, conv: String) -> Value {
-    let c = s.db.lock().unwrap();
+    let c = s.db.guard();
     let chat = crate::store::kv_get(&c, &format!("offline_chat:{conv}")).as_deref() == Some("1");
     json!({"chat": chat, "global": offline()})
 }
@@ -291,7 +292,7 @@ pub fn chat_offline_get(s: State<App>, conv: String) -> Value {
 /// Keep a chat offline, or let it use the internet again (only while offline mode itself is off).
 #[tauri::command(async)]
 pub fn chat_offline_set(s: State<App>, conv: String, on: bool) {
-    crate::store::kv_set(&s.db.lock().unwrap(), &format!("offline_chat:{conv}"), if on { "1" } else { "0" });
+    crate::store::kv_set(&s.db.guard(), &format!("offline_chat:{conv}"), if on { "1" } else { "0" });
 }
 
 fn git(root: &PathBuf, args: &[&str]) -> Option<String> {
@@ -332,7 +333,7 @@ pub async fn strata_update_apply(app: AppHandle) -> Result<Value, String> {
         return Err(format!("A valid Strata installation with UPDATE.bat is required. Checked: {}", root.display()));
     }
     let st = app.state::<App>();
-    let ags: Vec<_> = st.agents.lock().unwrap().values().cloned().collect();
+    let ags: Vec<_> = st.agents.guard().values().cloned().collect();
     for a in ags {
         a.shutdown();
     }

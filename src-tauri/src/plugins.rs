@@ -5,6 +5,7 @@
 //! Search order (a later folder overrides an earlier plugin with the same id):
 //!   1. `<resources>/plugins`            bundled with the app
 //!   2. `%LOCALAPPDATA%/Workbench/plugins` installed by the user
+use crate::sync::LockExt;
 use crate::{http, paths, strata};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -372,7 +373,7 @@ pub fn effort_get(s: &strata::Shared) -> Value {
 
 fn shared_defaults(s: &strata::Shared) -> Option<Value> {
     let (port, key, ready) = {
-        let g = s.lock().unwrap();
+        let g = s.guard();
         (g.status.port, g.key.clone(), g.status.state == "ready")
     };
     if !ready { return None; }
@@ -386,7 +387,7 @@ pub fn effort_set(s: &strata::Shared, effort: Option<String>) -> Result<Value, S
         if !EFFORTS.contains(&e.as_str()) { return Err(format!("effort must be one of {}", EFFORTS.join(", "))); }
     }
     let (port, key, ready) = {
-        let g = s.lock().unwrap();
+        let g = s.guard();
         (g.status.port, g.key.clone(), g.status.state == "ready")
     };
     if !ready { return Err("The model is not running yet.".into()); }

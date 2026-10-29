@@ -1,6 +1,7 @@
 //! One aionrs process per conversation, spoken to over JSON Lines (--json-stream).
 //! The host owns the approval policy: aionrs runs in its default "ask for everything" mode and every
 //! tool_request is answered here, either automatically by policy or by the user through the UI.
+use crate::sync::LockExt;
 use crate::{documents, http, paths, plugins, policy, python, setup, store, strata, supervisor};
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -55,8 +56,8 @@ const STALL_NOTICE: &str = "Run stalled: no progress for 10 minutes. The model o
 impl Agent {
     /// True once per quiet stretch of a running user turn that is not waiting on the user.
     fn stalled(&self, now: Instant) -> bool {
-        let quiet = now.saturating_duration_since(*self.last_event.lock().unwrap()) >= STALL_AFTER;
-        let g = self.inner.lock().unwrap();
+        let quiet = now.saturating_duration_since(*self.last_event.guard()) >= STALL_AFTER;
+        let g = self.inner.guard();
         quiet && g.processing && g.user_turn && g.pending.is_empty() && !self.stopping.load(Ordering::SeqCst)
             && !self.stall_noticed.swap(true, Ordering::SeqCst)
     }
@@ -68,7 +69,7 @@ fn watchdog(agent: std::sync::Weak<Agent>, app: AppHandle, db: Db) {
         let Some(agent) = agent.upgrade() else { return };
         if agent.exited.load(Ordering::SeqCst) { return; }
         if agent.stalled(Instant::now()) {
-            store::add_msg(&db.lock().unwrap(), &agent.conv, "notice", &json!({"text": STALL_NOTICE}));
+            store::add_msg(&db.guard(), &agent.conv, "notice", &json!({"text": STALL_NOTICE}));
             let _ = app.emit("agent-event", json!({"conv": agent.conv, "ev": {"type": "info", "message": STALL_NOTICE}}));
         }
     }
@@ -221,45 +222,45 @@ mod revision_tests {
 
 impl Agent {
     pub fn set_auto_edit(&self, v: bool) {
-        *self.auto_edit.lock().unwrap() = v;
+        *self.auto_edit.guard() = v;
     }
 
     pub fn send(&self, msg: Value) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.guard();
         g.queue.push(msg);
         dispatch_next(&mut g);
     }
 
     /// True while a user turn is running or waiting in the queue.
     pub fn busy(&self) -> bool {
-        let g = self.inner.lock().unwrap();
+        let g = self.inner.guard();
         g.user_turn || g.queue.iter().any(|m| !m["msg_id"].as_str().unwrap_or("").starts_with("ctx-"))
     }
 
     pub fn stop_turn(&self) {
         self.stopping.store(true, Ordering::SeqCst);
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.guard();
         write_line(&mut g, &json!({"type": "stop"}));
     }
 
     pub fn answer(&self, call_id: &str, allow: bool, remember: bool) {
-        let tool = self.inner.lock().unwrap().pending.remove(call_id);
+        let tool = self.inner.guard().pending.remove(call_id);
         let Some(tool) = tool else { return };
         if allow {
             let name = tool.get("tool").and_then(Value::as_str).unwrap_or("");
             let category = tool.get("category").and_then(Value::as_str).unwrap_or("");
             if let Err(reason) = preserve_document(&self.workspace, category, name, &tool["args"], true) {
-                write_line(&mut self.inner.lock().unwrap(), &json!({"type":"tool_deny", "call_id":call_id, "reason":reason}));
+                write_line(&mut self.inner.guard(), &json!({"type":"tool_deny", "call_id":call_id, "reason":reason}));
                 return;
             }
-            *self.last_event.lock().unwrap() = Instant::now();
-            let mut g = self.inner.lock().unwrap();
+            *self.last_event.guard() = Instant::now();
+            let mut g = self.inner.guard();
             if remember {
                 g.remembered.push(policy::remember_key(name, category, &tool["args"]));
             }
             write_line(&mut g, &json!({"type": "tool_approve", "call_id": call_id, "scope": "once"}));
         } else {
-            write_line(&mut self.inner.lock().unwrap(), &json!({"type": "tool_deny", "call_id": call_id, "reason": "The user declined this action."}));
+            write_line(&mut self.inner.guard(), &json!({"type": "tool_deny", "call_id": call_id, "reason": "The user declined this action."}));
         }
     }
 
@@ -273,10 +274,10 @@ impl Agent {
     pub fn shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = self.inner.guard();
             g.stdin = None;
         }
-        let child = self.child.lock().unwrap().take();
+        let child = self.child.guard().take();
         if let Some(mut c) = child {
             let pid = c.id();
             for _ in 0..5 {
@@ -369,16 +370,16 @@ pub fn get_or_start(
     st: &strata::Shared,
     conv: &str,
 ) -> Result<Arc<Agent>, String> {
-    if let Some(a) = agents.lock().unwrap().get(conv) {
+    if let Some(a) = agents.guard().get(conv) {
         return Ok(a.clone());
     }
     let (workspace, has_session, web) = {
-        let c = db.lock().unwrap();
+        let c = db.guard();
         let (_, ws, hs) = store::conv_info(&c, conv).ok_or("unknown conversation")?;
         (PathBuf::from(ws), hs, web_contacts_from_messages(&store::messages(&c, conv, 0)))
     };
     let (port, key, model) = {
-        let g = st.lock().unwrap();
+        let g = st.guard();
         if g.status.state != "ready" {
             return Err("The model is not ready yet.".into());
         }
@@ -429,14 +430,14 @@ pub fn get_or_start(
         workspace: workspace.clone(),
         child: Mutex::new(Some(child)),
         inner: Mutex::new(Inner { stdin: Some(stdin), web, ..Default::default() }),
-        auto_edit: Mutex::new(store::kv_get(&db.lock().unwrap(), "auto_edit").map(|v| v != "0").unwrap_or(true)),
+        auto_edit: Mutex::new(store::kv_get(&db.guard(), "auto_edit").map(|v| v != "0").unwrap_or(true)),
         stopping: AtomicBool::new(false),
         retired: AtomicBool::new(false),
         last_event: Mutex::new(Instant::now()),
         stall_noticed: AtomicBool::new(false),
         exited: AtomicBool::new(false),
     });
-    agents.lock().unwrap().insert(conv.to_string(), agent.clone());
+    agents.guard().insert(conv.to_string(), agent.clone());
 
     let (a2, app2, db2, agents2) = (agent.clone(), app.clone(), db.clone(), agents.clone());
     std::thread::spawn(move || reader(a2, app2, db2, agents2, stdout, pid));
@@ -513,7 +514,7 @@ fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Result<Value, Stri
 fn maybe_title(app: &AppHandle, db: &Db, conv: &str) {
     let key = format!("titled:{conv}");
     let (first_user, first_reply) = {
-        let c = db.lock().unwrap();
+        let c = db.guard();
         if store::kv_get(&c, &key).is_some() { return; }
         let msgs = store::messages(&c, conv, 0);
         let pick = |role: &str| msgs.iter().find(|m| m["role"] == role).and_then(|m| m["body"]["text"].as_str()).map(String::from);
@@ -525,7 +526,7 @@ fn maybe_title(app: &AppHandle, db: &Db, conv: &str) {
     let (db, app, conv) = (db.clone(), app.clone(), conv.to_string());
     std::thread::spawn(move || {
         let (port, bearer, model) = {
-            let g = st.lock().unwrap();
+            let g = st.guard();
             if g.status.state != "ready" { return; }
             (g.status.port, g.key.clone(), g.status.model.clone())
         };
@@ -546,7 +547,7 @@ Assistant: {}", clip(&first_user), clip(&first_reply))}
         let t = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
         let t: String = t.lines().next().unwrap_or("").trim().trim_matches(|c| matches!(c, '"' | '\'' | '*' | '.')).trim().chars().take(60).collect();
         if t.len() < 3 { return; }
-        store::rename(&db.lock().unwrap(), &conv, &t);
+        store::rename(&db.guard(), &conv, &t);
         let _ = app.emit("agent-event", json!({"conv": conv, "ev": {"type": "title"}}));
     });
 }
@@ -557,7 +558,7 @@ fn flush_text(db: &Db, conv: &str, text: &mut String, thinking: &mut String) {
         thinking.clear();
         return;
     }
-    let c = db.lock().unwrap();
+    let c = db.guard();
     store::add_msg(&c, conv, "assistant", &json!({"text": text.as_str(), "thinking": thinking.as_str()}));
     text.clear();
     thinking.clear();
@@ -574,7 +575,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
-        *agent.last_event.lock().unwrap() = Instant::now();
+        *agent.last_event.guard() = Instant::now();
         // Do not approve buffered tools or forward stale UI events after Stop.
         if agent.stopping.load(Ordering::SeqCst) { continue; }
         let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -585,7 +586,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
             }
             "ready" => {
                 {
-                    let c = db.lock().unwrap();
+                    let c = db.guard();
                     store::set_has_session(&c, &conv);
                 }
                 let mut servers: Vec<Value> = match workbench_mcp(&vendor, &conv) {
@@ -593,7 +594,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     Err(why) => { eprintln!("workbench tools unavailable: {why}"); vec![] }
                 };
                 servers.extend(plugins::mcp_servers());
-                let mut g = agent.inner.lock().unwrap();
+                let mut g = agent.inner.guard();
                 if !servers.is_empty() {
                     g.mcp_pending = servers.len();
                     for m in &servers {
@@ -605,9 +606,9 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 }
             }
             // A failed AddMcpServer is a plain error event before the first message; don't let it hold the chat.
-            "error" if !agent.inner.lock().unwrap().ready
+            "error" if !agent.inner.guard().ready
                 && ev.to_string().contains("AddMcpServer") => {
-                let mut g = agent.inner.lock().unwrap();
+                let mut g = agent.inner.guard();
                 g.mcp_pending = g.mcp_pending.saturating_sub(1);
                 eprintln!("plugin MCP server failed: {ev}");
                 if g.mcp_pending == 0 {
@@ -616,7 +617,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 }
             }
             "mcp_ready" => {
-                let mut g = agent.inner.lock().unwrap();
+                let mut g = agent.inner.guard();
                 g.mcp_pending = g.mcp_pending.saturating_sub(1);
                 if g.mcp_pending > 0 && !g.ready { continue; }
                 g.ready = true;
@@ -633,30 +634,30 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 let call_id = ev.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 tool_started.insert(call_id.clone(), std::time::Instant::now());
                 tool_args.insert(call_id.clone(), json!({"name": name, "category": cat, "args": args}));
-                let auto_edit = *agent.auto_edit.lock().unwrap();
-                let offline = crate::setup::is_network_tool(&name) && crate::setup::chat_is_offline(&db.lock().unwrap(), &conv);
+                let auto_edit = *agent.auto_edit.guard();
+                let offline = crate::setup::is_network_tool(&name) && crate::setup::chat_is_offline(&db.guard(), &conv);
                 let decision = {
-                    let g = agent.inner.lock().unwrap();
+                    let g = agent.inner.guard();
                     tool_decision(&name, &cat, &args, &agent.workspace, auto_edit, &g.remembered, &g.web, offline)
                 };
                 match decision {
                     policy::Decision::Allow => {
                         if let Err(reason) = preserve_document(&agent.workspace, &cat, &name, &args, false) {
-                            write_line(&mut agent.inner.lock().unwrap(), &json!({"type":"tool_deny", "call_id":call_id, "reason":reason}));
+                            write_line(&mut agent.inner.guard(), &json!({"type":"tool_deny", "call_id":call_id, "reason":reason}));
                             continue;
                         }
-                        let mut g = agent.inner.lock().unwrap();
+                        let mut g = agent.inner.guard();
                         if !agent.stopping.load(Ordering::SeqCst) {
                             write_line(&mut g, &json!({"type": "tool_approve", "call_id": call_id, "scope": "once"}));
                         }
                     }
                     policy::Decision::Deny(why) => {
-                        let mut g = agent.inner.lock().unwrap();
+                        let mut g = agent.inner.guard();
                         write_line(&mut g, &json!({"type": "tool_deny", "call_id": call_id, "reason": why}));
                     }
                     policy::Decision::Ask { class, reason, can_remember } => {
                         if agent.stopping.load(Ordering::SeqCst) { continue; }
-                        agent.inner.lock().unwrap().pending.insert(call_id.clone(), json!({"tool": name, "category": cat, "args": args}));
+                        agent.inner.guard().pending.insert(call_id.clone(), json!({"tool": name, "category": cat, "args": args}));
                         let _ = app.emit(
                             "approval-request",
                             json!({"conv": conv, "call_id": call_id, "tool": name, "class": class, "reason": reason,
@@ -668,11 +669,11 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
             "tool_result" => {
                 let call_id = ev.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                 let ta = tool_args.remove(call_id).unwrap_or(Value::Null);
-                agent.inner.lock().unwrap().web.record_result(&ta, &ev["status"]);
+                agent.inner.guard().web.record_result(&ta, &ev["status"]);
                 let out = ev.get("output").and_then(|v| v.as_str()).unwrap_or("");
                 let elapsed = tool_started.remove(call_id).map(|start| start.elapsed().as_millis() as u64);
                 let clipped: String = out.chars().take(6000).collect();
-                let c = db.lock().unwrap();
+                let c = db.guard();
                 store::add_msg(
                     &c,
                     &conv,
@@ -685,14 +686,14 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 let call_id = ev.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                 let ta = tool_args.remove(call_id).unwrap_or(Value::Null);
                 tool_started.remove(call_id);
-                let c = db.lock().unwrap();
+                let c = db.guard();
                 store::add_msg(&c, &conv, "tool", &json!({"call_id": call_id, "status": "cancelled", "output": ev.get("reason"), "request": ta}));
             }
             "info" => {
                 let m = ev.get("message").and_then(|v| v.as_str()).unwrap_or("");
                 if let Some(raw) = m.strip_prefix("Request metrics: ") {
                     if let Ok(metrics) = serde_json::from_str::<Value>(raw) {
-                        store::add_msg(&db.lock().unwrap(), &conv, "diagnostic", &metrics);
+                        store::add_msg(&db.guard(), &conv, "diagnostic", &metrics);
                     }
                     continue; // Measurements are export-only, never an extra model/context request.
                 }
@@ -700,11 +701,11 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     // Keep restarted model output in a distinct assistant message and make the boundary visible.
                     flush_text(&db, &conv, &mut text, &mut thinking);
                     if last_run_notice.as_deref() != Some(m) {
-                        store::add_msg(&db.lock().unwrap(), &conv, "notice", &json!({"text": m}));
+                        store::add_msg(&db.guard(), &conv, "notice", &json!({"text": m}));
                         last_run_notice = Some(m.to_string());
                     }
                 } else if m.starts_with("Autocompact: summarized") || m.starts_with("Context compacted") {
-                    store::add_msg(&db.lock().unwrap(), &conv, "notice", &json!({"text": "Earlier messages were summarized to free up space."}));
+                    store::add_msg(&db.guard(), &conv, "notice", &json!({"text": "Earlier messages were summarized to free up space."}));
                     // After a manual /compact the agent is idle: ask for the new size ("Context Usage" info).
                     if m.starts_with("Context compacted") {
                         agent.send(json!({"type": "message", "msg_id": "ctx-after-compact", "content": "/context"}));
@@ -712,7 +713,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 } else if m.starts_with("Context Usage") {
                     if let Some(pct) = context_percent(m) {
                         let used = (pct / 100.0 * strata::context_window() as f64).round() as u64;
-                        store::kv_set(&db.lock().unwrap(), &format!("ctx:{conv}"), &used.to_string());
+                        store::kv_set(&db.guard(), &format!("ctx:{conv}"), &used.to_string());
                         let _ = app.emit("agent-event", json!({"conv": conv, "ev": {"type": "context_usage", "used": used, "window": strata::context_window()}}));
                     }
                 }
@@ -729,12 +730,12 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     maybe_title(&app, &db, &conv);
                 }
                 if ty == "error" {
-                    let c = db.lock().unwrap();
+                    let c = db.guard();
                     store::add_msg(&c, &conv, "error", &ev["error"]);
                 }
                 if !ev["msg_id"].as_str().unwrap_or("").starts_with("ctx-") { crate::stats::task_end(); }
                 if ty == "stream_end" {
-                    let mut g = agent.inner.lock().unwrap();
+                    let mut g = agent.inner.guard();
                     g.processing = false;
                     g.user_turn = false;
                     dispatch_next(&mut g);
@@ -757,11 +758,11 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
             if !writes_files(name, cat, &ta["args"]) { continue; }
             let what = first_path(&ta["args"]).map(|p| format!(" on {p}")).unwrap_or_default();
             let text = format!("The agent stopped unexpectedly while {name} was running{what}. Files it was changing may be only partly written; check them before continuing.");
-            store::add_msg(&db.lock().unwrap(), &conv, "notice", &json!({"text": text}));
+            store::add_msg(&db.guard(), &conv, "notice", &json!({"text": text}));
         }
     }
     supervisor::forget(&paths::data_dir(), pid);
-    let mut active = agents.lock().unwrap();
+    let mut active = agents.guard();
     // A stopped process may finish draining after a replacement was started.
     if active.get(&conv).is_none_or(|current| Arc::ptr_eq(current, &agent)) {
         active.remove(&conv);
@@ -797,10 +798,10 @@ mod context_tests {
         assert!(a.stalled(now));
         assert!(!a.stalled(now), "only one notice per quiet stretch");
         let waiting = idle_agent(STALL_AFTER * 2);
-        waiting.inner.lock().unwrap().pending.insert("call".into(), Value::Null);
+        waiting.inner.guard().pending.insert("call".into(), Value::Null);
         assert!(!waiting.stalled(now));
         let idle = idle_agent(STALL_AFTER * 2);
-        idle.inner.lock().unwrap().processing = false;
+        idle.inner.guard().processing = false;
         assert!(!idle.stalled(now));
     }
 
