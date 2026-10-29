@@ -82,13 +82,19 @@ def _pdf(path):
     return "\n\n".join(f"--- Page {i} ---\n{t}" for i, t in enumerate(pages, 1))
 
 
-def read_attachment(path, start=0, max_chars=12000):
+def workspace_file(path):
+    """Resolve an existing file using the attachment workspace boundary."""
     root = os.path.realpath(os.getcwd())
     full = os.path.realpath(os.path.join(root, str(path)))
     if full != root and not full.startswith(root + os.sep):
         raise ValueError("path must be inside the workspace")
     if not os.path.isfile(full):
         raise ValueError(f"no such file: {path}")
+    return full
+
+
+def read_attachment(path, start=0, max_chars=12000):
+    full = workspace_file(path)
     ext = os.path.splitext(full)[1].lower()
     if ext in IMG:
         return f"{path} is an image ({os.path.getsize(full)} bytes). I cannot see images in this setup; ask the user to describe it or attach text."
