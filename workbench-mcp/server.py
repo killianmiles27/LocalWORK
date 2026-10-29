@@ -1,5 +1,9 @@
 """Workbench MCP server (stdio, JSON-RPC 2.0, newline-delimited). Python stdlib only.
-Tools: officecli (wrapper around the bundled OfficeCLI), web_search, web_fetch, memory_*, workspace_info."""
+Tools: officecli (wrapper around the bundled OfficeCLI), tabular, office_recipe, web_search, web_fetch,
+browser, read_attachment, ssh_exec, load_skill, the inline display tools (show_*, assemble_document,
+render_ui), ask_user, workspace_info.
+Cross-chat memory is switched off, so there are no memory tools. The memories table from older versions is
+only read and cleared in Settings; memory_save, memory_search and memory_forget are refused here."""
 import datetime, json, os, shutil, stat, subprocess, sys, tempfile
 
 OFFICECLI = os.environ.get("OFFICECLI_EXE", "officecli" + (".exe" if os.name == "nt" else ""))
@@ -35,21 +39,6 @@ TOOLS = EFFICIENCY_TOOLS + [
         "description": "Fetch a web page or PDF by URL and return it as readable markdown (cached for a few hours).",
         "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}, "max_chars": {"type": "integer"}},
                         "required": ["url"]},
-    },
-    {
-        "name": "memory_save",
-        "description": "Remember one short, durable fact about the user or their preferences (for example 'prefers British spelling'). Only save things worth keeping across chats, never secrets or passwords.",
-        "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
-    },
-    {
-        "name": "memory_search",
-        "description": "Search saved memories about the user by keywords.",
-        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
-    },
-    {
-        "name": "memory_forget",
-        "description": "Delete a saved memory by its number.",
-        "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]},
     },
     {
         "name": "load_skill",
@@ -222,7 +211,9 @@ def validate_ui_spec(spec):
 
 _loaded_skills = set()
 # Tools whose result depends only on their arguments for the length of a chat: a repeat is a loop, not new work.
-IDEMPOTENT = ("web_search", "web_fetch", "read_attachment", "memory_search")
+IDEMPOTENT = ("web_search", "web_fetch", "read_attachment")
+# Tools removed when cross-chat memory was switched off. Old chats may still contain their results.
+REMOVED_TOOLS = ("memory_save", "memory_search", "memory_forget")
 _seen = {}
 OUTPUT_CAP = 24000
 
@@ -355,9 +346,9 @@ def call_tool(name, args):
                            "Follow those instructions and continue the task. Only if they are no longer in your context, call load_skill again with force:true.")
         _loaded_skills.add(n.lower())
         return open(f, encoding="utf8").read()
-    if name in ("memory_save", "memory_search", "memory_forget"):
-        import memory
-        return getattr(memory, name)(**{k: v for k, v in args.items()})
+    if name in REMOVED_TOOLS:
+        raise ValueError(refusal("tool_removed", f"{name} no longer exists: cross-chat memory is switched off in Settings.",
+                                 "Do not save or look up memories. Work with what the user says in this chat; old entries can only be reviewed or deleted in Settings."))
     if name == "web_search":
         import web
         return web.web_search(args["query"], args.get("max_results", 6))

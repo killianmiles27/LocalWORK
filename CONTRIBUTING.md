@@ -1,5 +1,7 @@
 # Contributing
 
+Developing on Linux? See [the Linux development and Windows build walkthrough](docs/LINUX-DEVELOPMENT.md).
+
 Start with a small issue or pull request that explains the problem and expected behavior. Include a reproduction for bugs. Keep unrelated formatting and refactors out of the change.
 
 Build prerequisites are in [docs/SETUP.md](docs/SETUP.md). The frontend is React/TypeScript; the host is Rust/Tauri; the workbench tools are Python. Windows x64 is the main tested platform; Linux x64 is checked in CI (`.github/workflows/checks.yml`) and built by `linux-release.yml`. A model is not needed for most unit tests.

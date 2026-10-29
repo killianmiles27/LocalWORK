@@ -2,7 +2,7 @@
 
 Plugins keep the core app generic. Anything specific to one machine (model files, launch profiles, sensors, private skills) lives in a plugin folder, so the core can be published without private paths.
 
-Plugins are **declarative**: a folder with a `plugin.json`. They inject no code into the UI or the Rust host. They can add model modes, skills, system-prompt text, stdio MCP servers and composer status items.
+Plugins are **declarative**: a folder with a `plugin.json`. They inject no code into the UI or the Rust host. They can add model modes, skills, system-prompt text, stdio MCP servers and composer status items. Only install plugins you trust. Third-party plugins can add system-prompt text and skills even if they don't start programs.
 
 Code: `src-tauri/src/plugins.rs` (loading, modes, effort), `src/StatusItems.tsx` (status bar), `src/ModeSwitcher.tsx` (mode and effort menu), `src/SettingsModel.tsx` (Plugins and Tuning tabs in Settings), `src/settings-ui.tsx` (shared Settings rows, sections and switches).
 
@@ -11,7 +11,7 @@ Code: `src-tauri/src/plugins.rs` (loading, modes, effort), `src/StatusItems.tsx`
 | Order | Folder | Source label |
 |---|---|---|
 | 1 | `<app resources>/plugins` | bundled (empty in official builds; for custom builds) |
-| 2 | `%LOCALAPPDATA%/Workbench/plugins` | user (installed with Import, or copied in) |
+| 2 | Windows: `%LOCALAPPDATA%/Workbench/plugins`; Linux: `$XDG_DATA_HOME/Workbench/plugins` (usually `~/.local/share/Workbench/plugins`) | user (installed with Import, or copied in) |
 
 A later folder overrides an earlier plugin with the same `id`. The app ships without plugins. The official plugins live in [LocalWORK-plugins](https://github.com/killianmiles27/LocalWORK-plugins), one folder per plugin, and Settings → Plugins → *Get plugins* installs from it (see *Sharing plugins* below). Keep personal plugins (your model paths, your profiles) in a separate private repository; [MAINTAINING.md](MAINTAINING.md) describes that setup.
 
@@ -43,7 +43,7 @@ A later folder overrides an earlier plugin with the same `id`. The app ships wit
 
 - `id`: 1–64 characters from letters, digits, `-`, `_` and `.`. This is required.
 - **Paths:** use `/`, or `\\` inside JSON. A single `\` is an invalid JSON escape and the whole manifest fails to load. Settings → Plugins shows such a plugin as *Not loaded* with the parser error.
-- **Placeholders:** `${pluginDir}`, `${dataDir}` (`%LOCALAPPDATA%/Workbench`), `${strataRoot}` (from settings) and `${env:NAME}` are all expanded. A relative path resolves against the plugin folder.
+- **Placeholders:** `${pluginDir}`, `${dataDir}` (`%LOCALAPPDATA%/Workbench` on Windows; `$XDG_DATA_HOME/Workbench` on Linux, usually `~/.local/share/Workbench`), `${strataRoot}` (from settings) and `${env:NAME}` are all expanded. A relative path resolves against the plugin folder.
 - **Enabling:** `enabledByDefault: false` keeps a plugin off until the user turns it on. The on/off state is stored in `settings.json` as `enabledPlugins` / `disabledPlugins`, written atomically. A plugin that declares `mcpServers` is always imported turned off, because it starts programs.
 - **Settings:** `settings` adds fields (`type` is `number`, `text` or `boolean`) to the plugin's entry in Settings → Plugins. Values are stored per plugin in `settings.json` and can be used in status items as `${setting:key}`.
 

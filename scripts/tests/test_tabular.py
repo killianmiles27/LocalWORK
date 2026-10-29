@@ -166,6 +166,22 @@ class TabularTests(unittest.TestCase):
             tabular.handle({"action": "compare", "dataset_path": result["dataset_path"], "actual_path": "dates.csv",
                             "keys": ["month"], "columns": ["sum_value"]})
 
+    def test_read_without_range_handles_default_and_explicit_header_rows(self):
+        Path("plain.csv").write_text("Group,Value\nA,1\nB,2\n", encoding="utf-8")
+        plain = tabular.handle({"action": "read", "path": "plain.csv"})
+        self.assertEqual(plain["range"], "A1:B3")
+        self.assertEqual([cell["value"] for cell in plain["rows"][0]], ["Group", "Value"])
+
+        Path("titled.csv").write_text("Quarterly report,\nGroup,Value\nA,1\nB,2\n", encoding="utf-8")
+        read = tabular.handle({"action": "read", "path": "titled.csv", "header_row": 2})
+        self.assertEqual(read["header_row"], 2)
+        self.assertEqual(read["range"], "A2:B4")
+        self.assertEqual([cell["value"] for cell in read["rows"][0]], ["Group", "Value"])
+        self.assertEqual([cell["value"] for cell in read["rows"][1]], ["A", "1"])
+        limited = tabular.handle({"action": "read", "path": "titled.csv", "header_row": 2, "limit": 1})
+        self.assertEqual(limited["range"], "A2:B3")
+        self.assertEqual(len(limited["rows"]), 2)
+
     def test_ranges_duplicates_1904_epoch_key_comparison_and_mismatch(self):
         Path("dup.csv").write_text("id,id\n1,2\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "duplicate column"):

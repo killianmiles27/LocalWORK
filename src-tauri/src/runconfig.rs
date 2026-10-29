@@ -11,8 +11,13 @@ fn profiles_dir() -> PathBuf {
 }
 
 fn same(a: &Path, b: &Path) -> bool {
-    let n = |p: &Path| p.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
-    n(a) == n(b)
+    #[cfg(windows)]
+    {
+        let n = |p: &Path| p.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+        n(a) == n(b)
+    }
+    #[cfg(not(windows))]
+    { a == b }
 }
 
 /// Only configs the app already knows: the current one, a mode's, or one in the profiles folder.
@@ -100,6 +105,14 @@ pub fn import(src: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn config_paths_follow_platform_case_rules() {
+        use std::path::Path;
+        assert!(super::same(Path::new("/models/Swift.json"), Path::new("/models/Swift.json")));
+        assert_eq!(super::same(Path::new("/models/Swift.json"), Path::new("/models/swift.json")), cfg!(windows));
+        #[cfg(unix)]
+        assert!(!super::same(Path::new("/models/a\\b.json"), Path::new("/models/a/b.json")));
+    }
     #[test]
     fn names() {
         assert!(super::valid_name("Swift 32K"));

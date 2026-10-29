@@ -97,6 +97,8 @@ Then choose where projects live and whether web tools are on. The model indicato
 
 Both paths can be changed later in **Settings → Model → Engine and setup**. Stop and start the model after changing them. Existing conversations and files are retained.
 
+The tools that read, write and convert files need Python 3.11 or newer. LocalWORK uses Strata's `.venv` when there is one, otherwise a system Python; if you run your own model server (LM Studio, Ollama, llama.cpp, vLLM) you need no Strata folder. **Settings → Model → Tools → Python for tools** shows which interpreter is used and lets you choose another one (saved as `workbenchPython` in `settings.json`).
+
 For scripted launches, `LOCALWORK_STRATA_ROOT` and `LOCALWORK_MODEL_CONFIG` provide defaults when no paths have been saved. A `strata` folder beside the executable can also be discovered. Saved selections take precedence. Settings live in `%LOCALAPPDATA%\Workbench\settings.json`; normal setup does not require editing that file.
 
 ## Troubleshooting

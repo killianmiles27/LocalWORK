@@ -2,7 +2,12 @@ name: Checks
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -70,6 +75,17 @@ jobs:
           $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PWD 'vendor/browsers'
           node vendor/playwright/node_modules/playwright-core/cli.js install chromium-headless-shell
           if ($LASTEXITCODE) { throw 'Browser install failed' }
+      - name: Windows Python library packaging regression
+        shell: pwsh
+        run: |
+          # Exercise the process boundary that previously collapsed the version array.
+          pwsh -NoProfile -File scripts/install-mcp-libs.ps1 -PythonVersions 3.12,3.13,3.11,3.14
+          if ($LASTEXITCODE) { throw 'Python wheel packaging failed' }
+          foreach ($v in '312', '313') {
+            if (-not (Test-Path "workbench-mcp/libs/lxml/etree.cp$v-win_amd64.pyd")) {
+              throw "Missing lxml for CPython $v"
+            }
+          }
       - name: Frontend and tool tests
         shell: pwsh
         run: |

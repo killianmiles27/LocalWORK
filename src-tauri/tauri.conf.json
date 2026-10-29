@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "frame-src 'self' about: blob: data: https://www.youtube-nocookie.com https://www.openstreetmap.org; object-src 'none'; base-uri 'self'",
+      "csp": "img-src 'self' data: blob: asset: http://asset.localhost; connect-src 'self' data: blob: ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420; frame-src 'self' about: blob: data: https://www.youtube-nocookie.com https://www.openstreetmap.org; object-src 'none'; base-uri 'self'",
       "dangerousDisableAssetCspModification": [
         "script-src",
         "style-src"

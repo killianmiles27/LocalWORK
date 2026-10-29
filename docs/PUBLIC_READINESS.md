@@ -1,5 +1,9 @@
 # Public-readiness audit
 
+## v0.1.5 update — 23 October 2026
+
+Linux ships in v0.1.5. The `glib`/`zbus` advisory findings previously described below as outside the Windows target tree now apply to the Linux builds; the Windows-only dismissal does not cover them. This update has not re-run the dependency audit or checked advisory reachability in the Linux builds. A clean Linux desktop installation and live-model workflow remain unverified, as noted in the v0.1.5 release notes.
+
 ## Release check on 20 October 2026
 
 For v0.1.3, the workspace Node suite passed (21/21), Python passed (49 passed, 1 skipped), and host Rust passed (43 passed, 2 ignored). Windows browser lifecycle, plan, thinking, and document-pane checks passed when run sequentially. The first overlapping/cold Vite runs timed out with app modules still transforming; the browser checks passed after running sequentially with a warm transform cache. The efficient-tools fixture passed with exact formula comparison and successful workbook/document verification. Agent context checks passed five compactions and a long first turn. Strict dependency notice collection passed for 874 components with zero missing notices. The frontend and release executable builds passed, as did Windows CDP checks T-A1, T-A2, and T-C1. The updater signature on the installer verified against the public key in tauri.conf.json (Ed25519 file and trusted-comment signatures both valid, version 0.1.3). Clean-account/VM installation and broad real-model workflow testing remain unverified.
@@ -8,9 +12,9 @@ The refreshed frontend audit reports three low findings through transitive KaTeX
 
 Reviewed 17 October 2026, starting from commit `811c4f9`. This records a source/code review, dependency scans, and local verification. It is not a penetration-test certification or a guarantee that no bugs remain.
 
-## Publication assessment
+## Publication assessment at v0.1.3
 
-The source is prepared for public review as an **early Windows x64 project**. It now has a root Apache-2.0 license, dependency notices, setup and usage documentation, configurable runtime paths, regression tests, and a pinned GitHub Actions workflow. Publishing source is separate from announcing a production-ready app or distributing an installer.
+For v0.1.3, the source was prepared for public review as an **early Windows x64 project**. At that point it had a root Apache-2.0 license, dependency notices, setup and usage documentation, configurable runtime paths, regression tests, and a pinned GitHub Actions workflow. Publishing source is separate from announcing a production-ready app or distributing an installer.
 
 Before a binary release, test the actual installer on a clean Windows account or VM, run the new workflow on GitHub, review the final redistribution artifacts and any source-availability obligations, and confirm signing/update recovery. No clean-VM, cross-GPU, or broad real-model workflow certification was performed in this pass.
 
