@@ -62,6 +62,8 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer " + key:
             return self.reply(401, {"error": "unauthorized"})
         request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+        if self.path == "/v1/chat/completions":
+            print(f"Fixture chat request: {self.path}", flush=True)
         if not request.get("stream"):
             return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": "Fixture reply"}, "finish_reason": "stop"}]})
         self.send_response(200)

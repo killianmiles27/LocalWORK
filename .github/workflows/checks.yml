@@ -15,7 +15,7 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -42,6 +42,16 @@ jobs:
         env:
           TAURI_CONFIG: '{"bundle":{"resources":[]}}'
         run: cargo test --locked --lib --manifest-path src-tauri/Cargo.toml
+      - name: Rust dependency audits
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --file src-tauri/Cargo.lock
+          git clone --depth 1 --branch v0.2.11 https://github.com/iOfficeAI/aionrs.git "$RUNNER_TEMP/agent-audit"
+          test "$(git -C "$RUNNER_TEMP/agent-audit" rev-parse HEAD)" = 8e61a90329fa9f67c4fdf7e97fe02c24dba33f75
+          git -C "$RUNNER_TEMP/agent-audit" apply "$GITHUB_WORKSPACE/patches/aionrs-localwork.patch"
+          cargo audit --file "$RUNNER_TEMP/agent-audit/Cargo.lock"
 
   windows:
     runs-on: windows-latest
