@@ -57,6 +57,16 @@ class NumberSources(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'duplicate'):
                 office_ranges.read_ranges({'path': 'input.xlsx', 'ranges': ['/S/A1:A2']}, 'unused')
 
+    def test_reference_display_canonicalizes_windows_workspace_spelling(self):
+        Path('input.csv').write_text('value\n2\n')
+        table = tabular._table(os.path.realpath('input.csv'), {})
+        # ntpath.normcase folds case; simulate that behavior with this POSIX fixture.
+        with patch.object(tabular.os, 'name', 'nt'), \
+                patch.object(tabular.os.path, 'normcase', side_effect=lambda value: value.casefold()), \
+                patch.object(tabular.os, 'getcwd', return_value=os.getcwd().upper()):
+            references = tabular._references(table, table['records'], ['value'])
+        self.assertEqual(references[0]['file'], 'input.csv')
+
     def test_grouped_sum_mean_and_compare_include_sources(self):
         Path('input.csv').write_text('group,value\nA,2\nA,4\nB,8\n')
         result = tabular.handle({'action': 'aggregate', 'path': 'input.csv', 'group_by': ['group'], 'measures': [{'column': 'value', 'op': 'sum'}, {'column': 'value', 'op': 'mean'}]})

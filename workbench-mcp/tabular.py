@@ -29,8 +29,27 @@ REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
+def _canonical(path):
+    return os.path.normcase(os.path.realpath(path))
+
+
 def _inside(path, root):
-    return os.path.commonpath((os.path.realpath(root), os.path.realpath(path))) == os.path.realpath(root)
+    return os.path.commonpath((_canonical(root), _canonical(path))) == _canonical(root)
+
+
+def _workspace_relative(path, root=None):
+    root = os.path.realpath(os.getcwd() if root is None else root)
+    path = os.path.realpath(path)
+    if not _inside(path, root):
+        raise ValueError("source path must stay inside the workspace")
+    relative = os.path.relpath(path, root)
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        # Windows can spell the same directory with different case or a short name.
+        root_parts, path_parts = _canonical(root).split(os.sep), _canonical(path).split(os.sep)
+        if path_parts[:len(root_parts)] != root_parts:
+            raise ValueError("source path must stay inside the workspace")
+        relative = os.sep.join(path_parts[len(root_parts):])
+    return relative.replace(os.sep, "/")
 
 
 def _source_path(value):
@@ -365,7 +384,7 @@ def _references(table, records, columns):
     """Return bounded contributing references, retaining saved aggregate lineage."""
     data = table.get("dataset", {})
     chain = _source_chain(data)
-    path = os.path.relpath(table["path"], os.getcwd()).replace(os.sep, "/")
+    path = _workspace_relative(table["path"])
     refs = []
     inherited = {(item.get("row"), item.get("column")): item for item in data.get("sources", []) if isinstance(item, dict)} if isinstance(data.get("sources", []), list) else {}
     for record in records:
@@ -689,7 +708,7 @@ def _aggregate(root, path, args, initial_fingerprint):
             figure_sources.append({"row": index, "column": out, "value": row[out], "references": source_by_key[key][out]})
     fingerprint = initial_fingerprint
     if _sha(path) != fingerprint: raise ValueError("source changed during aggregation; retry with a stable file")
-    rel_source = os.path.relpath(path, root).replace(os.sep, "/")
+    rel_source = _workspace_relative(path, root)
     record = {"version": 1, "source": rel_source, "sha256": fingerprint, "sheet": table["sheet"], "header_row": table["header_row"],
               "query": {"group_by": groups, "measures": measures, "date_format": date_format,
                         "allow_cached_formulas": allow_cached}, "columns": names, "rows": output, "sources": figure_sources}
