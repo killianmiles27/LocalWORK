@@ -68,6 +68,38 @@ def _props_command(command: str, path: str, props: dict[str, Any]) -> dict[str, 
     return {"command": command, "path": path, "props": props}
 
 
+def _source_lines(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_ROWS:
+        raise ValueError("sources must be an array of at most 2000 figures")
+    lines = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError("each source figure must be an object")
+        name = _text(item.get("figure"), f"sources[{index}].figure")
+        if "value" not in item:
+            raise ValueError("each source figure must include a value")
+        figure_value = item["value"]
+        if not isinstance(figure_value, (str, int, float, bool)) and figure_value is not None:
+            raise ValueError("source figure value must be scalar")
+        if isinstance(figure_value, float) and not math.isfinite(figure_value):
+            raise ValueError("source figure value must be finite")
+        refs = item.get("references", [])
+        if not isinstance(refs, list) or any(not isinstance(ref, dict) for ref in refs):
+            raise ValueError("source references must be an array of objects")
+        details = []
+        for ref in refs:
+            if not isinstance(ref.get("file"), str) or not ref["file"].strip():
+                raise ValueError("each source reference must include a file or URL")
+            details.append(json.dumps(ref, ensure_ascii=False, allow_nan=False))
+        line = f"{name}: {figure_value} — " + ("; ".join(details) if details else "source not supplied")
+        if len(line) > MAX_TEXT:
+            raise ValueError("source figure exceeds text limit")
+        lines.append(line)
+    return lines
+
+
 def _document(args: dict[str, Any]) -> dict[str, Any]:
     target = _relative_file(args.get("target"), "target", ".docx")
     title = _text(args.get("title"), "title")
@@ -115,6 +147,13 @@ def _document(args: dict[str, Any]) -> dict[str, Any]:
             commands.append({"command": "add", "parent": "/body", "type": "paragraph", "props": {
                 "text": bullet, "font": font, "size": "11pt", "spaceAfter": "3pt", "listStyle": "bullet",
             }})
+    source_lines = _source_lines(args.get("sources"))
+    if source_lines:
+        commands.append({"command": "add", "parent": "/body", "type": "paragraph", "props": {
+            "text": "Sources", "style": "Heading1", "font": font, "bold": True}})
+        for line in source_lines:
+            commands.append({"command": "add", "parent": "/body", "type": "paragraph", "props": {
+                "text": line, "style": "Normal", "font": font}})
     warnings = ["One-page layout is a concise formatting preset, not a page-count guarantee; verify pagination when required."] if layout == "one-page" else []
     if layout == "one-page" and word_count > 450:
         warnings.append(f"Content is about {word_count} words; shorten it before expecting a one-page result.")
@@ -278,6 +317,18 @@ def _table(args: dict[str, Any]) -> dict[str, Any]:
             "chartType": chart_type, "dataRange": f"{sheet}!{first_col}1:{last_col}{chart_row_end}",
             "title": title, "anchor": f"{_column_name(len(columns) + 2)}2:{_column_name(len(columns) + 8)}18",
         }})
+    source_lines = _source_lines(args.get("sources"))
+    supplied_names = {item.get("figure") for item in (args.get("sources") or [])}
+    for command in commands:
+        props = command.get("props", {})
+        cell = command.get("path")
+        if "formula" in props and cell and cell not in supplied_names:
+            source_lines.append(f"{cell}: value not evaluated — source not supplied")
+    if source_lines:
+        note_row = len(rows) + (4 if total_row is not None else 3)
+        commands.append(_props_command("set", f"/{sheet}/A{note_row}", {"value": "Sources", "font.bold": True}))
+        for index, line in enumerate(source_lines, note_row + 1):
+            commands.append(_props_command("set", f"/{sheet}/A{index}", {"value": line}))
     warnings = [f"Confirm the copied workbook has no existing sheet named {sheet!r} before dispatching the batch."] if source else []
     return {"target": target, **({"source": source} if source else {}), "commands": commands, "warnings": warnings}
 

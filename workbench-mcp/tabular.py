@@ -22,13 +22,34 @@ MAX_INSPECT_SHEETS = 20
 MAX_RESPONSE_BYTES = 16_000
 MAX_PREVIEW_BYTES = 8_000
 MAX_TEXT_PREVIEW = 160
+MAX_SOURCE_ROWS = 20
+MAX_SOURCE_FIGURES = 20
 XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
+def _canonical(path):
+    return os.path.normcase(os.path.realpath(path))
+
+
 def _inside(path, root):
-    return os.path.commonpath((os.path.realpath(root), os.path.realpath(path))) == os.path.realpath(root)
+    return os.path.commonpath((_canonical(root), _canonical(path))) == _canonical(root)
+
+
+def _workspace_relative(path, root=None):
+    root = os.path.realpath(os.getcwd() if root is None else root)
+    path = os.path.realpath(path)
+    if not _inside(path, root):
+        raise ValueError("source path must stay inside the workspace")
+    relative = os.path.relpath(path, root)
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        # Windows can spell the same directory with different case or a short name.
+        root_parts, path_parts = _canonical(root).split(os.sep), _canonical(path).split(os.sep)
+        if path_parts[:len(root_parts)] != root_parts:
+            raise ValueError("source path must stay inside the workspace")
+        relative = os.sep.join(path_parts[len(root_parts):])
+    return relative.replace(os.sep, "/")
 
 
 def _source_path(value):
@@ -290,16 +311,24 @@ def _table(path, args):
         if not isinstance(rows, list) or len(rows) > MAX_ROWS or len(rows) * len(headers) > MAX_CELLS:
             raise ValueError("JSON dataset exceeds row or cell limits")
         records = []
+        row_sources = data.get("row_sources")
+        if row_sources is not None and (not isinstance(row_sources, list) or len(row_sources) != len(rows)
+                or any(not isinstance(r, dict) or not isinstance(r.get("row"), int)
+                       or isinstance(r.get("row"), bool) or r["row"] < 1
+                       or not isinstance(r.get("range"), str) for r in row_sources)):
+            raise ValueError("invalid JSON dataset row_sources")
         for ri, values in enumerate(rows, 1):
             if isinstance(values, list):
                 if len(values) != len(headers): raise ValueError("JSON dataset row width does not match columns")
                 record = dict(zip(headers, values))
             elif isinstance(values, dict) and all(h in values for h in headers): record = {h: values[h] for h in headers}
             else: raise ValueError("JSON dataset rows must be arrays or column-keyed objects")
-            records.append({"_row": ri, **record, "_cells": []})
+            records.append({"_row": ri, **record, "_cells": [],
+                            "_row_source": row_sources[ri - 1] if row_sources else None})
         _validate_json_provenance(data, root, seen={path})
         return {"sheet": data.get("sheet"), "sheet_count": 1, "sheet_names": [], "headers": headers, "records": records,
-                "sparse": {}, "header_row": 1, "cells": len(rows)*len(headers), "xlsx": False, "date_1904": False}
+                "sparse": {}, "header_row": 1, "cells": len(rows)*len(headers), "xlsx": False, "date_1904": False,
+                "dataset": data, "path": path}
     sheet, sparse, count, sheet_count, xlsx, sheet_names, date_1904 = _grid(path, args)
     header_row = args.get("header_row", 1)
     if not isinstance(header_row, int) or isinstance(header_row, bool) or not 1 <= header_row <= MAX_ROWS:
@@ -328,7 +357,84 @@ def _table(path, args):
     for record in records:
         record["_formula_by_column"] = {h: record["_cells"][i]["formula"] is not None for i, h in enumerate(headers)}
     return {"sheet": sheet, "sheet_count": sheet_count, "sheet_names": sheet_names, "headers": headers, "records": records,
-            "sparse": sparse, "header_row": header_row, "cells": count, "xlsx": xlsx, "date_1904": date_1904}
+            "sparse": sparse, "header_row": header_row, "cells": count, "xlsx": xlsx, "date_1904": date_1904,
+            "path": path}
+
+
+def _source_chain(data):
+    chain = []
+    seen = set()
+    for _ in range(8):
+        provenance = data.get("provenance") or ({"source": data.get("source"), "sha256": data.get("sha256")} if data.get("source") else None)
+        if not isinstance(provenance, dict) or not provenance.get("source"):
+            break
+        source = provenance["source"]
+        chain.append({"file": source, "sha256": provenance.get("sha256")})
+        if not source.lower().endswith(".json") or source in seen:
+            break
+        seen.add(source)
+        with open(source, encoding="utf-8") as stream:
+            data = _json_load(stream)
+        if not isinstance(data, dict):
+            break
+    return chain
+
+
+def _references(table, records, columns):
+    """Return bounded contributing references, retaining saved aggregate lineage."""
+    data = table.get("dataset", {})
+    chain = _source_chain(data)
+    path = _workspace_relative(table["path"])
+    refs = []
+    inherited = {(item.get("row"), item.get("column")): item for item in data.get("sources", []) if isinstance(item, dict)} if isinstance(data.get("sources", []), list) else {}
+    for record in records:
+        old = [inherited.get((record["_row"], col)) for col in columns]
+        old = [item for item in old if item and isinstance(item.get("references"), list)]
+        if old:
+            for item in old:
+                for ref in item["references"]:
+                    if isinstance(ref, dict):
+                        refs.append({**ref, "chain": [{"file": path}, *ref.get("chain", [])]})
+            continue
+        row_source = record.get("_row_source")
+        if row_source and chain and chain[0]["file"].lower().endswith(".xlsx") and isinstance(data.get("sheet"), str):
+            match = re.fullmatch(r"([A-Z]+)([1-9][0-9]*):([A-Z]+)([1-9][0-9]*)", row_source["range"])
+            original = re.fullmatch(r"/([^/]+)/([A-Z]+)([1-9][0-9]*):([A-Z]+)([1-9][0-9]*)", str(data.get("range", "")))
+            if (not match or not original or original[1] != data["sheet"] or match[1] != original[2]
+                    or match[3] != original[4] or int(match[2]) != row_source["row"]
+                    or int(match[4]) != row_source["row"] or not int(original[3]) <= row_source["row"] <= int(original[5])):
+                raise ValueError("invalid JSON dataset cell range")
+            left, right = _col_num(match[1]), _col_num(match[3])
+            if right - left + 1 != len(table["headers"]):
+                raise ValueError("JSON dataset cell range width does not match columns")
+            cells = [f"{_col_label(left + table['headers'].index(col))}{row_source['row']}" for col in columns if col in table["headers"]]
+            ref = {"file": chain[0]["file"], "sheet": data["sheet"], "range": data.get("range"), "precision": "cell",
+                   "rows": [{"row": row_source["row"], "cells": cells or [row_source["range"]]}], "truncated": False, "chain": [{"file": path}, *chain]}
+        else:
+            table_range = (f"A{table['header_row']}:{_col_label(len(table['headers']))}{max(table['sparse'], default=table['header_row'])}"
+                           if table.get("xlsx") else None)
+            ref = {"file": path, "sheet": table.get("sheet"), "range": table_range, "precision": "row",
+                   "rows": [{"row": record["_row"]}], "truncated": False, "chain": [{"file": path}, *chain]}
+        refs.append(ref)
+    merged = []
+    for ref in refs:
+        identity = (ref.get("file"), ref.get("sheet"), ref.get("range"), ref.get("precision"), json.dumps(ref.get("chain", []), sort_keys=True))
+        target = next((r for r in merged if r[0] == identity), None)
+        if target is None:
+            target = (identity, {**ref, "rows": [], "truncated": bool(ref.get("truncated"))})
+            merged.append(target)
+        dest = target[1]
+        dest["truncated"] |= bool(ref.get("truncated"))
+        for row in ref.get("rows", []):
+            if row not in dest["rows"]:
+                if len(dest["rows"]) < MAX_SOURCE_ROWS:
+                    dest["rows"].append(row)
+                else:
+                    dest["truncated"] = True
+    result = [item[1] for item in merged[:MAX_SOURCE_ROWS]]
+    if len(merged) > MAX_SOURCE_ROWS and result:
+        result[-1]["truncated"] = True
+    return result
 
 
 def _resolve_column(table, name):
@@ -382,6 +488,25 @@ def _inspect(path, args):
               "columns": [label for _, label in display_headers], "column_summary": summaries, "sample": shown,
               "truncated": len(display_headers) < len(table["headers"]) or len(table["sheet_names"]) > MAX_INSPECT_SHEETS
               or any(len(name) > 40 for name in table["sheet_names"]) or text_truncated}
+    result["sources"] = [{"figure": "rows", "value": len(table["records"]),
+                          "references": _references(table, table["records"], [])}]
+    for header, label in display_headers:
+        summary = result["column_summary"][label]
+        numeric = summary.get("numeric")
+        figures = [("values", summary["values"], table["records"]),
+                   ("nulls", summary["nulls"], [r for r in table["records"] if r[header] is None])]
+        if numeric:
+            numeric_records = [r for r in table["records"] if "number" in _type_summary([r[header]])["types"]]
+            figures.extend((op, value, numeric_records) for op, value in numeric.items())
+        for op, value, records in figures:
+            if len(result["sources"]) < MAX_SOURCE_FIGURES:
+                result["sources"].append({"column": label, "figure": op, "value": value,
+                                          "references": _references(table, records, [header])})
+            else:
+                result["sources_truncated"] = True
+    while result["sources"] and _wire_size(result) > MAX_RESPONSE_BYTES:
+        result["sources"].pop()
+        result["sources_truncated"] = True
     while result["sample"] and _wire_size(result) > MAX_RESPONSE_BYTES:
         result["sample"].pop()
         result["truncated"] = True
@@ -554,7 +679,13 @@ def _aggregate(root, path, args, initial_fingerprint):
                 formula_used = True
             value = _decimal(record[col], f"column {col}")
             state["values"].append(value); state["sum"] += value
+    source_records = {key: [] for key in grouped}
+    for record in table["records"]:
+        key = tuple(_date_part(record[col], transform, date_format, ("1904" if table["date_1904"] else "1900") if table["xlsx"] else None) if transform else record[col]
+                    for col, transform, _ in group_defs)
+        source_records[key].append(record)
     output = []
+    source_by_key = {}
     for key, states in grouped.items():
         row = {d[2]: _json_value(v) for d, v in zip(group_defs, key)}
         for (col, op, out), state in zip(measure_defs, states):
@@ -567,13 +698,20 @@ def _aggregate(root, path, args, initial_fingerprint):
             else: value = max(vals)
             row[out] = _json_value(value)
         output.append(row)
+        source_by_key[key] = {out: _references(table, source_records[key], list(dict.fromkeys([*(c for c, _, _ in group_defs), *([col] if col else [])]))) for col, _, out in measure_defs}
+        source_by_key[key].update({out: _references(table, source_records[key], [col]) for col, _, out in group_defs})
     output.sort(key=lambda row: tuple(str(row[n]) for n in names))
+    figure_sources = []
+    for index, row in enumerate(output, 1):
+        key = tuple(row[d[2]] for d in group_defs)
+        for _, _, out in [*measure_defs, *group_defs]:
+            figure_sources.append({"row": index, "column": out, "value": row[out], "references": source_by_key[key][out]})
     fingerprint = initial_fingerprint
     if _sha(path) != fingerprint: raise ValueError("source changed during aggregation; retry with a stable file")
-    rel_source = os.path.relpath(path, root).replace(os.sep, "/")
+    rel_source = _workspace_relative(path, root)
     record = {"version": 1, "source": rel_source, "sha256": fingerprint, "sheet": table["sheet"], "header_row": table["header_row"],
               "query": {"group_by": groups, "measures": measures, "date_format": date_format,
-                        "allow_cached_formulas": allow_cached}, "columns": names, "rows": output}
+                        "allow_cached_formulas": allow_cached}, "columns": names, "rows": output, "sources": figure_sources}
     data_dir = os.path.join(root, ".localwork-data")
     os.makedirs(data_dir, exist_ok=True)
     if not _inside(data_dir, root): raise ValueError(".localwork-data must be inside the workspace")
@@ -588,7 +726,8 @@ def _aggregate(root, path, args, initial_fingerprint):
     preview_rows, preview_truncated = [], len(preview_headers) < len(names)
     result = {"rows": len(output), "columns": [label for _, label in preview_headers], "column_count": len(names),
               "preview": [], "dataset_path": rel_data, "source_sha256": fingerprint,
-              "query": _bounded_value(record["query"])[0]}
+              "query": _bounded_value(record["query"])[0], "sources": figure_sources[:MAX_SOURCE_FIGURES],
+              "sources_truncated": len(figure_sources) > MAX_SOURCE_FIGURES}
     for row in output[:MAX_OUTPUT]:
         preview_row = {}
         for name, label in preview_headers:
@@ -601,6 +740,9 @@ def _aggregate(root, path, args, initial_fingerprint):
     if len(result["preview"]) < min(MAX_OUTPUT, len(output)): preview_truncated = True
     result["preview_truncated"] = preview_truncated
     if formula_used: result["warnings"] = ["Used workbook-saved formula cache values; formulas were not evaluated and caches may be stale."]
+    while result["sources"] and _wire_size(result) > MAX_PREVIEW_BYTES:
+        result["sources"].pop()
+        result["sources_truncated"] = True
     while result["preview"] and _wire_size(result) > MAX_PREVIEW_BYTES:
         result["preview"].pop()
         result["preview_truncated"] = True
@@ -667,12 +809,24 @@ def _compare(root, args):
             if key in result: raise ValueError("comparison keys are not unique")
             result[key] = row
         return result
-    left, right = index(saved["rows"]), index([{k: r[k] for k in keys + columns} for r in actual["records"]])
+    left = index([{**row, "_source_index": i} for i, row in enumerate(saved["rows"], 1)])
+    right = index(actual["records"])
+    saved_table = _table(saved_path, {})
+    figures = []
+    figures_truncated = False
     mismatches = []
     mismatch_total = 0
     for key in sorted(set(left) | set(right), key=str):
         for col in columns:
             a = left.get(key, {}).get(col); b = right.get(key, {}).get(col)
+            if len(figures) < MAX_SOURCE_FIGURES:
+                left_row, right_row = left.get(key), right.get(key)
+                expected_record = saved_table["records"][left_row["_source_index"] - 1] if left_row else None
+                figures.append({"key": [_bounded_value(v, 100)[0] for v in key], "column": col,
+                                "expected": {"value": _json_value(a), "references": _references(saved_table, [expected_record], [col]) if expected_record else []},
+                                "actual": {"value": _json_value(b), "references": _references(actual, [right_row], [col]) if right_row else []}})
+            else:
+                figures_truncated = True
             same = a == b
             if not same and a is not None and b is not None:
                 try: same = abs(_decimal(a, col) - _decimal(b, col)) <= tolerance
@@ -683,7 +837,11 @@ def _compare(root, args):
                     mismatches.append({"key": [_bounded_value(v, 100)[0] for v in key], "column": col[:100],
                                        "expected": _bounded_value(a, 100)[0], "actual": _bounded_value(b, 100)[0]})
     result = {"equal": not mismatches and set(left) == set(right), "compared_keys": len(set(left) | set(right)),
-              "mismatch_count": mismatch_total, "mismatch_count_reported": len(mismatches), "mismatches": mismatches, "tolerance": str(tolerance)}
+              "mismatch_count": mismatch_total, "mismatch_count_reported": len(mismatches), "mismatches": mismatches, "tolerance": str(tolerance),
+              "sources": figures, "sources_truncated": figures_truncated}
+    while result["sources"] and _wire_size(result) > MAX_RESPONSE_BYTES:
+        result["sources"].pop()
+        result["sources_truncated"] = True
     output_truncated = mismatch_total > len(mismatches)
     while result["mismatches"] and _wire_size(result) > MAX_RESPONSE_BYTES:
         result["mismatches"].pop()

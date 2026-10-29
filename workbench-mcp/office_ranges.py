@@ -72,13 +72,17 @@ def read_ranges(args, executable):
             raise RuntimeError('OfficeCLI returned an incomplete range; use a smaller range')
         grid = [[None] * (right - left + 1) for _ in range(end - start + 1)]
         formulas = []
+        seen_cells = set()
         for cell in cells:
-            ref = re.search(r'/([A-Z]+)([0-9]+)$', cell.get('path', ''))
+            ref = re.fullmatch(re.escape('/' + sheet + '/') + r'([A-Z]+)([0-9]+)', cell.get('path', ''))
             if not ref:
                 raise RuntimeError('OfficeCLI returned an invalid cell path')
             x, y = _column(ref[1]) - left, int(ref[2]) - start
             if not 0 <= y < len(grid) or not 0 <= x < len(grid[0]):
                 raise RuntimeError('OfficeCLI returned a cell outside the requested range')
+            if (x, y) in seen_cells:
+                raise RuntimeError('OfficeCLI returned a duplicate cell path')
+            seen_cells.add((x, y))
             fmt = cell.get('format', {})
             if fmt.get('formula'):
                 if fmt.get('evaluated') is not True or 'computedValue' not in fmt:
@@ -99,15 +103,19 @@ def read_ranges(args, executable):
                 item = str(raw)
             grid[y][x] = item
         columns = args.get('columns')
+        data_start = start
         if columns is None:
             columns, grid = grid[0], grid[1:]
+            data_start += 1
         if not isinstance(columns, list) or len(columns) != right - left + 1 or any(not isinstance(c, str) or not c.strip() for c in columns) or len(set(columns)) != len(columns):
             raise ValueError('range header must contain unique nonempty text; otherwise provide explicit columns')
         provenance = {'source': str(path.relative_to(Path.cwd().resolve())).replace('\\', '/'),
                       'sha256': fingerprint}
         dataset = {'version': 1, 'columns': columns, 'rows': grid, 'provenance': provenance,
                    'evaluation': 'OfficeCLI computed values', 'sheet': sheet, 'range': value,
-                   'formulas': formulas}
+                   'formulas': formulas,
+                   'row_sources': [{'row': row, 'range': f'{col}{row}:{endcol}{row}'}
+                                   for row in range(data_start, end + 1)]}
         saved = directory / (uuid.uuid4().hex + '.json')
         with saved.open('x', encoding='utf-8') as handle:
             json.dump(dataset, handle, ensure_ascii=False, allow_nan=False)
@@ -116,9 +124,13 @@ def read_ranges(args, executable):
             if len(json.dumps(preview + [row], ensure_ascii=False)) > 4000:
                 break
             preview.append(row)
-        results.append({'range': value, 'columns': columns, 'row_count': len(grid), 'preview': preview,
+        results.append({'range': value, 'sheet': sheet, 'source': provenance,
+                        'columns': columns, 'row_count': len(grid), 'preview': preview,
+                        'preview_row_sources': dataset['row_sources'][:len(preview)],
                         'preview_truncated': len(preview) < len(grid),
-                        'formula_count': len(formulas), 'dataset_path': '.localwork-data/' + saved.name})
+                        'formula_count': len(formulas), 'formulas': formulas[:20],
+                        'formulas_truncated': len(formulas) > 20,
+                        'dataset_path': '.localwork-data/' + saved.name})
     if hashlib.sha256(path.read_bytes()).hexdigest() != fingerprint:
         raise RuntimeError('Workbook changed during range evaluation; read again after edits finish')
     return {'evaluation': 'OfficeCLI computed values, not cached XML values', 'ranges': results}
