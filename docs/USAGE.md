@@ -112,6 +112,29 @@ Turn Automatic mode off when you want more control. The app can still allow a li
 
 Read approval requests before accepting. Do not approve a command merely because a web page or downloaded document says it is necessary.
 
+## Folder undo points before automatic commands
+
+Before a **policy-allowed shell/exec command** runs in Automatic mode, LocalWORK saves a folder snapshot for that chat, after policy checks and before approving the tool. Step-by-step mode, file edits, and MCP tools do not trigger this hook; document revisions continue separately. Commands that already require explicit approval are not automatically snapshotted by this hook.
+
+Snapshots live outside the working folder, under `%LOCALAPPDATA%\Workbench\workspace-snapshots` on Windows or `$XDG_DATA_HOME/Workbench/workspace-snapshots` (normally `~/.local/share/Workbench/workspace-snapshots`) on Linux. Each chat has a separate keyed directory, with one timestamped snapshot per command. A manifest records workspace-relative paths, byte sizes, modification times, SHA-256 content hashes, and skipped files/subtrees. Unchanged contents are hardlinked from the previous immutable snapshot, or copied if hardlinks are unavailable; live workspace files are never hardlinked to history. Contents are hashed again on each capture, so this saves disk writes, not all read I/O. Only the newest **10 snapshots per chat** are retained after successful captures. Deleting a chat removes its snapshots; a cleanup failure leaves the chat in place and returns an error.
+
+Capture limits are **10,000 files**, **256 MiB total logical file bytes**, **64 MiB per file**, **50,000 visited entries**, and **64 directory levels**. Files beyond the file/byte caps, and unvisited subtrees beyond traversal caps, are recorded as skipped. A partial snapshot can still precede a command: it protects only the files listed in its manifest. `.git`, `node_modules`, `target`, and local search-index folders (`.localwork`, which contains `search.sqlite`, plus `.localwork-index`, `.search-index`, `.workbench-index`) are excluded at every depth. All symlinks and Windows reparse points are skipped, including links within the folder; links outside it are never followed. Special files are skipped. App data and the snapshot store are never included. Selecting a working folder that contains app data, or is inside app data, makes capture fail instead of storing snapshots inside the working folder. Unsupported/non-portable filenames also cause capture to fail.
+
+If capture fails (for example, insufficient disk space, a permission error, or a file changing during capture), that command becomes a one-time approval request: **“Could not snapshot the folder before this command”**, with the underlying reason. Approving it explicitly runs without a folder undo point. Failed captures do not publish a partial snapshot; interrupted staging directories are ignored and reclaimed on the next capture.
+
+### Backend restore commands (no snapshot UI yet)
+
+These Tauri IPC commands are for user actions only and are **not agent/MCP tools**:
+
+- `workspace_snapshots_list({ id })`: returns newest-first manifests for the chat, including skipped entries.
+- `workspace_snapshot_restore({ id, snapshot, exact: false })`: restores the listed file contents and returns `{ restored, deleted }` relative-path lists. `snapshot` is an ID from the list. Omitting `exact` also means `false`. Files created after the snapshot are **not deleted** by default.
+- `workspace_snapshot_restore({ id, snapshot, exact: true })`: explicitly requests deletion of additional eligible regular files in the working folder. Excluded folders are still untouched; empty directories are not removed. Exact restore is refused if the snapshot has skipped entries or the current folder cannot be fully traversed safely.
+- `workspace_snapshots_cleanup({ id })`: removes that chat's snapshots, including leftover staging data. This also works with the original chat ID after the chat is gone, for cleanup after an interrupted deletion. It does not remove working files.
+
+Stop the chat's current reply before restore or cleanup. Restore checks every manifest path and content hash before any writes, rejects absolute/dot/traversal paths and symlink/reparse-point escapes, and replaces each file using a temporary file in its destination directory. It never links restored files to stored history. It does not provide an all-files transaction: a later I/O failure can leave some files restored; the error includes the completed paths. File/directory type conflicts may require manual resolution. Restore is content-only: ownership, ACLs, permissions/executable bits, original timestamps, and empty directories are not restored. Manifest modification times are informational.
+
+These are local undo points, not independent backups or a filesystem sandbox. Other applications can still change files during capture/restore, and hostile concurrent link/path swaps are not isolated by the operating system. Snapshots can contain private workspace content and are not encrypted. Keep independent backups for important work.
+
 ## Files and previews
 
 Completed documents appear in the Files panel. You can preview a file, open it in its normal application, save a copy, or inspect saved revisions. Use the document panel's revision request to describe the next change.
@@ -124,7 +147,7 @@ Editing and saving files does not start the AI. Saved edits accumulate in the fi
 
 The built-in OfficeCLI recipe is supplied at the start of every chat. Normal batches use inline JSON without creating project files. Large batches use a hidden temporary folder and clean their input file after success or failure. Legacy hidden `.*.build.json` files are omitted from the file picker; ordinary JSON documents remain visible and existing files are not deleted.
 
-Office previews are HTML approximations. Supported direct edits save previous versions, but arbitrary shell commands do not always participate in that history. Keep independent backups for important work.
+Office previews are HTML approximations. Supported direct edits save previous document versions. Automatic shell commands use the separate folder undo points described above; they do not add individual document revisions. Keep independent backups for important work.
 
 For Word, Excel, and PowerPoint, the assistant can bundle structural checks into one verification call. Page counting is a separate Word-dependent check and may fail. Open the finished document in its normal application for final layout review.
 
@@ -160,7 +183,7 @@ SSH is optional. Add a host in Settings, install the app's public key on the ser
 
 ## Where data lives
 
-- App settings, chats, logs, browser profiles, and caches: `%LOCALAPPDATA%\Workbench`.
+- App settings, chats, logs, browser profiles, caches, and folder snapshots: `%LOCALAPPDATA%\Workbench` on Windows; `$XDG_DATA_HOME/Workbench` (normally `~/.local/share/Workbench`) on Linux.
 - Deliverables and attachments: the chat's working folder.
 - Model weights and Strata: the locations you selected, outside the app installation.
 

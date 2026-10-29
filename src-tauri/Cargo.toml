@@ -28,6 +28,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 toml_edit = "0.25"
 base64 = "0.22"
+sha2 = "0.10"
+tempfile = "3"
 sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "component"] }
 
 
