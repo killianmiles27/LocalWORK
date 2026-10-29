@@ -8,6 +8,7 @@ Task recipes the agent loads with `load_skill` when a task calls for one. Each f
 | academic-docx | Essays and papers with academic formatting |
 | document-template | Fill a user's .docx/.pptx/.xlsx template or match an example's format |
 | verify-document | Check an Office file against the original requirements before presenting it |
+| check-my-work | Independently check finished deliverables against the request and sources |
 | pptx-deck | Slide decks |
 | xlsx-model | Spreadsheet models with formulas |
 | intelligent-ui | Dashboards, calculators and forms rendered in the chat |
