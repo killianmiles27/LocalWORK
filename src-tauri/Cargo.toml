@@ -28,7 +28,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 toml_edit = "0.25"
 base64 = "0.22"
-sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "component"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "component"] }
 
 
 [target.'cfg(windows)'.dependencies]
