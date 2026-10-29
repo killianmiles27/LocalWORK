@@ -9,6 +9,7 @@ import PlanDock, { latestPlan } from "./PlanDock";
 import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Copy, Download, FolderOpen, GripVertical, Mic, Pencil, RotateCcw, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import ChatList, { type Conv } from "./ChatList";
+import TaskTemplates, { type AppliedTemplate } from "./TaskTemplates";
 import Wizard from "./Wizard";
 import { useVoice } from "./voice";
 import { richFor } from "./Rich";
@@ -58,6 +59,8 @@ export default function App() {
   const autoEditInteracted = useRef(false);
   const [err, setErr] = useState("");
   const [files, setFiles] = useState<string[]>([]);
+  const applyingTemplate = useRef(false);
+  const [templateApplying, setTemplateApplying] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // The user message being edited in place, and how many chats blocked a window close.
@@ -268,7 +271,7 @@ export default function App() {
   }, [input, cur]);
 
   async function attachPaths(paths: string[]) {
-    if (!paths.length) return;
+    if (!paths.length || applyingTemplate.current) return;
     const epoch = navigation.current;
     try { const id = await ensureConversation(); const rel = await invoke<string[]>("attach_paths", { id, paths }); if (epoch === navigation.current && id === curRef.current) setFiles((f) => [...f, ...rel]); }
     catch (e) { if (epoch === navigation.current) setErr(String(e)); }
@@ -278,6 +281,7 @@ export default function App() {
     if (Array.isArray(r)) attachPaths(r); else if (typeof r === "string") attachPaths([r]);
   }
   async function onPaste(e: React.ClipboardEvent) {
+    if (applyingTemplate.current) return;
     const list = Array.from(e.clipboardData.files);
     if (!list.length) return;
     e.preventDefault();
@@ -332,6 +336,7 @@ export default function App() {
     taRef.current?.focus();
   }
   async function chooseFolder() {
+    if (applyingTemplate.current) return;
     try {
       const dir = await open({ directory: true, title: "Start a chat in a folder", defaultPath: projDir });
       if (typeof dir !== "string") return;
@@ -340,7 +345,26 @@ export default function App() {
       await ensureConversation(dir);
     } catch (e) { setErr(String(e)); }
   }
+  async function applyTaskTemplate(templateId: string) {
+    if (live.busy || creating.current || applyingTemplate.current) return;
+    const epoch = navigation.current;
+    applyingTemplate.current = true; setTemplateApplying(true); setErr("");
+    try {
+      const prepared = await invoke<AppliedTemplate>("task_template_apply", { id: templateId });
+      if (epoch !== navigation.current) return;
+      createdHere.current = prepared.id;
+      selectConversation(prepared.id);
+      setMsgs([]); setQueue([]); setLive({ text: "", thinking: "", busy: false });
+      setEditing(null); setWorkspaceRequest(undefined); setWorkspaceOpen(false);
+      setCtx(c => ({ ...c, used: null }));
+      setInput(prepared.prompt); setFiles(prepared.files);
+      await refreshConvs();
+      taRef.current?.focus();
+    } catch (e) { if (epoch === navigation.current) setErr(String(e)); }
+    finally { applyingTemplate.current = false; setTemplateApplying(false); }
+  }
   async function send(override?: string, queued?: string[]) {
+    if (applyingTemplate.current) return;
     const typed = (override ?? input).trim();
     const attached = queued ?? files;
     if ((!typed && !attached.length) || !modelReady) return;
@@ -589,7 +613,9 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                     onEdit={q => { setQueue(x => x.filter(y => y !== q)); setInput(q.text); setFiles(f => [...f, ...q.files]); taRef.current?.focus(); }} />
                 )}
                 {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
-                <div className="@container rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
+                <TaskTemplates prompt={input} workspace={curConv?.workspace} attachments={files} disabled={live.busy || templateApplying || tidying}
+                  onApply={applyTaskTemplate} />
+                <fieldset disabled={templateApplying} className="@container rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
                   {files.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                       {files.map((f) => (
@@ -646,7 +672,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                     )}
                     </div>
                   </div>
-                </div>
+                </fieldset>
               </div>
             </div>
         </div>
