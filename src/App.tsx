@@ -558,11 +558,11 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                     ? <EditBox key={g.m.id} text={editing.text} canSave={canRewind} onChange={t => setEditing({ id: g.m.id, text: t })}
                         onCancel={() => setEditing(null)} onSave={() => rewindTo(g.m, editing.text)} />
                     : <Row key={g.m.id} m={g.m} actions={{ onDocument: openDocument, onVisual: () => openVisual(String(g.m.id)), onDraft: draft }}
-                        canAct={canRewind}
+                        canAct={canRewind} offline={offline.global || offline.chat}
                         onEdit={g.m.role === "user" ? () => setEditing({ id: g.m.id, text: text(g.m.body?.text) }) : undefined}
                         onRegenerate={i === blocks.length - 1 && g.m.role === "assistant" && lastUser ? () => rewindTo(lastUser) : undefined} />)}
                 {live.thinking && <Thinking text={live.thinking} />}
-                {live.text && <Assistant>{live.text}</Assistant>}
+                {live.text && <Assistant offline={offline.global || offline.chat}>{live.text}</Assistant>}
                 {live.busy && !live.text && !live.thinking && mine.length === 0 && firstWait?.conv === cur && <FirstTokenCountdown start={firstWait.t0} estimate={firstWait.est} />}
                 {live.busy && !live.text && mine.length === 0 && firstWait?.conv !== cur && (
                   <div className="flex items-center gap-2 text-muted text-sm"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" /> Working…</div>
@@ -854,17 +854,17 @@ function ContextRing({ used, window: win, busy, onCompact }: { used: number | nu
   );
 }
 
-function Assistant({ children }: { children: string }) {
+function Assistant({ children, offline }: { children: string; offline: boolean }) {
   return (
     <div className="flex gap-3">
-      <div className="prose py-3 min-w-0 flex-1"><Md embeds>{children}</Md></div>
+      <div className="prose py-3 min-w-0 flex-1"><Md embeds images={{ offline }}>{children}</Md></div>
     </div>
   );
 }
 
-type RowProps = { m: Msg; actions?: RichActions; canAct?: boolean; onEdit?: () => void; onRegenerate?: () => void };
+type RowProps = { m: Msg; actions?: RichActions; canAct?: boolean; offline: boolean; onEdit?: () => void; onRegenerate?: () => void };
 
-function Row({ m, actions, canAct, onEdit, onRegenerate }: RowProps) {
+function Row({ m, actions, canAct, offline, onEdit, onRegenerate }: RowProps) {
   const b = m.body ?? {};
   if (m.role === "user")
     return (
@@ -880,7 +880,7 @@ function Row({ m, actions, canAct, onEdit, onRegenerate }: RowProps) {
   if (m.role === "assistant")
     return (
       <div className="group relative">
-        <Assistant>{text(b.text)}</Assistant>
+        <Assistant offline={offline}>{text(b.text)}</Assistant>
         <div className={"absolute left-0 top-full -mt-3 z-10 flex items-center gap-0.5 " + (onRegenerate ? "" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100")}>
           <CopyButton text={text(b.text)} />
           {onRegenerate && <ActionButton label="Regenerate" disabled={!canAct} onClick={onRegenerate}><RotateCcw size={13} /></ActionButton>}

@@ -1,7 +1,7 @@
 //! One aionrs process per conversation, spoken to over JSON Lines (--json-stream).
 //! The host owns the approval policy: aionrs runs in its default "ask for everything" mode and every
 //! tool_request is answered here, either automatically by policy or by the user through the UI.
-use crate::{documents, http, paths, plugins, policy, store, strata, supervisor};
+use crate::{documents, http, paths, plugins, policy, python, setup, store, strata, supervisor};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -353,8 +353,7 @@ pub fn get_or_start(
         .is_some_and(|(code, body)| code == 200 && native_compaction_supported(&body));
     write_compact_config(&workspace, native)?;
     let vendor = paths::vendor_dir();
-    let workbench = workbench_mcp(&vendor, conv)
-        .ok_or_else(|| "Workbench tools are missing. Choose a configured Strata folder in Settings and check that workbench-mcp/server.py is installed beside LocalWORK.".to_string())?;
+    let workbench = workbench_mcp(&vendor, conv)?;
     let python_runtime = workbench_python_command(&workbench)
         .ok_or_else(|| "The configured Workbench Python runtime is unavailable.".to_string())?;
     let exe = vendor.join(paths::exe("aionrs"));
@@ -441,36 +440,25 @@ For these kinds of task, call the load_skill tool with the skill name first and 
 fn system_prompt(db: &Db) -> String {
     // Cross-chat memory is switched off: every chat starts fresh and knows nothing about the user.
     let _ = db;
-    let notes: Vec<(i64, String)> = vec![];
-    let base = format!("{SYSTEM_PROMPT}{}{}", skill_list(), plugins::prompt_addenda());
-    if notes.is_empty() {
-        return base;
-    }
-    let list: Vec<String> = notes.iter().map(|(_, t)| format!("- {t}")).collect();
-    format!("{base}
-
-# What you remember about the user
-{}
-(Use memory_search for older notes. Save new durable facts with memory_save.)", list.join("
-"))
+    format!("{SYSTEM_PROMPT}{}{}", skill_list(), plugins::prompt_addenda())
 }
 
-fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Option<Value> {
-    let root = PathBuf::from(
-        std::fs::read_to_string(paths::data_dir().join("settings.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .and_then(|v| v.get("strataRoot").and_then(|x| x.as_str().map(String::from)))
-            .unwrap_or_else(paths::default_strata_root),
-    );
-    let python = paths::venv_python(&root);
+/// The Workbench MCP server, run by the first usable Python: the `workbenchPython` setting, Strata's
+/// venv, or a system Python 3.11+. The error says what to install; it mentions Strata only when the
+/// user actually runs Strata.
+fn workbench_mcp(app_vendor: &std::path::Path, conv: &str) -> Result<Value, String> {
+    let settings = setup::settings();
+    let setting = settings.get("workbenchPython").and_then(Value::as_str);
+    let root = setup::strata_root_setting();
     let script = paths::resource_dir("workbench-mcp").join("server.py");
-    if !python.exists() || !script.exists() {
-        return None;
+    if !script.exists() {
+        return Err("Workbench tools are missing: workbench-mcp/server.py was not found beside LocalWORK. Reinstall LocalWORK or its resources.".into());
     }
-    Some(json!({
+    let found = python::find(setting, root.as_deref())
+        .ok_or_else(|| python::missing_message(strata::external(), root.as_deref()))?;
+    Ok(json!({
         "type": "add_mcp_server", "name": "workbench", "transport": "stdio",
-        "command": python.to_string_lossy(),
+        "command": found.path.to_string_lossy(),
         "args": ["-u", script.to_string_lossy()],
         "env": {
             "OFFICECLI_EXE": app_vendor.join(paths::exe("officecli")).to_string_lossy(),
@@ -565,7 +553,10 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     let c = db.lock().unwrap();
                     store::set_has_session(&c, &conv);
                 }
-                let mut servers: Vec<Value> = workbench_mcp(&vendor, &conv).into_iter().collect();
+                let mut servers: Vec<Value> = match workbench_mcp(&vendor, &conv) {
+                    Ok(server) => vec![server],
+                    Err(why) => { eprintln!("workbench tools unavailable: {why}"); vec![] }
+                };
                 servers.extend(plugins::mcp_servers());
                 let mut g = agent.inner.lock().unwrap();
                 if !servers.is_empty() {

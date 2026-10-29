@@ -128,6 +128,7 @@ function ModelTab({ status, showTps, onShowTps }: { status: St; showTps: boolean
 
     <LocalPickerSettings />
     <EngineSetup />
+    <ToolsPython />
     <ModelLibrary onChanged={() => window.dispatchEvent(new Event("models-changed"))} />
   </>;
 }
@@ -195,6 +196,44 @@ function EngineSetup() {
         <Button small onClick={() => window.dispatchEvent(new Event("open-wizard"))}>Run setup again</Button>
       </Row>
       {(message || err) && <div className="px-3.5 py-2"><Message error={!!err}>{err || message}</Message></div>}
+    </Section>
+  );
+}
+
+type Py = { setting: string | null; found?: { path: string; version: string; source: string }; missing?: string };
+
+/** Which interpreter runs the Workbench file, Office, browser and web tools. */
+function ToolsPython() {
+  const [py, setPy] = useState<Py | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const load = () => invoke<Py>("python_for_tools").then(setPy).catch(() => {});
+  useEffect(() => { load(); }, []);
+  async function pick() {
+    setErr("");
+    try {
+      const path = await open({ title: "Choose the Python for the tools", multiple: false });
+      if (typeof path !== "string") return;
+      setBusy(true);
+      await invoke("set_workbench_python", { path });
+      await load();
+    } catch (error) { setErr(String(error)); } finally { setBusy(false); }
+  }
+  async function automatic() {
+    setErr(""); setBusy(true);
+    try { await invoke("set_workbench_python", { path: null }); await load(); }
+    catch (error) { setErr(String(error)); } finally { setBusy(false); }
+  }
+  const found = py?.found;
+  return (
+    <Section title="Tools" note="Files, Office documents, the browser and the web tools run in Python. Strata's .venv or a system Python 3.11+ is used when nothing is chosen here.">
+      <Row label="Python for tools" hint={found ? `${found.path} · Python ${found.version} · ${found.source}` : py?.missing || "Looking for Python…"}>
+        <span className="flex items-center gap-1.5">
+          {py?.setting ? <Button small disabled={busy} onClick={automatic}>Use automatic</Button> : null}
+          <Button small disabled={busy} onClick={pick}>Choose Python</Button>
+        </span>
+      </Row>
+      {err && <div className="px-3.5 py-2"><Message error>{err}</Message></div>}
     </Section>
   );
 }

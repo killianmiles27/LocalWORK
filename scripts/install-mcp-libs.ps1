@@ -6,6 +6,14 @@ param([string]$Python,
       [string]$Dest = (Join-Path $PSScriptRoot '..\workbench-mcp\libs'),
       [string[]]$PythonVersions)
 $ErrorActionPreference = 'Stop'
+# A separate `pwsh -File` process passes a comma-separated array as one string.
+# Accept that documented invocation as well as native PowerShell arrays.
+if ($PythonVersions) {
+    $PythonVersions = @($PythonVersions | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() })
+    foreach ($v in $PythonVersions) {
+        if ($v -notmatch '^3\.[0-9]+$') { throw "Invalid Python version '$v'; use versions such as 3.12,3.13." }
+    }
+}
 $repo = Split-Path -Parent $PSScriptRoot
 if ($PythonVersions) {
     if (-not $Python) { $Python = (Get-Command python -ErrorAction Stop).Source }
@@ -83,3 +91,5 @@ if ($mismatches.Count -gt 0 -and -not $PythonVersions) {
 }
 if ($mismatches.Count -gt 0) { throw "Web dependency pins do not match the installed libraries: $($mismatches -join '; '). Review $requirements and the target directory." }
 Write-Host "Web tool dependencies installed to $((Resolve-Path $Dest).Path)"
+# An optional version without wheels must not leak pip's failure status to the caller.
+$global:LASTEXITCODE = 0

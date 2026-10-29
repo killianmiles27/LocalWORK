@@ -1,16 +1,16 @@
 # Security
 
-LocalWORK is early software that can run commands and change files with the current Windows user's permissions. It has approval checks, not an OS sandbox. Use a dedicated working folder and backups. Use a separate account or VM for untrusted documents, repositories, and websites, especially on a sensitive network.
+LocalWORK is early software that can run commands and change files with the current user's OS permissions. It has approval checks, not an OS sandbox. Use a dedicated working folder and backups. Use a separate account or VM for untrusted documents, repositories, and websites, especially on a sensitive network.
 
 ## Report a vulnerability
 
 Use [GitHub's private vulnerability reporting](https://github.com/killianmiles27/LocalWORK/security/advisories/new) if it is enabled. If that form is unavailable, open an issue asking for a private reporting channel **without posting the exploit, credentials, private files, or personal logs**. No monitored security email or response-time guarantee is advertised.
 
-Include the affected commit/version, Windows version, minimal reproduction, expected behavior, and impact. Redact secrets. The maintained source branch is `main`; this is not a promise to maintain every older build.
+Include the affected commit/version, OS and version, minimal reproduction, expected behavior, and impact. Redact secrets. The maintained source branch is `main`; this is not a promise to maintain every older build.
 
 ## Boundaries
 
-- Automatic mode is enabled by default. Command and action classification reduces prompts; it does not prove a script is safe. Turning it off also does not create OS isolation. Automatic mode still asks before commands that publish, push or upload, connect to another computer, run as administrator, or change files and settings that run code automatically; the classifier looks inside common `cmd`, PowerShell and `sh` wrappers. A command it cannot recognise may still run without asking.
+- Automatic mode is enabled by default. Command and action classification reduces prompts; it does not prove a script is safe. Turning it off also does not create OS isolation. Automatic mode still asks before commands that publish, push or upload, connect to another computer, run as administrator, or change files and settings that run code automatically; the classifier looks inside common `cmd`, PowerShell and `sh` wrappers. It also asks before reading or writing a file outside the chat's working folder (an approval covers that outside folder only) and before fetching a web address whose query string or long path segment looks like encoded data. Known credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, OS keyrings, browser profiles and `.env` files outside the folder) are refused in every mode, for file tools and for paths named in shell commands; symlinks are resolved before that comparison. A command it cannot recognise may still run without asking, and code the model runs can read files itself.
 - OfficeCLI paths are checked by the host. Generic scripts, model tool implementations, file links, and subprocesses remain capable of using the user's other permissions. Revision history does not cover every shell operation.
 - Web fetching validates public destinations at every redirect, pins the checked IP for the connection, preserves TLS hostname verification, bypasses environment proxies, and limits downloads. This is not a firewall for other tools.
 - Browser navigation checks and hostname filters do **not** fully constrain page subrequests or DNS rebinding. A hostile page may reach services accessible from the PC. Do not treat the browser as private-network isolation.

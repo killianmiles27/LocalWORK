@@ -17,9 +17,9 @@ class StructuredRefusals(unittest.TestCase):
     def test_third_identical_call_is_a_structured_refusal(self):
         args = {"query": "guard-test-unique"}
         with patch.object(server, "call_tool", return_value="result") as tool:
-            first = server.guarded_call("memory_search", args)
-            second = server.guarded_call("memory_search", args)
-            third = server.guarded_call("memory_search", args)
+            first = server.guarded_call("web_search", args)
+            second = server.guarded_call("web_search", args)
+            third = server.guarded_call("web_search", args)
         self.assertEqual(first, "result")
         self.assertTrue(second.startswith("Note:"))
         body = json.loads(third)

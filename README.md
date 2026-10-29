@@ -49,7 +49,7 @@ The model side is someone else's work. LocalWORK runs models through [Strata](ht
 
 ## Download
 
-Grab `LocalWORK_<version>_x64-setup.exe` from the [latest release](https://github.com/killianmiles27/LocalWORK/releases/latest) and run it.
+Grab `LocalWORK_<version>_x64-setup.exe` from the [latest release](https://github.com/killianmiles27/LocalWORK/releases/latest) and run it. Linux packages (AppImage, `.deb`, `.rpm` and PKGBUILD) are available too; see [Install on Linux](docs/SETUP.md#install-on-linux).
 
 The installer has the app and its tools. It does **not** include a model. The first-run wizard can connect an existing server or open the model library: download PolyStrata from GitHub, choose a suggested model, or use your own model files. You confirm downloads; some models require tens or hundreds of GB. Engine updates come from upstream releases rather than needing a new LocalWORK build.
 
