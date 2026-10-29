@@ -1,7 +1,10 @@
 version: 2
 updates:
+  # Pause routine upgrades while keeping security-update PRs and CI audits available.
+  # Set a small positive limit per ecosystem when resuming planned dependency maintenance.
   - package-ecosystem: npm
     directory: /
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
@@ -9,6 +12,7 @@ updates:
         update-types: [minor, patch]
   - package-ecosystem: npm
     directory: /scripts/vendor-browser
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
@@ -16,6 +20,7 @@ updates:
         update-types: [minor, patch]
   - package-ecosystem: cargo
     directory: /src-tauri
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
@@ -23,6 +28,7 @@ updates:
         update-types: [minor, patch]
   - package-ecosystem: pip
     directory: /workbench-mcp
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
@@ -30,6 +36,7 @@ updates:
         update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
