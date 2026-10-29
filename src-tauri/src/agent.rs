@@ -26,6 +26,7 @@ struct Inner {
     user_turn: bool,
     queue: Vec<Value>,
     remembered: Vec<String>,
+    web: policy::WebContacts,
     pending: HashMap<String, Value>,
     /// MCP servers announced to aionrs but not yet `mcp_ready`; the first message waits for all of them.
     mcp_pending: usize,
@@ -80,6 +81,22 @@ fn writes_files(name: &str, category: &str, args: &Value) -> bool {
         "info" => false,
         _ => name.to_lowercase().contains("officecli")
             && !matches!(args.get("args").and_then(|a| a.get(0)).and_then(Value::as_str).unwrap_or(""), "view" | "get" | "query" | "validate" | "verify" | "help"),
+    }
+}
+
+fn web_contacts_from_messages(messages: &[Value]) -> policy::WebContacts {
+    let mut web = policy::WebContacts::default();
+    for message in messages.iter().filter(|message| message["role"] == "tool") {
+        web.record_result(&message["body"]["request"], &message["body"]["status"]);
+    }
+    web
+}
+
+fn tool_decision(name: &str, category: &str, args: &Value, workspace: &std::path::Path, auto_edit: bool, remembered: &[String], web: &policy::WebContacts, offline: bool) -> policy::Decision {
+    if offline {
+        policy::Decision::Deny("This chat is in offline mode, so tools that reach the internet or other machines are turned off".into())
+    } else {
+        policy::decide(name, category, args, workspace, auto_edit, remembered, web)
     }
 }
 
@@ -158,6 +175,24 @@ mod revision_tests {
         assert!(mutation_path("mcp", "workbench__officecli", &json!({"args":["view","deck.pptx","html"]})).is_none());
         assert!(mutation_path("mcp", "workbench__officecli", &json!({"args":["verify","report.docx"]})).is_none());
         assert!(mutation_path("exec", "ExecCommand", &json!({"command":"arbitrary script"})).is_none());
+    }
+
+    #[test]
+    fn restored_chat_history_guards_new_domains_and_respects_rewind() {
+        let messages = vec![
+            json!({"role":"tool", "body":{"status":"success", "request":{"name":"workbench__web_fetch", "args":{"url":"https://example.com/page"}}}}),
+            json!({"role":"tool", "body":{"status":"error", "request":{"name":"workbench__web_fetch", "args":{"url":"https://failed.example/"}}}}),
+        ];
+        let decision = |web: &policy::WebContacts, url: &str, offline: bool| {
+            tool_decision("workbench__web_fetch", "mcp", &json!({"url":url}), std::path::Path::new("."), true, &[], web, offline)
+        };
+        let web = web_contacts_from_messages(&messages);
+        assert!(matches!(decision(&web, "https://example.com/again", false), policy::Decision::Allow));
+        assert!(matches!(decision(&web, "https://failed.example/", false), policy::Decision::Ask { .. }));
+        assert!(matches!(decision(&web, "https://example.com/again", true), policy::Decision::Deny(_)));
+        let rewound = web_contacts_from_messages(&[]);
+        assert!(matches!(decision(&rewound, "https://failed.example/", false), policy::Decision::Allow));
+        assert!(matches!(decision(&rewound, "https://failed.example/", true), policy::Decision::Deny(_)));
     }
 
     #[test]
@@ -337,10 +372,10 @@ pub fn get_or_start(
     if let Some(a) = agents.lock().unwrap().get(conv) {
         return Ok(a.clone());
     }
-    let (workspace, has_session) = {
+    let (workspace, has_session, web) = {
         let c = db.lock().unwrap();
         let (_, ws, hs) = store::conv_info(&c, conv).ok_or("unknown conversation")?;
-        (PathBuf::from(ws), hs)
+        (PathBuf::from(ws), hs, web_contacts_from_messages(&store::messages(&c, conv, 0)))
     };
     let (port, key, model) = {
         let g = st.lock().unwrap();
@@ -393,7 +428,7 @@ pub fn get_or_start(
         conv: conv.to_string(),
         workspace: workspace.clone(),
         child: Mutex::new(Some(child)),
-        inner: Mutex::new(Inner { stdin: Some(stdin), ..Default::default() }),
+        inner: Mutex::new(Inner { stdin: Some(stdin), web, ..Default::default() }),
         auto_edit: Mutex::new(store::kv_get(&db.lock().unwrap(), "auto_edit").map(|v| v != "0").unwrap_or(true)),
         stopping: AtomicBool::new(false),
         retired: AtomicBool::new(false),
@@ -599,12 +634,10 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                 tool_started.insert(call_id.clone(), std::time::Instant::now());
                 tool_args.insert(call_id.clone(), json!({"name": name, "category": cat, "args": args}));
                 let auto_edit = *agent.auto_edit.lock().unwrap();
-                let remembered = agent.inner.lock().unwrap().remembered.clone();
                 let offline = crate::setup::is_network_tool(&name) && crate::setup::chat_is_offline(&db.lock().unwrap(), &conv);
-                let decision = if offline {
-                    policy::Decision::Deny("This chat is in offline mode, so tools that reach the internet or other machines are turned off".into())
-                } else {
-                    policy::decide(&name, &cat, &args, &agent.workspace, auto_edit, &remembered)
+                let decision = {
+                    let g = agent.inner.lock().unwrap();
+                    tool_decision(&name, &cat, &args, &agent.workspace, auto_edit, &g.remembered, &g.web, offline)
                 };
                 match decision {
                     policy::Decision::Allow => {
@@ -635,6 +668,7 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
             "tool_result" => {
                 let call_id = ev.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                 let ta = tool_args.remove(call_id).unwrap_or(Value::Null);
+                agent.inner.lock().unwrap().web.record_result(&ta, &ev["status"]);
                 let out = ev.get("output").and_then(|v| v.as_str()).unwrap_or("");
                 let elapsed = tool_started.remove(call_id).map(|start| start.elapsed().as_millis() as u64);
                 let clipped: String = out.chars().take(6000).collect();

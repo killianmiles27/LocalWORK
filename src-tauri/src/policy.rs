@@ -2,6 +2,7 @@
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -211,7 +212,8 @@ const OUTSIDE: &str = "Work outside the workspace";
 /// A link whose query string or long path segment looks like encoded data: the usual shape of a
 /// fetch that carries file contents off this computer.
 const EXFIL: &str = "Fetch a web address that appears to carry data";
-const ALWAYS_ASK: &[&str] = &[PUBLISH, SEND, PRIVILEGE, AUTORUN, HIDDEN, OUTSIDE, EXFIL];
+const NEW_DOMAIN: &str = "Fetch a web address from a new domain";
+const ALWAYS_ASK: &[&str] = &[PUBLISH, SEND, PRIVILEGE, AUTORUN, HIDDEN, OUTSIDE, EXFIL, NEW_DOMAIN];
 const RUN_COMMAND: &str = "Run a command on your computer";
 
 /// Automatic mode runs without prompts. It still stops for things that cannot be taken back:
@@ -219,8 +221,8 @@ const RUN_COMMAND: &str = "Run a command on your computer";
 /// automatically, leaving the workspace, entering a password or payment detail on a website, and
 /// online purchases. Protected locations (Windows, Program Files, the app's own data) and credential
 /// stores stay denied in every mode.
-pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String]) -> Decision {
-    match guarded(tool, category, args, workspace, auto_edit, remembered) {
+pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String], web: &WebContacts) -> Decision {
+    match guarded_with_web(tool, category, args, workspace, auto_edit, remembered, web) {
         Decision::Ask { class, reason, can_remember } if !auto_edit || class == Class::Destructive || ALWAYS_ASK.contains(&reason.as_str()) || reason.contains("password or payment") || reason.contains("purchase") => {
             Decision::Ask { class, reason, can_remember }
         }
@@ -230,6 +232,17 @@ pub fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_e
 }
 
 /// The step-by-step policy that Ask mode shows to the user.
+fn guarded_with_web(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String], web: &WebContacts) -> Decision {
+    let decision = guarded(tool, category, args, workspace, auto_edit, remembered);
+    if matches!(decision, Decision::Allow) && tool.to_lowercase().contains("web_fetch") && web.seen {
+        let urls = fetch_urls(args);
+        if urls.is_empty() || urls.iter().any(|url| web_domain(url).is_none_or(|host| !web.domains.contains(&host))) {
+            return Decision::Ask { class: Class::Exec, reason: NEW_DOMAIN.into(), can_remember: false };
+        }
+    }
+    decision
+}
+
 fn guarded(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String]) -> Decision {
     if tool == "Spawn" {
         return Decision::Deny("Sub-agents are disabled in this app".into());
@@ -627,6 +640,36 @@ fn command_secret(cmd: &str, workspace: &Path) -> Option<String> {
     command_paths(cmd, workspace).into_iter().find(|p| secret_location(p, workspace)).map(|p| p.display().to_string())
 }
 
+/// Per-conversation history, rebuilt from stored tool results when an agent resumes.
+#[derive(Default)]
+pub struct WebContacts {
+    seen: bool,
+    domains: HashSet<String>,
+}
+
+fn web_domain(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") { return None; }
+    let host = parsed.host_str()?.trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+impl WebContacts {
+    /// Search results introduce web content, but their links are not themselves contacted domains.
+    pub fn record_result(&mut self, request: &Value, status: &Value) {
+        if status.as_str() != Some("success") { return; }
+        let name = request.get("name").and_then(Value::as_str).unwrap_or("").to_lowercase();
+        if name.contains("web_fetch") {
+            self.seen = true;
+            if let Some(args) = request.get("args") {
+                self.domains.extend(fetch_urls(args).into_iter().filter_map(web_domain));
+            }
+        } else if name.contains("web_search") {
+            self.seen = true;
+        }
+    }
+}
+
 /// A URL the model asks to fetch, if the tool call carries one.
 fn fetch_urls(args: &Value) -> Vec<&str> {
     let mut urls = Vec::new();
@@ -678,8 +721,7 @@ fn opaque_escapes(s: &str) -> usize {
 }
 
 /// True when a fetch link looks like a carrier: an encoded query value, a query that is mostly opaque
-/// escapes, or a long encoded path segment. Knowing which domains a chat already fetched would need
-/// per-chat state outside this pure decision, so the shape of the URL carries the check.
+/// escapes, or a long encoded path segment. This check also applies to already-contacted domains.
 fn url_carries_data(url: &str) -> bool {
     let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
     let (path, query) = match rest.split_once('?') {
@@ -722,8 +764,7 @@ fn mcp_decision(tool: &str, args: &Value, auto_edit: bool, remembered: bool, out
         return Decision::Allow;
     }
     if t.contains("web_fetch") {
-        // Once page content is in the chat, a second fetch can carry it off the computer in its query
-        // string. A link shaped like a data carrier always asks, in every mode.
+        // A link shaped like a data carrier always asks, even on a previously contacted domain.
         if fetch_urls(args).iter().any(|u| url_carries_data(u)) {
             return Decision::Ask { class: Class::Exec, reason: EXFIL.into(), can_remember: false };
         }
@@ -790,10 +831,74 @@ fn browser_decision(args: &Value, auto_edit: bool) -> Decision {
     }
 }
 
+#[cfg(test)]
+mod web_domain_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn fetch(web: &WebContacts, url: &str, auto: bool) -> Decision {
+        decide("workbench__web_fetch", "mcp", &json!({"url": url}), Path::new("."), auto, &[], web)
+    }
+
+    #[test]
+    fn first_fetch_is_allowed_and_successful_fetch_records_only_its_host() {
+        let mut web = WebContacts::default();
+        assert!(matches!(fetch(&web, "https://example.com/page", true), Decision::Allow));
+        web.record_result(&json!({"name": "workbench__web_fetch", "args": {"url": "https://EXAMPLE.com./page"}}), &json!("success"));
+        for auto in [true, false] {
+            assert!(matches!(fetch(&web, "https://example.com:443/other", auto), Decision::Allow));
+            assert!(matches!(fetch(&web, "https://sub.example.com/", auto), Decision::Ask { reason, can_remember: false, .. } if reason == NEW_DOMAIN));
+        }
+        // URL userinfo and malformed URLs cannot disguise a different host.
+        assert!(matches!(fetch(&web, "https://example.com@evil.example/", true), Decision::Ask { .. }));
+        assert!(matches!(fetch(&web, "https://", true), Decision::Ask { .. }));
+        // Once an approved fetch succeeds, that host is also eligible for re-fetches.
+        web.record_result(&json!({"name": "web_fetch", "args": {"url": "https://sub.example.com/"}}), &json!("success"));
+        assert!(matches!(fetch(&web, "https://sub.example.com/again", true), Decision::Allow));
+    }
+
+    #[test]
+    fn search_results_trigger_the_guard_but_do_not_whitelist_result_links() {
+        let mut web = WebContacts::default();
+        web.record_result(&json!({"name": "workbench__web_search", "args": {"query": "example"}}), &json!("success"));
+        assert!(matches!(fetch(&web, "https://example.com/", true), Decision::Ask { reason, .. } if reason == NEW_DOMAIN));
+    }
+
+    #[test]
+    fn failed_web_calls_do_not_record_content_or_domains() {
+        let mut web = WebContacts::default();
+        web.record_result(&json!({"name": "web_fetch", "args": {"url": "https://example.com/"}}), &json!("error"));
+        web.record_result(&json!({"name": "web_search"}), &json!("cancelled"));
+        assert!(matches!(fetch(&web, "https://elsewhere.example/", true), Decision::Allow));
+        web.record_result(&json!({"name": "web_search"}), &json!("success"));
+        assert!(matches!(fetch(&web, "https://example.com/", true), Decision::Ask { .. }));
+    }
+
+    #[test]
+    fn encoded_data_still_asks_on_a_contacted_domain() {
+        let mut web = WebContacts::default();
+        web.record_result(&json!({"name": "web_fetch", "args": {"url": "https://example.com/"}}), &json!("success"));
+        let url = "https://example.com/?k=9f2c1a7b4d3e5061728394a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f";
+        assert!(matches!(fetch(&web, url, true), Decision::Ask { reason, can_remember: false, .. } if reason == EXFIL));
+    }
+
+    #[test]
+    fn new_domain_after_web_content_asks_in_automatic_mode() {
+        let mut web = WebContacts::default();
+        web.record_result(&json!({"name": "workbench__web_fetch", "args": {"url": "https://example.com/"}}), &json!("success"));
+        let decision = decide("workbench__web_fetch", "mcp", &json!({"url": "https://evil.example/?k=plain-text"}), Path::new("."), true, &[], &web);
+        assert!(matches!(decision, Decision::Ask { reason, can_remember: false, .. } if reason == NEW_DOMAIN));
+    }
+}
+
 #[cfg(all(test, not(windows)))]
 mod unix_tests {
     use super::*;
     use serde_json::json;
+
+    fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String]) -> Decision {
+        super::decide(tool, category, args, workspace, auto_edit, remembered, &WebContacts::default())
+    }
 
     #[test]
     fn linux_paths_stay_in_the_workspace() {
@@ -999,6 +1104,10 @@ mod unix_tests {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn decide(tool: &str, category: &str, args: &Value, workspace: &Path, auto_edit: bool, remembered: &[String]) -> Decision {
+        super::decide(tool, category, args, workspace, auto_edit, remembered, &WebContacts::default())
+    }
 
     #[test]
     fn automatic_commands_accept_quoted_workspace_paths_with_spaces() {
