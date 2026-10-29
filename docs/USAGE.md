@@ -56,6 +56,10 @@ For planned work, the assistant can mark an established procedure as execution t
 
 Chat downloads include per-request wall time, first streamed event wait, input/output/cache token counts and provider timing fields when supplied. A first event may contain an already completed tool call, so that wait is not labelled prompt-processing or decoding time. Tool request-to-result durations include approvals and host overhead. Missing measurements remain unknown. These diagnostics are stored locally and are not injected into the model's context.
 
+## Email exports
+
+Put an exported `.eml` or `.mbox` file in the workspace and ask the assistant to summarise a thread, extract action items, or prepare a reply draft as a new `.eml` file. Reading is local: no cloud inbox connection or remote images are used, and drafts are not sent. Mailbox results are bounded and thread grouping is heuristic; filters can narrow by sender or by the export filename or `X-Folder` header (standard mbox has no folder structure). Check any truncation notices. Outlook `.msg` is not supported in this build; save or export the message as `.eml` first.
+
 ## Queued messages
 
 Messages sent while the model is busy wait above the composer. Edit or remove them there, and drag the grip to change their order (or focus the grip and press Alt+Up or Alt+Down).

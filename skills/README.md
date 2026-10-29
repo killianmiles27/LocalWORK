@@ -16,6 +16,7 @@ Task recipes the agent loads with `load_skill` when a task calls for one. Each f
 | blocked-pages | Archives and fallbacks when a page is blocked, paywalled or gone |
 | arxiv | Search and cite scientific papers on arXiv |
 | action-items | Decisions, deadlines and owners from notes, meetings and documents |
+| email | Summarise email exports, extract actions and draft replies locally |
 | knowledge-base | A linked markdown wiki built from the user's sources |
 | debugging | Root-cause debugging before changing code |
 | coding | Working in a code project |

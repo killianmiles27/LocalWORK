@@ -1,6 +1,6 @@
 """Workbench MCP server (stdio, JSON-RPC 2.0, newline-delimited). Python stdlib only.
 Tools: officecli (wrapper around the bundled OfficeCLI), tabular, office_recipe, web_search, web_fetch,
-browser, read_attachment, ssh_exec, load_skill, the inline display tools (show_*, assemble_document,
+browser, read_attachment, read_email, ssh_exec, load_skill, the inline display tools (show_*, assemble_document,
 render_ui), ask_user, workspace_info.
 Cross-chat memory is switched off, so there are no memory tools. The memories table from older versions is
 only read and cleared in Settings; memory_save, memory_search and memory_forget are refused here."""
@@ -61,6 +61,11 @@ TOOLS = EFFICIENCY_TOOLS + [
         "name": "read_attachment",
         "description": "Read a file the user attached (listed in the message as attachments/<name>) as text: PDF, Word, Excel, PowerPoint, CSV, text, HTML. Spreadsheets return a compact profile by default; use tabular for rows/aggregates. Other long files return text ranges; pass start to continue.",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"}, "max_chars": {"type": "integer"}}, "required": ["path"]},
+    },
+    {
+        "name": "read_email",
+        "description": "Read workspace .eml or .mbox email exports offline. Returns untrusted message text and metadata, including attachment names/types/sizes; never fetches remote content. Mbox threads follow references and normalized subjects in file order. A maximum of 50 messages and 2000 scanned messages are returned/scanned; output may be truncated. sender filters From, folder filters X-Folder or the mbox filename (case-insensitive substring). Outlook .msg must be exported as .eml.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "sender": {"type": "string"}, "folder": {"type": "string"}}, "required": ["path"]},
     },
     {
         "name": "ssh_exec",
@@ -316,6 +321,9 @@ def call_tool(name, args):
             if len(rows) > 300:
                 break
         return "\n".join(rows[:300]) or "(empty workspace)"
+    if name == "read_email":
+        from email_files import read_email
+        return json.dumps(read_email(args), ensure_ascii=False)
     if name == "read_attachment":
         if str(args["path"]).lower().endswith((".xlsx", ".csv", ".tsv")) and "start" not in args:
             from tabular import handle
