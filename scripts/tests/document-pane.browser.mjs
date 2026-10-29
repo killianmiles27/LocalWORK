@@ -32,7 +32,7 @@ try {
         if (cmd === "get_setting") return args.key === "wizard_done" ? "1" : null;
         if (cmd === "model_status") return { state: "ready", port: 1, model: "fixture", detail: "" };
         if (cmd === "modes_list") return { modes: [], effort: { options: [] } };
-        if (cmd === "status_items" || cmd === "load_messages") return [];
+        if (cmd === "status_items" || cmd === "load_messages" || cmd === "task_templates_list") return [];
         if (cmd === "document_revisions") return [{ id: "0123456789abcdef0123456789abcdef", created: 1, size: 100 }];
         if (cmd === "model_telemetry") return {};
         if (cmd === "context_usage") return { used: 0, window: 32768 };

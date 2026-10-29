@@ -252,7 +252,7 @@ fn office_preview(file: &Path) -> Result<String, String> {
     ])
 }
 
-fn native_path(file: &Path) -> String {
+pub(crate) fn native_path(file: &Path) -> String {
     let canonical = file.to_string_lossy();
     if let Some(unc) = canonical.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{unc}")

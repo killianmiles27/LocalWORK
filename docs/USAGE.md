@@ -14,6 +14,14 @@ Choose a folder for the task using the folder control beside the composer. New c
 
 Keep task files together. For an existing document, work on a copy until you trust the result. Attach a file using the attachment button, drag and drop, or paste. State which file should change and what should stay the same.
 
+## Reusable task templates
+
+Write a prompt, select the working folder, then choose **Save as task template** above the composer. Give it a name and confirm the folder. You can optionally choose a document template file (for example Word or Excel), or use a current attachment; the first attached Office document is selected by default and can be removed. Without a selected chat folder, choose one in the save dialog.
+
+Saved tasks appear as compact buttons above the composer. Click one to open a new, empty chat with its prompt prefilled and its working folder selected; nothing is sent until you press Send. An optional document is copied into that folder's `attachments` directory using a new filename if needed, just like ordinary attachments. The source file is not changed. Each chat uses the saved folder, not a new subfolder.
+
+Use the pencil or trash button beside a saved task to rename or delete it. Templates are stored locally across restarts. Keep the saved folder and source document at their original locations: if either is missing or a copy fails, LocalWORK shows the affected path and leaves your current chat/draft unchanged instead of starting a broken chat. Rename/delete only affects the saved task, not existing chats or copied files.
+
 ## Find and organise chats
 
 The sidebar groups chats into Pinned, Today, Yesterday, Previous 7 days, Previous 30 days and Older. Search chats at the top of the sidebar to match titles and message text. Hover over a chat to pin, rename, export or delete it. You can also double-click its title to rename it.

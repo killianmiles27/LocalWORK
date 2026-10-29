@@ -17,11 +17,104 @@ pub fn open(dir: &Path) -> rusqlite::Result<Connection> {
          CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='memories', content_rowid='id');
          CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid,text) VALUES(new.id,new.text); END;
          CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts,rowid,text) VALUES('delete',old.id,old.text); END;
-         CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);",
+         CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS task_templates(
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, prompt TEXT NOT NULL,
+            workspace TEXT NOT NULL, document TEXT, created INTEGER NOT NULL);",
     )?;
     // Added after the first release; fails harmlessly once the column exists.
     let _ = c.execute("ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0", []);
     Ok(c)
+}
+
+#[derive(serde::Serialize)]
+pub struct TaskTemplate {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub workspace: String,
+    pub document: Option<String>,
+}
+
+fn template_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TaskTemplate> {
+    Ok(TaskTemplate { id: r.get(0)?, name: r.get(1)?, prompt: r.get(2)?, workspace: r.get(3)?, document: r.get(4)? })
+}
+
+pub fn create_task_template(c: &Connection, id: &str, name: &str, prompt: &str, workspace: &str, document: Option<&str>) -> rusqlite::Result<()> {
+    c.execute("INSERT INTO task_templates(id,name,prompt,workspace,document,created) VALUES(?1,?2,?3,?4,?5,?6)",
+        params![id, name, prompt, workspace, document, now()])?;
+    Ok(())
+}
+
+pub fn list_task_templates(c: &Connection) -> rusqlite::Result<Vec<TaskTemplate>> {
+    let mut st = c.prepare("SELECT id,name,prompt,workspace,document FROM task_templates ORDER BY created,id")?;
+    let rows = st.query_map([], template_row)?;
+    rows.collect()
+}
+
+pub fn task_template(c: &Connection, id: &str) -> rusqlite::Result<TaskTemplate> {
+    c.query_row("SELECT id,name,prompt,workspace,document FROM task_templates WHERE id=?1", [id], template_row)
+}
+
+pub fn rename_task_template(c: &Connection, id: &str, name: &str) -> rusqlite::Result<bool> {
+    c.execute("UPDATE task_templates SET name=?2 WHERE id=?1", params![id, name]).map(|n| n != 0)
+}
+
+pub fn delete_task_template(c: &Connection, id: &str) -> rusqlite::Result<bool> {
+    c.execute("DELETE FROM task_templates WHERE id=?1", [id]).map(|n| n != 0)
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+
+    #[test]
+    fn existing_databases_gain_templates_without_losing_chats() {
+        let dir = std::env::temp_dir().join(format!("localwork-migration-{:016x}", rand::random::<u64>()));
+        std::fs::create_dir(&dir).unwrap();
+        {
+            let c = Connection::open(dir.join("workbench.db")).unwrap();
+            c.execute_batch("CREATE TABLE conversations(id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL, has_session INTEGER NOT NULL DEFAULT 0);
+                INSERT INTO conversations VALUES('old','Existing chat','/work',1,1,0);").unwrap();
+        }
+        let c = open(&dir).unwrap();
+        assert_eq!(conv_info(&c, "old").unwrap().0, "Existing chat");
+        create_task_template(&c, "t", "Task", "Prompt", "/work", None).unwrap();
+        assert_eq!(list_task_templates(&c).unwrap().len(), 1);
+        assert_eq!(list_convs(&c).len(), 1);
+        drop(c);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn task_templates_persist_create_list_rename_and_delete() {
+        let dir = std::env::temp_dir().join(format!("localwork-store-{:016x}", rand::random::<u64>()));
+        std::fs::create_dir(&dir).unwrap();
+        {
+            let c = open(&dir).unwrap();
+            assert!(list_task_templates(&c).unwrap().is_empty());
+            create_task_template(&c, "t1", "Weekly report", "Summarize this week", "/work", Some("/source/report.docx")).unwrap();
+            create_task_template(&c, "t2", "Budget", "Review figures", "C:\\Work", None).unwrap();
+            assert_eq!(list_task_templates(&c).unwrap().len(), 2);
+            assert!(rename_task_template(&c, "t1", "Monday report").unwrap());
+            assert!(!rename_task_template(&c, "missing", "Name").unwrap());
+        }
+        {
+            let c = open(&dir).unwrap();
+            let t = task_template(&c, "t1").unwrap();
+            assert_eq!(t.name, "Monday report");
+            assert_eq!(t.prompt, "Summarize this week");
+            assert_eq!(t.workspace, "/work");
+            assert_eq!(t.document.as_deref(), Some("/source/report.docx"));
+            assert!(task_template(&c, "t2").unwrap().document.is_none());
+            assert!(delete_task_template(&c, "t1").unwrap());
+            assert!(!delete_task_template(&c, "t1").unwrap());
+        }
+        let c = open(&dir).unwrap();
+        assert_eq!(list_task_templates(&c).unwrap()[0].id, "t2");
+        drop(c);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 pub fn now() -> i64 {
