@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 
 import pyatspi
-from linux_smoke_support import message_persisted, recent_messages, seed_settings, select_python
+from linux_smoke_support import message_persisted, probe_python, recent_messages, seed_settings, select_python
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAT_MARKER = 'Fixture authenticated streaming chat: /v1/chat/completions'
@@ -73,18 +73,19 @@ def main(appimage):
             with socket.socket() as sock:
                 sock.bind(('127.0.0.1', 0))
                 port = sock.getsockname()[1]
-            python = select_python(os.environ.get('LOCALWORK_SMOKE_PYTHON'), sys.executable)
-            print(f'Workbench Python: {python}', flush=True)
-            (data / 'settings.json').write_text(json.dumps({
-                'modelSource': 'server', 'serverPort': str(port), 'serverKey': 'fixture-key',
-                'workbenchPython': python,
-            }))
-            seed_settings(work, data / 'workbench.db')
             env = {**os.environ, 'HOME': str(work), 'XDG_DATA_HOME': str(work / 'data'),
                    'XDG_CONFIG_HOME': str(work / 'config'), 'XDG_CACHE_HOME': str(work / 'cache'),
                    'STRATA_API_KEY': 'fixture-key', 'E2E_LOAD_SECONDS': '0',
                    'APPIMAGE_EXTRACT_AND_RUN': '1', 'LIBGL_ALWAYS_SOFTWARE': '1',
                    'WEBKIT_DISABLE_COMPOSITING_MODE': '1', 'ACCESSIBILITY_ENABLED': '1'}
+            python = select_python(os.environ.get('LOCALWORK_SMOKE_PYTHON'), sys.executable)
+            # The app probes this interpreter the same way, so fail before launching if it is unusable here.
+            print(f'Workbench Python: {python} ({probe_python(python, env)})', flush=True)
+            (data / 'settings.json').write_text(json.dumps({
+                'modelSource': 'server', 'serverPort': str(port), 'serverKey': 'fixture-key',
+                'workbenchPython': python,
+            }))
+            seed_settings(work, data / 'workbench.db')
             with (work / 'stub.log').open('w') as stub_log, (work / 'app.log').open('w') as app_log:
                 stub = subprocess.Popen([sys.executable, '-u', str(ROOT / 'scripts/e2e/stub_strata.py'),
                                          '--config', str(config), '--host', '127.0.0.1', '--port', str(port)],

@@ -48,6 +48,13 @@ class LinuxSmokeDiagnosticsTest(unittest.TestCase):
             self.assertEqual(settings['offline'], '1')
             self.assertNotIn('conversations', tables)
 
+    def test_python_probe_reports_version_and_rejects_unusable_interpreter(self):
+        support = self.support()
+        self.assertTrue(hasattr(support, 'probe_python'), 'smoke setup must preflight the Workbench Python')
+        self.assertRegex(support.probe_python(sys.executable, os.environ), r'^3\.\d+ at .+python')
+        with self.assertRaisesRegex(ValueError, 'could not run'):
+            support.probe_python(os.path.join(tempfile.gettempdir(), 'missing-localwork-python'), os.environ)
+
     def test_python_selection_falls_back_and_rejects_invalid_override(self):
         support = self.support()
         with patch.object(support.shutil, 'which', return_value=None):
