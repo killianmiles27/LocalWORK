@@ -2,7 +2,7 @@
 //! The host owns the approval policy: aionrs runs in its default "ask for everything" mode and every
 //! tool_request is answered here, either automatically by policy or by the user through the UI.
 use crate::sync::LockExt;
-use crate::{documents, http, paths, plugins, policy, python, setup, store, strata, supervisor};
+use crate::{documents, http, paths, plugins, policy, python, setup, snapshots, store, strata, supervisor};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -39,6 +39,8 @@ pub struct Agent {
     child: Mutex<Option<Child>>,
     inner: Mutex<Inner>,
     auto_edit: Mutex<bool>,
+    /// Shutdown waits for capture so deleting a chat cannot race a late snapshot publication.
+    snapshot_gate: Mutex<()>,
     stopping: AtomicBool,
     /// Closed on purpose to be restarted (edit and regenerate); its exit is not reported to the UI.
     retired: AtomicBool,
@@ -99,6 +101,21 @@ fn tool_decision(name: &str, category: &str, args: &Value, workspace: &std::path
     } else {
         policy::decide(name, category, args, workspace, auto_edit, remembered, web)
     }
+}
+
+/// Only automatic, policy-allowed shell calls get folder undo points. A failed capture
+/// becomes a non-rememberable one-command prompt, not permission to run without protection.
+fn snapshot_decision(decision: policy::Decision, category: &str, auto_edit: bool, data: &std::path::Path, workspace: &std::path::Path, chat: &str) -> policy::Decision {
+    if auto_edit && category == "exec" && matches!(decision, policy::Decision::Allow) {
+        if let Err(error) = snapshots::create_at(data, workspace, chat) {
+            return policy::Decision::Ask {
+                class: policy::Class::Exec,
+                reason: format!("Could not snapshot the folder before this command: {error}. Approving will run it without a folder undo point."),
+                can_remember: false,
+            };
+        }
+    }
+    decision
 }
 
 fn first_path(args: &Value) -> Option<&str> {
@@ -166,6 +183,32 @@ fn preserve_document(workspace: &std::path::Path, category: &str, tool: &str, ar
 #[cfg(test)]
 mod revision_tests {
     use super::*;
+
+    #[test]
+    fn automatic_exec_snapshots_after_policy_allow_and_failure_requires_one_time_approval() {
+        let fixture = tempfile::Builder::new().prefix("lw-exec-snapshot-").tempdir().unwrap();
+        let temp = fixture.path();
+        let workspace = temp.join("workspace");
+        let data = temp.join("data");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("a"), "before").unwrap();
+        for (category, auto, decision) in [
+            ("exec", false, policy::Decision::Allow),
+            ("edit", true, policy::Decision::Allow),
+            ("mcp", true, policy::Decision::Allow),
+            ("exec", true, policy::Decision::Deny("denied".into())),
+            ("exec", true, policy::Decision::Ask { class: policy::Class::Exec, reason: "ask first".into(), can_remember: false }),
+        ] {
+            snapshot_decision(decision, category, auto, &data, &workspace, "chat");
+            assert!(!data.exists(), "nonautomatic or non-allowed calls must not snapshot");
+        }
+        assert!(matches!(snapshot_decision(policy::Decision::Allow, "exec", true, &data, &workspace, "chat"), policy::Decision::Allow));
+        assert!(data.join("workspace-snapshots").exists());
+        let blocked = temp.join("blocked");
+        std::fs::write(&blocked, "not a directory").unwrap();
+        let decision = snapshot_decision(policy::Decision::Allow, "exec", true, &blocked, &workspace, "chat");
+        assert!(matches!(decision, policy::Decision::Ask { reason, can_remember: false, class: policy::Class::Exec } if reason.contains("Could not snapshot the folder before this command")));
+    }
 
     #[test]
     fn mutation_capture_covers_direct_edits_and_office_batches_only() {
@@ -273,6 +316,7 @@ impl Agent {
     /// Close stdin (clean exit), give it a moment, then kill the tree.
     pub fn shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
+        let _snapshot = self.snapshot_gate.guard();
         {
             let mut g = self.inner.guard();
             g.stdin = None;
@@ -431,6 +475,7 @@ pub fn get_or_start(
         child: Mutex::new(Some(child)),
         inner: Mutex::new(Inner { stdin: Some(stdin), web, ..Default::default() }),
         auto_edit: Mutex::new(store::kv_get(&db.guard(), "auto_edit").map(|v| v != "0").unwrap_or(true)),
+        snapshot_gate: Mutex::new(()),
         stopping: AtomicBool::new(false),
         retired: AtomicBool::new(false),
         last_event: Mutex::new(Instant::now()),
@@ -640,6 +685,11 @@ fn reader(agent: Arc<Agent>, app: AppHandle, db: Db, agents: Agents, stdout: std
                     let g = agent.inner.guard();
                     tool_decision(&name, &cat, &args, &agent.workspace, auto_edit, &g.remembered, &g.web, offline)
                 };
+                let decision = {
+                    let _snapshot = agent.snapshot_gate.guard();
+                    if agent.stopping.load(Ordering::SeqCst) { continue; }
+                    snapshot_decision(decision, &cat, auto_edit, &paths::data_dir(), &agent.workspace, &conv)
+                };
                 match decision {
                     policy::Decision::Allow => {
                         if let Err(reason) = preserve_document(&agent.workspace, &cat, &name, &args, false) {
@@ -782,6 +832,7 @@ mod context_tests {
             child: Mutex::new(None),
             inner: Mutex::new(Inner { processing: true, user_turn: true, ..Default::default() }),
             auto_edit: Mutex::new(true),
+            snapshot_gate: Mutex::new(()),
             stopping: AtomicBool::new(false),
             retired: AtomicBool::new(false),
             last_event: Mutex::new(Instant::now() - quiet_for),
