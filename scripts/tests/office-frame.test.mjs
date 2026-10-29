@@ -8,7 +8,8 @@ const source = readFileSync(new URL('../../src/OfficeFrame.tsx', import.meta.url
 const bridge = vm.runInNewContext(source.match(/const BRIDGE = (`[\s\S]*?`);/)[1]);
 function harness() {
   const events = {}, messages = [];
-  const node = { tagName: 'TD', innerText: '24', attrs: { 'data-path': '/Sheet1/B4' },
+  const classes = new Set();
+  const node = { tagName: 'TD', innerText: '24', classList: { toggle(name, on) { if (on) classes.add(name); else classes.delete(name); }, contains(name) { return classes.has(name); } }, attrs: { 'data-path': '/Sheet1/B4' },
     get textContent() { return this.innerText; }, set textContent(v) { this.innerText = v; },
     getAttribute(k) { return this.attrs[k]; }, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; },
     querySelector() { return null; }, closest() { return this; }, blur() { fire('focusout', { target: this }); } };
@@ -38,6 +39,17 @@ test('editable Office text can still be selected for an AI note and emits the ac
   assert.equal(h.messages.at(-1).active, false);
   h.command({ type: 'lw-edit-mode', on: false });
   assert.equal(h.node.attrs.contenteditable, undefined);
+});
+
+test('comparison persistently marks changed visible Office elements without enabling edits', () => {
+  const h = harness();
+  h.command({ type: 'lw-compare', texts: { '/Sheet1/B4': '22' } });
+  assert.equal(h.node.classList.contains('lw-compared'), true);
+  assert.equal(h.node.attrs.contenteditable, undefined);
+  h.command({ type: 'lw-compare', texts: { '/Sheet1/B4': '24' } });
+  assert.equal(h.node.classList.contains('lw-compared'), false);
+  h.command({ type: 'lw-compare', texts: {} });
+  assert.equal(h.node.classList.contains('lw-compared'), true, 'added or removed elements must be marked');
 });
 
 test('formula focus and Escape restore displayed value without saving an unintended change', () => {
