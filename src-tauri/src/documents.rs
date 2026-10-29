@@ -35,7 +35,7 @@ fn kind(path: &Path) -> Option<String> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     matches!(
         ext.as_str(),
-        "docx" | "xlsx" | "pptx" | "pdf" | "md" | "txt" | "csv" | "html" | "json"
+        "docx" | "xlsx" | "pptx" | "pdf" | "md" | "txt" | "csv" | "html" | "json" | "log"
     )
     .then_some(ext)
 }
@@ -391,6 +391,67 @@ pub fn document_revisions(s: State<'_, App>, id: String, path: String) -> Result
         .collect::<Vec<_>>()))
 }
 
+/// User IPC only: deliberately not registered in the agent/MCP tool catalog.
+#[tauri::command(async)]
+pub fn document_restore(
+    s: State<'_, App>,
+    id: String,
+    path: String,
+    revision: String,
+) -> Result<(), String> {
+    let root = workspace(&s, &id)?;
+    if s.agents.guard().get(&id).is_some_and(|a| a.busy()) {
+        return Err("Stop the current reply before restoring a document version".into());
+    }
+    restore_revision(&paths::data_dir(), &root, &path, &revision)
+}
+
+// Recheck every canonical component before staging and publishing, including Windows junctions.
+// A final-component symlink must never turn a restore into a write to its target.
+fn checked_restore_target(root: &Path, path: &str) -> Result<PathBuf, String> {
+    let file = resolve_file(root, path)?;
+    for part in file.ancestors() {
+        let meta = fs::symlink_metadata(part).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let linked = {
+            use std::os::windows::fs::MetadataExt;
+            meta.file_type().is_symlink() || meta.file_attributes() & 0x400 != 0
+        };
+        #[cfg(not(windows))]
+        let linked = meta.file_type().is_symlink();
+        if linked {
+            return Err("Document path contains a symlink or reparse point".into());
+        }
+    }
+    Ok(file)
+}
+
+fn restore_revision(data: &Path, root: &Path, path: &str, revision: &str) -> Result<(), String> {
+    use std::io::Write;
+    let file = checked_restore_target(root, path)?;
+    if kind(&file).is_none() {
+        return Err("Unsupported document type".into());
+    }
+    // Fully read/validate the revision before snapshotting or touching the current file.
+    let source = revision_file(data, &file, revision)?;
+    let bytes = read_bounded(&source, 32 * 1024 * 1024)
+        .map_err(|e| format!("Cannot read document revision: {e}"))?;
+    snapshot_at(data, root, path).map_err(|e| format!("Cannot snapshot current document: {e}"))?;
+    let parent = file.parent().ok_or("Document has no parent directory")?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    temp.write_all(&bytes).map_err(|e| format!("Cannot stage restored document: {e}"))?;
+    temp.as_file().set_permissions(fs::metadata(&file).map_err(|e| e.to_string())?.permissions())
+        .map_err(|e| e.to_string())?;
+    temp.as_file().sync_all().map_err(|e| e.to_string())?;
+    if checked_restore_target(root, path)? != file {
+        return Err("Document path changed during restore; reload and try again".into());
+    }
+    // persist atomically replaces on both Windows and Unix, without an unlink-first window.
+    // Its temporary file is removed on every failure; the existing file is never truncated.
+    temp.persist(&file).map_err(|e| format!("Cannot replace current document (it may be open in another app): {e}"))?;
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub fn document_open(
     s: State<'_, App>,
@@ -499,7 +560,7 @@ pub fn document_save(
 
 fn save_text(data: &Path, root: &Path, path: &str, content: &str, expected: &str) -> Result<(), String> {
     let file = resolve_file(root, path)?;
-    if !matches!(kind(&file).as_deref(), Some("md" | "txt" | "csv" | "json" | "html")) {
+    if !matches!(kind(&file).as_deref(), Some("md" | "txt" | "csv" | "json" | "html" | "log")) {
         return Err("Only text documents can be edited here".into());
     }
     if content.len() > MAX_PREVIEW as usize {
@@ -632,6 +693,98 @@ mod tests {
         assert_eq!((old.as_str(), new.as_str()), ("abc", ""));
         let (old, new) = find_replace("café au lait", "café noir").unwrap();
         assert_eq!("café au lait".replacen(&old, &new, 1), "café noir");
+    }
+    #[test]
+    fn restore_preserves_old_bytes_and_snapshots_current_bytes() {
+        let temp = Temp::new();
+        let (ws, data) = (temp.0.join("ws"), temp.0.join("data"));
+        fs::create_dir(&ws).unwrap();
+        // Binary Office bytes must not pass through a text conversion.
+        fs::write(ws.join("report.docx"), b"old\x00\xff").unwrap();
+        snapshot_at(&data, &ws, "report.docx").unwrap();
+        let file = resolve_file(&ws, "report.docx").unwrap();
+        let id = records(&data, &file).unwrap().remove(0).id;
+        fs::write(&file, b"current\x00\xfe").unwrap();
+        restore_revision(&data, &ws, "report.docx", &id).unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"old\x00\xff");
+        let revisions = records(&data, &file).unwrap();
+        assert_eq!(revisions.len(), 2);
+        assert!(revisions.iter().any(|r| fs::read(revision_file(&data, &file, &r.id).unwrap()).unwrap() == b"current\x00\xfe"));
+    }
+    #[test]
+    fn restore_rejects_invalid_missing_and_other_documents_revisions_without_writes() {
+        let temp = Temp::new();
+        let (ws, data) = (temp.0.join("ws"), temp.0.join("data"));
+        fs::create_dir(&ws).unwrap();
+        fs::write(ws.join("a.md"), "old").unwrap();
+        fs::write(ws.join("b.md"), "other").unwrap();
+        fs::write(temp.0.join("outside.md"), "private").unwrap();
+        snapshot_at(&data, &ws, "a.md").unwrap();
+        let file = resolve_file(&ws, "a.md").unwrap();
+        let id = records(&data, &file).unwrap().remove(0).id;
+        fs::write(&file, "current").unwrap();
+        for bad in ["../escape", "", "00000000000000000000000000000000"] {
+            assert!(restore_revision(&data, &ws, "a.md", bad).is_err());
+        }
+        assert!(restore_revision(&data, &ws, "b.md", &id).is_err());
+        assert!(restore_revision(&data, &ws, "../outside.md", &id).is_err());
+        assert!(restore_revision(&data, &ws, temp.0.join("outside.md").to_str().unwrap(), &id).is_err());
+        fs::remove_file(revision_file(&data, &file, &id).unwrap()).unwrap();
+        assert!(restore_revision(&data, &ws, "a.md", &id).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "current");
+        assert_eq!(fs::read_to_string(ws.join("b.md")).unwrap(), "other");
+        assert_eq!(fs::read_to_string(temp.0.join("outside.md")).unwrap(), "private");
+        assert_eq!(records(&data, &file).unwrap().len(), 1);
+    }
+    #[test]
+    fn restore_aborts_if_the_current_file_cannot_be_snapshotted() {
+        let temp = Temp::new();
+        let (ws, data) = (temp.0.join("ws"), temp.0.join("data"));
+        fs::create_dir(&ws).unwrap();
+        fs::write(ws.join("report.md"), "old").unwrap();
+        snapshot_at(&data, &ws, "report.md").unwrap();
+        let file = resolve_file(&ws, "report.md").unwrap();
+        let id = records(&data, &file).unwrap().remove(0).id;
+        fs::write(&file, "current").unwrap();
+        // A sparse file exceeds the unchanged revision capture limit without allocating 33 MB.
+        fs::OpenOptions::new().write(true).open(&file).unwrap().set_len(33 * 1024 * 1024).unwrap();
+        let error = restore_revision(&data, &ws, "report.md", &id).unwrap_err();
+        assert!(error.contains("Cannot snapshot current document"));
+        assert_eq!(fs::metadata(&file).unwrap().len(), 33 * 1024 * 1024);
+        let mut prefix = [0; 7];
+        fs::File::open(&file).unwrap().read_exact(&mut prefix).unwrap();
+        assert_eq!(&prefix, b"current");
+        assert_eq!(records(&data, &file).unwrap().len(), 1);
+        assert_eq!(fs::read_dir(&ws).unwrap().count(), 1, "no staging files left behind");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn restore_rejects_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+        let temp = Temp::new();
+        let (ws, data) = (temp.0.join("ws"), temp.0.join("data"));
+        fs::create_dir(&ws).unwrap();
+        fs::write(ws.join("a.md"), "old").unwrap();
+        snapshot_at(&data, &ws, "a.md").unwrap();
+        let file = resolve_file(&ws, "a.md").unwrap();
+        let id = records(&data, &file).unwrap().remove(0).id;
+        fs::write(temp.0.join("outside.md"), "private").unwrap();
+        fs::remove_file(&file).unwrap();
+        symlink(temp.0.join("outside.md"), &file).unwrap();
+        assert!(restore_revision(&data, &ws, "a.md", &id).is_err());
+        assert_eq!(fs::read_to_string(temp.0.join("outside.md")).unwrap(), "private");
+    }
+    #[test]
+    fn log_hunk_save_uses_the_existing_conflict_checked_path() {
+        let temp = Temp::new();
+        let (ws, data) = (temp.0.join("ws"), temp.0.join("data"));
+        fs::create_dir(&ws).unwrap();
+        fs::write(ws.join("run.log"), "a\r\nb\r\n").unwrap();
+        save_text(&data, &ws, "run.log", "a\r\n", "a\r\nb\r\n").unwrap();
+        assert_eq!(fs::read(ws.join("run.log")).unwrap(), b"a\r\n");
+        let file = resolve_file(&ws, "run.log").unwrap();
+        let id = records(&data, &file).unwrap().remove(0).id;
+        assert_eq!(fs::read(revision_file(&data, &file, &id).unwrap()).unwrap(), b"a\r\nb\r\n");
     }
     #[test]
     fn text_save_refuses_a_changed_file() {

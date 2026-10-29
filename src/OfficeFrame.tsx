@@ -6,7 +6,7 @@ import { previewDocument } from "./intelligent-ui";
 
 export type FrameSelection = { text: string; node: string; rect: { top: number; left: number; bottom: number } };
 type Props = {
-  html: string; title: string; editing: boolean; zoom: number; onZoom: (direction: number) => void; onActive: (active: boolean) => void; previous?: Record<string, string>; scroll?: number;
+  html: string; title: string; editing: boolean; comparison?: Record<string, string>; zoom: number; onZoom: (direction: number) => void; onActive: (active: boolean) => void; previous?: Record<string, string>; scroll?: number;
   onTexts: (texts: Record<string, string>) => void; onScroll: (y: number) => void;
   onSelect: (s: FrameSelection | null) => void; onEdit: (node: string, before: string, after: string) => void;
 };
@@ -27,6 +27,7 @@ window.addEventListener('message', function(ev){
     (d.paths || []).forEach(function(p){ var e = document.querySelector('[data-path="' + CSS.escape(p) + '"]'); if (e) { e.classList.add('lw-changed'); first = first || e; } });
     if (first) first.scrollIntoView({block:'center'});
   }
+  if (d.type === 'lw-compare') leaves().forEach(function(e){ e.classList.toggle('lw-compared', !!d.texts && text(e) !== d.texts[e.getAttribute('data-path')]); });
   if (d.type === 'lw-zoom') document.body.style.zoom = String(d.zoom / 100);
   if (d.type === 'lw-scroll-to') window.scrollTo(0, d.y || 0);
   if (d.type === 'lw-edit-mode') {
@@ -73,6 +74,7 @@ document.addEventListener('mouseup', function(){
 const STYLE = `<style>
 @keyframes lw-fade { from { background-color: rgba(250,204,21,.45); } to { background-color: transparent; } }
 .lw-changed { animation: lw-fade 6s ease-out forwards; border-radius: 3px; }
+.lw-compared { background-color: #fef08a !important; outline: 1px solid #ca8a04; }
 .lw-editing [contenteditable] { cursor: text; }
 .lw-editing [contenteditable]:hover { outline: 1px dashed #60a5fa; outline-offset: 1px; }
 .lw-editing [contenteditable]:focus { outline: 2px solid #3b82f6; outline-offset: 1px; }
@@ -80,11 +82,12 @@ const STYLE = `<style>
 
 const short = (s: unknown, n: number) => typeof s === "string" ? s.slice(0, n) : "";
 
-export default function OfficeFrame({ html, title, editing, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit }: Props) {
+export default function OfficeFrame({ html, title, editing, comparison, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
   const doc = useMemo(() => previewDocument(`${STYLE}${html}<script>${BRIDGE}</script>`), [html]);
-  const latest = useRef({ editing, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit });
-  latest.current = { editing, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit };
+  const latest = useRef({ editing, comparison, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit });
+  latest.current = { editing, comparison, zoom, onZoom, onActive, previous, scroll, onTexts, onScroll, onSelect, onEdit };
+  useEffect(() => { frame.current?.contentWindow?.postMessage({ type: "lw-compare", texts: comparison }, "*"); }, [comparison]);
   useEffect(() => { frame.current?.contentWindow?.postMessage({ type: "lw-edit-mode", on: editing }, "*"); }, [editing]);
   useEffect(() => { frame.current?.contentWindow?.postMessage({ type: "lw-zoom", zoom }, "*"); }, [zoom]);
   useEffect(() => {
@@ -101,6 +104,7 @@ export default function OfficeFrame({ html, title, editing, zoom, onZoom, onActi
         else if (h.scroll) win.postMessage({ type: "lw-scroll-to", y: h.scroll }, "*");
         if (h.editing) win.postMessage({ type: "lw-edit-mode", on: true }, "*");
         win.postMessage({ type: "lw-zoom", zoom: h.zoom }, "*");
+        if (h.comparison) win.postMessage({ type: "lw-compare", texts: h.comparison }, "*");
         h.onTexts(texts);
       } else if (m.type === "lw-active" && typeof m.active === "boolean") h.onActive(m.active);
       else if (m.type === "lw-zoom-request" && [-1, 0, 1].includes(m.direction)) h.onZoom(m.direction);

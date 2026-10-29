@@ -149,6 +149,18 @@ The built-in OfficeCLI recipe is supplied at the start of every chat. Normal bat
 
 Office previews are HTML approximations. Supported direct edits save previous document versions. Automatic shell commands use the separate folder undo points described above; they do not add individual document revisions. Keep independent backups for important work.
 
+### Compare changes and undo
+
+For a file with saved document revisions, choose **Changes** in the file pane. Pick a revision from the history selector (newest first). The current file is on the left and the selected revision on the right, in read-only preview surfaces. **Back to preview** returns to the current file; expand or resize the pane for more space. On a narrow pane, scroll horizontally to see both sides. Chat stays available, and comparing or undoing does not send a message to the assistant.
+
+For UTF-8 `.md`, `.txt`, `.csv`, `.json` and `.log` files, added current lines are green and removed earlier lines are red. Each changed region has **Undo this change**: it restores only that region's earlier lines, retaining unrelated current changes, CRLF endings and the final newline. The save is refused if the file no longer matches the displayed current text; reload the comparison before trying again. Very large comparisons group changes into one bounded, explicitly labelled region rather than attempting an expensive fine-grained diff.
+
+Word, Excel and PowerPoint appear as side-by-side Office previews. Changed extractable text elements are highlighted in yellow, with a summary of earlier/current text below. This is not a complete document diff: layout, images, formulas with unchanged displayed results and content missing from the exporter may differ without appearing in the text summary. If the previews provide no extractable text, only a visual comparison is available. PDF and HTML comparisons are visual-only in this view; no reliable text extraction is available from their existing preview surfaces.
+
+**Office per-region undo is deliberately unavailable.** Replacing extracted text cannot reliably preserve runs, formatting, formulas or document structure. Use **Restore this version**, review the confirmation, and choose **Confirm restore** to replace the whole document instead. Whole-version restore is also available for other supported document types. Stop the current reply and finish edits in external apps first; a running reply or an open/locked document may cause restore to be refused.
+
+A restore saves the current file using the existing document revision mechanism before atomically replacing its bytes. The pre-restore version remains in history (identical snapshots are deduplicated as before). Restores are user-only actions, not agent/MCP tools; revision retention and document formats are unchanged. After a restore or line undo, previews, history and the file list refresh. Failures appear inline without clearing the previews or disabling chat; correct the problem or reload and retry. These local revisions are not independent backups, and other applications can still change files concurrently.
+
 For Word, Excel, and PowerPoint, the assistant can bundle structural checks into one verification call. Page counting is a separate Word-dependent check and may fail. Open the finished document in its normal application for final layout review.
 
 ## Browser and web access
