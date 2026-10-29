@@ -16,4 +16,6 @@ not a full tamper-detection check of every installed executable or npm file.
 
 The browser tool needs vendor\node (portable Node), vendor\playwright (@playwright/cli) and vendor\browsers (Chromium headless shell); fetch-vendor.ps1 installs all three.
 
+Optional local attachment OCR looks for `vendor/tesseract/tesseract` and `vendor/pdftoppm/pdftoppm` on Linux, or `vendor\tesseract\tesseract.exe` and `vendor\pdftoppm\pdftoppm.exe` on Windows. Place each program's required libraries and Tesseract language data where that installation expects them; these tools are not fetched or bundled by the current scripts. Explicit `LOCALWORK_TESSERACT` / `LOCALWORK_PDFTOPPM` paths take precedence, then this layout, then PATH. Packaging and redistribution of these optional binaries and their licenses must be handled separately.
+
 The agent patch also supports explicit execution-stage effort hints and per-request timing/token diagnostics. Provider timing metadata is separate from message content and never enters model history. The build script checks provider parsing and agent execution/recovery regressions before building.
