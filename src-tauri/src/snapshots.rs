@@ -66,13 +66,14 @@ fn linked(meta: &fs::Metadata) -> bool {
 }
 
 fn excluded(name: &str) -> bool {
-    // No workspace-local index is currently created by the host. Reserve the known index
-    // folder spellings so enabling a local index cannot recursively back it up later.
+    // Local search stores its index at .localwork/search.sqlite. Exclude its entire
+    // folder (including SQLite sidecars), alongside the other index folder spellings.
     matches!(
         name.to_ascii_lowercase().as_str(),
         ".git"
             | "node_modules"
             | "target"
+            | ".localwork"
             | ".localwork-index"
             | ".search-index"
             | ".workbench-index"

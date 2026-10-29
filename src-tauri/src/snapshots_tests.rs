@@ -102,6 +102,10 @@ fn excludes_build_folders_and_local_search_indexes_at_every_depth() {
         fs::create_dir_all(f.ws.join(name)).unwrap();
         fs::write(f.ws.join(name).join("ignored"), "ignore").unwrap();
     }
+    for name in [".localwork", "sub/.localwork"] {
+        fs::create_dir_all(f.ws.join(name)).unwrap();
+        fs::write(f.ws.join(name).join("search.sqlite"), "search index").unwrap();
+    }
     fs::write(f.ws.join("keep"), "keep").unwrap();
     let s = f.snapshot();
     assert_eq!(
