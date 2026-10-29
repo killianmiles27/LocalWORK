@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import signal
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -19,7 +18,7 @@ import urllib.error
 import urllib.request
 
 import pyatspi
-from linux_smoke_support import message_persisted, recent_messages, select_python
+from linux_smoke_support import message_persisted, recent_messages, seed_settings, select_python
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAT_MARKER = 'Fixture authenticated streaming chat: /v1/chat/completions'
@@ -80,9 +79,7 @@ def main(appimage):
                 'modelSource': 'server', 'serverPort': str(port), 'serverKey': 'fixture-key',
                 'workbenchPython': python,
             }))
-            with sqlite3.connect(data / 'workbench.db') as db:
-                db.execute('CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT NOT NULL)')
-                db.executemany('INSERT INTO kv VALUES (?, ?)', [('wizard_done', '1'), ('offline', '1')])
+            seed_settings(work, data / 'workbench.db')
             env = {**os.environ, 'HOME': str(work), 'XDG_DATA_HOME': str(work / 'data'),
                    'XDG_CONFIG_HOME': str(work / 'config'), 'XDG_CACHE_HOME': str(work / 'cache'),
                    'STRATA_API_KEY': 'fixture-key', 'E2E_LOAD_SECONDS': '0',

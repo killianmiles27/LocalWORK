@@ -32,6 +32,22 @@ class LinuxSmokeDiagnosticsTest(unittest.TestCase):
             self.assertTrue(support.message_persisted(database, 'hello'))
             self.assertFalse(support.message_persisted(database, 'absent'))
 
+    def test_seed_settings_creates_workspace_without_a_conversation(self):
+        support = self.support()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            database = home / 'workbench.db'
+            self.assertTrue(hasattr(support, 'seed_settings'), 'smoke setup must seed projects_folder')
+            support.seed_settings(home, database)
+            with closing(sqlite3.connect(database)) as db:
+                settings = dict(db.execute('SELECT k, v FROM kv'))
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertEqual(settings['projects_folder'], str(home / 'Documents' / 'LocalWORK Smoke'))
+            self.assertTrue(Path(settings['projects_folder']).is_dir())
+            self.assertEqual(settings['wizard_done'], '1')
+            self.assertEqual(settings['offline'], '1')
+            self.assertNotIn('conversations', tables)
+
     def test_python_selection_falls_back_and_rejects_invalid_override(self):
         support = self.support()
         with patch.object(support.shutil, 'which', return_value=None):

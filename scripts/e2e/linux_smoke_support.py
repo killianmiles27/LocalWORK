@@ -7,6 +7,16 @@ import shutil
 import sqlite3
 
 
+def seed_settings(home, database):
+    workspace = home / 'Documents' / 'LocalWORK Smoke'
+    workspace.mkdir(parents=True)
+    with closing(sqlite3.connect(database)) as db:
+        db.execute('CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT NOT NULL)')
+        db.executemany('INSERT INTO kv VALUES (?, ?)',
+                       [('wizard_done', '1'), ('offline', '1'), ('projects_folder', str(workspace))])
+        db.commit()
+
+
 def select_python(configured, fallback):
     selected = configured or shutil.which('python3') or fallback
     if not selected or not Path(selected).is_file() or not os.access(selected, os.X_OK):
