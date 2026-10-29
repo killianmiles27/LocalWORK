@@ -38,7 +38,7 @@ The Linux build workflow (`.github/workflows/linux-release.yml`) builds unsigned
 npx tauri signer sign -f <path to the private key> LocalWORK_<version>_amd64.AppImage
 ```
 
-That writes `LocalWORK_<version>_amd64.AppImage.sig`. Add a `linux-x86_64` entry to latest.json whose URL is the AppImage and whose signature is the content of that file. Deb and rpm installs do not self-update. Put the deb's SHA-256 into `packaging/arch/PKGBUILD` (`sha256sums`) and the version into `pkgver`, then attach the PKGBUILD to the release as well.
+That writes `LocalWORK_<version>_amd64.AppImage.sig`. Add a `linux-x86_64` entry to latest.json whose URL is the AppImage and whose signature is the content of that file. Deb and rpm installs do not self-update. Put the deb's SHA-256 into `packaging/arch/PKGBUILD` (`sha256sums`) and the version into `pkgver`, then attach the PKGBUILD to the release before running the publish workflow.
 
 The packages are large, so let GitHub copy them into the release instead of uploading them from your machine. After the release exists, run:
 
@@ -46,7 +46,17 @@ The packages are large, so let GitHub copy them into the release instead of uplo
 gh workflow run linux-publish.yml -f run_id=<run id> -f tag=v<version>
 ```
 
-`.github/workflows/linux-publish.yml` downloads that run's `linux-bundles` artifact and uploads the AppImage, deb and rpm to the release. Use the same run whose AppImage you signed: a rebuilt AppImage has different bytes and the signature would not match. The job prints the SHA-256 of each file, so you can compare it with the AppImage you signed. Upload the `.sig`, latest.json and the PKGBUILD yourself.
+`.github/workflows/linux-publish.yml` downloads that run's `linux-bundles` artifact and the release's PKGBUILD, then uploads the AppImage, deb, rpm, PKGBUILD and `SHA256SUMS`. If a Windows run is supplied, its installer is included too. Use the same run whose AppImage you signed: a rebuilt AppImage has different bytes and the signature would not match. The job also prints the SHA-256 of each file, so you can compare it with the AppImage you signed. Upload the `.sig` and latest.json yourself. The checksum file does not cover signatures, latest.json, plugins or other manually attached assets.
+
+Download `SHA256SUMS` and the covered assets into the same directory, then run `sha256sum -c SHA256SUMS`. This checks their bytes against the checksum file; it does not authenticate the file or replace updater signature verification.
+
+The publish job also creates GitHub provenance attestations for the AppImage, deb, rpm, PKGBUILD, `SHA256SUMS`, and optional Windows installer. Verify each downloaded file, for example:
+
+```bash
+gh attestation verify LocalWORK_<version>_amd64.AppImage -R killianmiles27/LocalWORK
+```
+
+These attestations identify the **publish workflow**, which copies artifacts from separate Linux and Windows build runs and downloads the locally prepared PKGBUILD; they do not attest how those artifacts were built. The Windows workflow uploads a CI artifact, not release assets, so the publish job attests the installer when included. Signatures, latest.json and plugins attached separately are not covered by this job's attestations. Attestations do not replace updater signatures.
 
 ## Windows installer from any machine
 
