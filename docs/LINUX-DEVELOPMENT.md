@@ -44,4 +44,6 @@ Every merge/push to `main` starts **Linux build** and **Windows build** in GitHu
 
 In **Actions → Windows build → the successful run → Artifacts**, download `windows-installer` and unzip it to find the setup EXE. Linux packages are in `linux-bundles`. Artifacts expire after seven days. A green Checks run verifies tests; a green Windows build verifies that an installer was actually produced. Check both.
 
+The Linux build workflow also runs on pull requests affecting the app or packaging. It builds an AppImage and exercises its desktop under Xvfb with the deterministic Strata stub, including one chat request. This is not a clean desktop installation or a live-model test; check the workflow result rather than assuming it passed.
+
 These builds do not create a public release or update existing installations. For a release, bump all version files, build and test the exact artifacts, sign them on the trusted machine, and publish the matching tag and updater feed as described in [release.md](release.md). Test the Windows installer on a real Windows PC or clean VM before calling it desktop-validated. Keep the signing key outside Git.
