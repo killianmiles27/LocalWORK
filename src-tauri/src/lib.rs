@@ -18,6 +18,7 @@ mod ssh;
 mod stats;
 mod sshpolicy;
 mod store;
+mod templates;
 mod strata;
 mod supervisor;
 mod updates;
@@ -583,6 +584,8 @@ pub fn run() {
             list_conversations,
             open_workspace,
             create_conversation,
+            templates::task_templates_list, templates::task_template_save, templates::task_template_apply,
+            templates::task_template_rename, templates::task_template_delete,
             delete_conversation,
             load_messages,
             export_markdown,
