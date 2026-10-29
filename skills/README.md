@@ -11,6 +11,7 @@ Task recipes the agent loads with `load_skill` when a task calls for one. Each f
 | check-my-work | Independently check finished deliverables against the request and sources |
 | pptx-deck | Slide decks |
 | xlsx-model | Spreadsheet models with formulas |
+| sources-on-numbers | Carry source cells, rows and pages through calculations into reports |
 | intelligent-ui | Dashboards, calculators and forms rendered in the chat |
 | research | Multi-source web research |
 | citations | Reports with a source ledger and numbered citations, and fact-checking |

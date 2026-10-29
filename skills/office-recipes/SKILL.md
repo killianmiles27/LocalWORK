@@ -13,6 +13,8 @@ For `action: "table"`, pass an `.xlsx` target, optional distinct `.xlsx` source,
 
 Keep recipes generic and based on the supplied data. Do not invent units, categories, totals, currencies, or business rules. For independent numeric verification, call `officecli` with `args:["read-ranges","result.xlsx"]` and `ranges:["/Summary/A1:C20"]`. The first row supplies column names; supply `columns:[...]` when reading a range without headers. This uses evaluated values and returns dataset paths. Then call `tabular` action `compare` with the original aggregate's `dataset_path`, the evaluated dataset as `actual_path`, matching `keys` and numeric `columns`, and an explicit tolerance. Column names and key types must match. Resolve errors/missing values; never replace a broken formula with the expected constant. Changed source fingerprints invalidate saved results.
 
+For traceable figures load `sources-on-numbers`. Pass `sources: [{figure, value, references:[...]}]` to either recipe, using the figure references returned by tabular or exact manually checked file/page references. A declared figure with no references is labelled `source not supplied`; list every derived figure explicitly. Formula cells without a supplied matching figure path are marked as unreferenced and unevaluated. Sources lists can be truncated; never claim a partial list is complete.
+
 Review the returned warnings and batch result, then verify the finished file against the user's request; validation alone does not prove content correctness.
 
 When using `update_plan`, use `stage: "execution"` only after the algorithm, input, and layout are decided. Use `analysis` or `verification` for those stages so configured reasoning effort is restored; never globally disable thinking.

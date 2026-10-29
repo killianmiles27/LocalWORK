@@ -27,6 +27,8 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {
          'action': {'type': 'string', 'enum': ['document', 'table']}, 'target': STRING,
          'source': STRING, 'title': STRING, 'layout': {'type': 'string', 'enum': ['standard', 'one-page']}, 'font': STRING,
+         'sources': {'type': 'array', 'items': {'type': 'object', 'properties': {
+             'figure': STRING, 'value': {}, 'references': {'type': 'array', 'items': {'type': 'object'}}}, 'required': ['figure', 'value']}},
          'sections': {'type': 'array', 'items': {'type': 'object', 'properties': {
              'heading': STRING, 'paragraphs': STRINGS, 'bullets': STRINGS}, 'required': ['heading']}},
          'sheet': STRING, 'dataset': STRING,
