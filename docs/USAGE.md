@@ -14,6 +14,14 @@ Choose a folder for the task using the folder control beside the composer. New c
 
 Keep task files together. For an existing document, work on a copy until you trust the result. Attach a file using the attachment button, drag and drop, or paste. State which file should change and what should stay the same.
 
+## Scanned PDFs and photos
+
+`read_attachment` can read images and PDF pages with an empty or very short text layer using local OCR. Install **Tesseract OCR** with English language data; scanned PDFs also require **Poppler's `pdftoppm`**. On Windows, install the Windows executables (`tesseract.exe` and `pdftoppm.exe`); on Linux use your distribution's Tesseract and Poppler packages. Put them on PATH, install them in the optional layout described in `vendor/README.md`, or set `LOCALWORK_TESSERACT` and `LOCALWORK_PDFTOPPM` to their executable paths before launching LocalWORK. Explicit overrides take precedence, then vendor tools, then PATH. A bad override must be corrected or unset.
+
+OCR runs locally: neither the image nor the recognised text is sent to an OCR service. PDF pages with usable text are not OCRed. At most 10 sparse pages are OCRed per call, within a shared 60-second OCR/rendering deadline; skipped or failed pages are identified. Temporary page images are removed after the call. The result is returned in character ranges like other attachments; requesting another range repeats extraction and the same page cap, so it does not advance past skipped pages. OCR defaults to English (`eng`); set `LOCALWORK_OCR_LANG` to installed Tesseract language codes such as `eng+fra` to override it.
+
+OCR is approximate: machine-recognised text is labelled and may omit or misread words, numbers or layout. Check the original before relying on it. OCR in `read_attachment` does not make scanned PDFs searchable in the local index.
+
 ## Reusable task templates
 
 Write a prompt, select the working folder, then choose **Save as task template** above the composer. Give it a name and confirm the folder. You can optionally choose a document template file (for example Word or Excel), or use a current attachment; the first attached Office document is selected by default and can be removed. Without a selected chat folder, choose one in the save dialog.

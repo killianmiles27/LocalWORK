@@ -60,7 +60,7 @@ TOOLS = EFFICIENCY_TOOLS + SEARCH_TOOLS + [
     },
     {
         "name": "read_attachment",
-        "description": "Read a file the user attached (listed in the message as attachments/<name>) as text: PDF, Word, Excel, PowerPoint, CSV, text, HTML. Spreadsheets return a compact profile by default; use tabular for rows/aggregates. Other long files return text ranges; pass start to continue.",
+        "description": "Read a file the user attached (listed in the message as attachments/<name>) as text: PDF, images, Word, Excel, PowerPoint, CSV, text, HTML. Scanned PDF pages and images use local OCR when installed; machine-recognised text can contain errors. Spreadsheets return a compact profile by default; use tabular for rows/aggregates. Other long files return text ranges; pass start to continue.",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"}, "max_chars": {"type": "integer"}}, "required": ["path"]},
     },
     {
