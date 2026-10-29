@@ -14,7 +14,7 @@ Reviewed 17 October 2026, starting from commit `811c4f9`. This records a source/
 
 ## Publication assessment at v0.1.3
 
-For v0.1.3, the source was prepared for public review as an **early Windows x64 project**. At that point it had a root Apache-2.0 license, dependency notices, setup and usage documentation, configurable runtime paths, regression tests, and a pinned GitHub Actions workflow. Publishing source is separate from announcing a production-ready app or distributing an installer.
+This section records the v0.1.3 assessment only; none of its checks were run on Linux, and Linux x64 packages have shipped since v0.1.5 (see the update at the top). For v0.1.3, the source was prepared for public review as an **early Windows x64 project**, which describes that version and not the current state. At that point it had a root Apache-2.0 license, dependency notices, setup and usage documentation, configurable runtime paths, regression tests, and a pinned GitHub Actions workflow. Publishing source is separate from announcing a production-ready app or distributing an installer.
 
 Before a binary release, test the actual installer on a clean Windows account or VM, run the new workflow on GitHub, review the final redistribution artifacts and any source-availability obligations, and confirm signing/update recovery. No clean-VM, cross-GPU, or broad real-model workflow certification was performed in this pass.
 
