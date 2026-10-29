@@ -24,6 +24,7 @@ import Logo from "./Logo";
 import FirstTokenCountdown, { ttftEstimate, ttftRecord } from "./FirstToken";
 import Thinking from "./Thinking";
 import { documentSyncMessage, mergeChanges, type DocumentChange } from "./documentSync";
+import { verificationPrompt } from "./checkMyWork";
 
 type Msg = { id: number; role: string; body: any; ts: number };
 const CACHED_CHATS = 3;
@@ -61,6 +62,8 @@ export default function App() {
   const [files, setFiles] = useState<string[]>([]);
   const applyingTemplate = useRef(false);
   const [templateApplying, setTemplateApplying] = useState(false);
+  const checkingWork = useRef(false);
+  const [checking, setCheckingWork] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // The user message being edited in place, and how many chats blocked a window close.
@@ -346,7 +349,7 @@ export default function App() {
     } catch (e) { setErr(String(e)); }
   }
   async function applyTaskTemplate(templateId: string) {
-    if (live.busy || creating.current || applyingTemplate.current) return;
+    if (live.busy || creating.current || applyingTemplate.current || checkingWork.current) return;
     const epoch = navigation.current;
     applyingTemplate.current = true; setTemplateApplying(true); setErr("");
     try {
@@ -363,8 +366,36 @@ export default function App() {
     } catch (e) { if (epoch === navigation.current) setErr(String(e)); }
     finally { applyingTemplate.current = false; setTemplateApplying(false); }
   }
+  async function checkMyWork() {
+    if (live.busy || queue.length || !modelReady || checkingWork.current || creating.current || applyingTemplate.current || !curConv || curRef.current !== curConv.id) return;
+    const prompt = verificationPrompt(msgs, curConv.workspace);
+    if (!prompt) return;
+    const epoch = navigation.current;
+    checkingWork.current = true; setCheckingWork(true); setErr("");
+    let id: string | undefined;
+    try {
+      id = await invoke<string>("create_conversation", { workspace: curConv.workspace });
+      if (offline.chat) await invoke("chat_offline_set", { conv: id, on: true });
+      if (epoch !== navigation.current) { await refreshConvs(); return; }
+      createdHere.current = id;
+      selectConversation(id);
+      setMsgs([]); setFiles([]); setQueue([]); setEditing(null); setWorkspaceRequest(undefined); setWorkspaceOpen(false);
+      setCtx(c => ({ ...c, used: null }));
+      setInput(prompt); stick.current = true;
+      setLive({ text: "", thinking: "", busy: true });
+      setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
+      await invoke("agent_send", { id, text: prompt });
+      if (curRef.current === id) setInput("");
+      await reload(id); refreshConvs(); refreshOffline(id);
+    } catch (e) {
+      if (epoch === navigation.current || (id && curRef.current === id)) {
+        setErr(`Could not start check my work: ${String(e)}`);
+        if (id && curRef.current === id) { setLive({ text: "", thinking: "", busy: false }); setFirstWait(null); }
+      }
+    } finally { checkingWork.current = false; setCheckingWork(false); }
+  }
   async function send(override?: string, queued?: string[]) {
-    if (applyingTemplate.current) return;
+    if (applyingTemplate.current || checkingWork.current) return;
     const typed = (override ?? input).trim();
     const attached = queued ?? files;
     if ((!typed && !attached.length) || !modelReady) return;
@@ -585,6 +616,8 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                         canAct={canRewind} offline={offline.global || offline.chat}
                         onEdit={g.m.role === "user" ? () => setEditing({ id: g.m.id, text: text(g.m.body?.text) }) : undefined}
                         onRegenerate={i === blocks.length - 1 && g.m.role === "assistant" && lastUser ? () => rewindTo(lastUser) : undefined} />)}
+                {!live.busy && curConv && verificationPrompt(msgs, curConv.workspace) && <button onClick={checkMyWork} disabled={!modelReady || !!queue.length || checking} title="Start an independent check in a new chat"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs text-muted hover:border-accent hover:text-ink disabled:opacity-40"><Check size={13} />Check my work</button>}
                 {live.thinking && <Thinking text={live.thinking} />}
                 {live.text && <Assistant offline={offline.global || offline.chat}>{live.text}</Assistant>}
                 {live.busy && !live.text && !live.thinking && mine.length === 0 && firstWait?.conv === cur && <FirstTokenCountdown start={firstWait.t0} estimate={firstWait.est} />}
@@ -612,10 +645,10 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                   <QueueList queue={queue} setQueue={setQueue}
                     onEdit={q => { setQueue(x => x.filter(y => y !== q)); setInput(q.text); setFiles(f => [...f, ...q.files]); taRef.current?.focus(); }} />
                 )}
-                {err && <div className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
+                {err && <div role="alert" className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
                 <TaskTemplates prompt={input} workspace={curConv?.workspace} attachments={files} disabled={live.busy || templateApplying || tidying}
                   onApply={applyTaskTemplate} />
-                <fieldset disabled={templateApplying} className="@container rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
+                <fieldset disabled={templateApplying || checking} className="@container rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
                   {files.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 px-3 pt-3">
                       {files.map((f) => (

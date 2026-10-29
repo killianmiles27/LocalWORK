@@ -32,6 +32,12 @@ Markdown downloads include saved thinking, tool arguments, stored tool output, s
 
 Hover over one of your messages and choose Edit. In an empty composer, Up arrow edits your last message. Sending the edited text removes that message and everything after it, and the chat continues from there. Regenerate on the last reply asks the same question again. Files the assistant already changed are not undone. Both actions wait until the current reply has finished, so stop it first if needed. Very long chats that were summarized cannot go back past the summary.
 
+## Check my work
+
+After a reply that created or changed a workspace file, choose **Check my work** beneath the reply. LocalWORK starts a new chat in the same folder and sends the latest request and detected file paths, not the previous conversation or its reasoning. The assistant is asked to re-read the files and sources, report mismatches and verification gaps, and not modify deliverables unless you explicitly ask in the new chat.
+
+The action uses successful file-tool signals; changes made through other tools may not be detected. It is not a correctness guarantee: review the findings and any missing sources or unreadable files. If creating the chat fails, your current chat and draft remain available.
+
 ## Keyboard shortcuts
 
 | Keys | Action |

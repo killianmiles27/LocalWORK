@@ -15,7 +15,7 @@ function harness() {
   const state = { cur: "old", input: "Old draft", files: ["old.txt"], msgs: ["old message"], queue: ["queued"], error: "" };
   const navigation = { current: 0 }, curRef = { current: "old" }, createdHere = { current: null }, applyingTemplate = { current: false };
   const calls = [];
-  const scope = { navigation, curRef, createdHere, applyingTemplate, live: { busy: false }, creating: { current: null },
+  const scope = { navigation, curRef, createdHere, applyingTemplate, checkingWork: { current: false }, live: { busy: false }, creating: { current: null },
     invoke: (cmd, args) => { calls.push({ cmd, args }); return cmd === "task_template_apply" ? new Promise((a, b) => { resolve = a; reject = b; }) : Promise.resolve(); },
     selectConversation: id => { navigation.current++; curRef.current = id; state.cur = id; },
     refreshConvs() {}, reload() {}, refreshCtx() {},
@@ -111,5 +111,6 @@ test("double clicks and a busy chat cannot launch concurrent template applicatio
   assert.equal(h.calls.filter(c => c.cmd === "task_template_apply").length, 1);
   h.resolve(); await pending;
   h.scope.live.busy = true; await h.run();
+  h.scope.live.busy = false; h.scope.checkingWork.current = true; await h.run();
   assert.equal(h.calls.filter(c => c.cmd === "task_template_apply").length, 1);
 });
