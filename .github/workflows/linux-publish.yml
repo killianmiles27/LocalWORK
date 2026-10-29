@@ -16,12 +16,13 @@ on:
         description: Optional ID of the successful "Windows build" run whose installer you signed
         required: false
 
-permissions:
-  contents: write
-  actions: read
+permissions: {}
 
 jobs:
   publish:
+    permissions:
+      contents: write
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -40,8 +41,6 @@ jobs:
           gh run download "$RUN_ID" -n linux-bundles -D bundles
           mapfile -t files < <(find bundles -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \))
           [ "${#files[@]}" = 3 ] || { echo "Expected 3 packages, found ${#files[@]}"; exit 1; }
-          sha256sum "${files[@]}"
-          gh release upload "$TAG" "${files[@]}" --clobber
           if [ -n "$WIN_RUN_ID" ]; then
             [[ "$WIN_RUN_ID" =~ ^[0-9]+$ ]] || { echo 'windows_run_id must be a number'; exit 1; }
             [ "$(gh run view "$WIN_RUN_ID" --json workflowName,conclusion --jq '.workflowName + " " + .conclusion')" = 'Windows build success' ] \
@@ -49,6 +48,17 @@ jobs:
             gh run download "$WIN_RUN_ID" -n windows-installer -D windows
             mapfile -t win < <(find windows -type f -name '*-setup.exe')
             [ "${#win[@]}" = 1 ] || { echo "Expected 1 installer, found ${#win[@]}"; exit 1; }
-            sha256sum "${win[@]}"
-            gh release upload "$TAG" "${win[@]}" --clobber
+            files+=("${win[@]}")
           fi
+          # PKGBUILD is prepared locally from the exact deb and attached before this job.
+          gh release download "$TAG" --pattern PKGBUILD --dir publish
+          for file in "${files[@]}"; do
+            name=${file##*/}
+            [ ! -e "publish/$name" ] || { echo "Duplicate asset name: $name"; exit 1; }
+            cp -- "$file" "publish/$name"
+          done
+          cd publish
+          export LC_ALL=C
+          assets=(*)
+          sha256sum -- "${assets[@]}" | tee SHA256SUMS
+          gh release upload "$TAG" "${assets[@]}" SHA256SUMS --clobber
