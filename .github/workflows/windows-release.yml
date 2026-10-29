@@ -60,7 +60,7 @@ jobs:
             if ($listing -notmatch "etree\.cp$v-win_amd64\.pyd") { throw "The web libraries for Python 3.$($v.Substring(1)) are missing" }
           }
           (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-installer
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
