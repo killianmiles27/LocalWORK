@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Md from "./Md";
 import PlanDock, { latestPlan } from "./PlanDock";
-import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Copy, Download, FolderOpen, GripVertical, Mic, Pencil, RotateCcw, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Copy, Download, FolderOpen, GripVertical, History, Mic, Pencil, RotateCcw, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import ChatList, { type Conv } from "./ChatList";
 import TaskTemplates, { type AppliedTemplate } from "./TaskTemplates";
@@ -21,6 +21,7 @@ import StatusItems from "./StatusItems";
 import { BrowserPeek } from "./BrowserLive";
 import QuestionCard, { AskedLine, isAsk, openQuestion } from "./Question";
 import Logo from "./Logo";
+import FolderHistory from "./FolderHistory";
 import FirstTokenCountdown, { ttftEstimate, ttftRecord } from "./FirstToken";
 import Thinking from "./Thinking";
 import { documentSyncMessage, mergeChanges, type DocumentChange } from "./documentSync";
@@ -85,6 +86,7 @@ export default function App() {
   const [checking, setCheckingWork] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   // The user message being edited in place, and how many chats blocked a window close.
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
   const [closeBlocked, setCloseBlocked] = useState(0);
@@ -228,6 +230,7 @@ export default function App() {
     setMsgs((cur && chatCache.current.get(cur)) || []);
     setEditing(null);
     setErr("");
+    setShowHistory(false);
     setWorkspaceRequest(undefined);
     setCtx((c) => ({ ...c, used: null }));
     if (cur) { reload(cur); refreshCtx(cur); }
@@ -646,6 +649,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
           )}
           {cur && <button onClick={() => exportChat(cur)} title="Export as Markdown" aria-label="Export as Markdown" className="ml-auto shrink-0 grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink"><Download size={16} /></button>}
           {(offline.global || offline.chat) && <span title={offline.global ? "Offline mode is on in Settings" : "This chat is kept offline"} className="shrink-0 rounded-full border border-line px-2 py-0.5 text-xs text-muted">Offline</span>}
+          {cur && <button onClick={() => setShowHistory(true)} aria-label="Folder history" title="Folder history and undo points" className="shrink-0 grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel"><History size={16} /></button>}
           {cur && <button onClick={() => setWorkspaceOpen(!workspaceOpen)} aria-label="Files & visuals" title="Files" aria-expanded={workspaceOpen} className="shrink-0 inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted hover:bg-panel"><PanelRight size={16} />Files</button>}
         </header>
         <div className="flex flex-col flex-1 min-h-0">
@@ -783,6 +787,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
         </div>
       </div>
     )}
+    {showHistory && cur && <FolderHistory id={cur} onClose={() => setShowHistory(false)} onRestored={() => setWorkspaceRefresh(n => n + 1)} />}
     {wizard && <Wizard onDone={() => setWizard(false)} />}
     {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} onClose={() => setShowSettings(false)} />}
     </div>

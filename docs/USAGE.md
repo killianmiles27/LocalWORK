@@ -122,7 +122,9 @@ Capture limits are **10,000 files**, **256 MiB total logical file bytes**, **64 
 
 If capture fails (for example, insufficient disk space, a permission error, or a file changing during capture), that command becomes a one-time approval request: **“Could not snapshot the folder before this command”**, with the underlying reason. Approving it explicitly runs without a folder undo point. Failed captures do not publish a partial snapshot; interrupted staging directories are ignored and reclaimed on the next capture.
 
-### Backend restore commands (no snapshot UI yet)
+### Folder history
+
+The history button in the chat header opens **Folder history**, which lists this chat's undo points newest first. Each row shows when it was taken, how many files it covers, and how many were skipped. **Restore** asks for confirmation and puts the listed contents back; **Exact restore** also deletes files created after that snapshot and is refused when the snapshot has skipped entries. Restoring or removing undo points is refused while a reply is running. **Remove undo points** deletes the stored snapshots, not the working files. The panel is the only UI for this feature; there is no agent tool that can restore a snapshot.
 
 These Tauri IPC commands are for user actions only and are **not agent/MCP tools**:
 

@@ -131,7 +131,8 @@ With Strata on a decent graphics card, replies come out faster than you can read
 - Tables, charts, diagrams and small interactive HTML pages.
 - Local voice typing through whisper.cpp.
 - Optional SSH access to servers you add yourself.
-- A live plan panel, a context ring with automatic compaction, recovery from cut-off replies, and a Stop button. You can keep typing while it works and your message waits its turn.
+- A live plan panel, a context ring with automatic compaction, recovery from cut-off replies, and a Stop button. You can keep typing while it works and your message waits its turn. Running chats stay marked in the sidebar when you switch away.
+- Folder undo points before automatic commands, with a Folder history panel to restore a snapshot or delete files created since.
 - Markdown chat export, including the thinking and per-request timing.
 - Plugins for modes, skills, status readouts and tools. Get them in Settings > Plugins > Get plugins, which lists the [official plugins](https://github.com/killianmiles27/LocalWORK-plugins) (a CPU/GPU bar and the electricity cost per task) and any GitHub plugin repo you add.
 
