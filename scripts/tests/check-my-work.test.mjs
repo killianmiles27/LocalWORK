@@ -32,11 +32,14 @@ function harness(messages = fixtures, fail = false) {
   Object.assign(scope, scope.exports, {
     msgs: messages, curRef, navigation, curConv: { id: "old", workspace: "C:\\Work\\Budget" },
     live: { busy: false }, queue: [], modelReady: true, offline: { chat: false, global: false }, checkingWork: { current: false }, creating: { current: null }, applyingTemplate: { current: false },
+    markBusy: () => {},
     createdHere: { current: null }, stick: { current: false }, modeKey: { current: "default" }, ttftEstimate: () => null,
     invoke: async (cmd, args) => { calls.push({ cmd, args }); if (cmd === "create_conversation") { if (fail) throw Error("Cannot create chat"); return "new"; } },
     selectConversation: id => { navigation.current++; curRef.current = id; state.cur = id; },
     refreshConvs: async () => {}, reload: async () => {}, refreshOffline: () => {},
   });
+  // The handler reads App's derived busy flag; keep it tied to live.busy for the busy-path tests.
+  Object.defineProperty(scope, "isBusy", { get: () => scope.live.busy });
   for (const [setter, key] of Object.entries({ setInput: "input", setFiles: "files", setMsgs: "msgs", setQueue: "queue", setErr: "error", setLive: "live", setEditing: "editing", setWorkspaceRequest: "request", setWorkspaceOpen: "workspaceOpen", setCtx: "ctx", setFirstWait: "firstWait", setCheckingWork: "checking" })) {
     scope[setter] = value => { state[key] = typeof value === "function" ? value(state[key] ?? {}) : value; };
   }

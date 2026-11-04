@@ -351,30 +351,4 @@ mod tests {
         save(&c, "t", "Name", "Prompt", root, None).unwrap();
         assert!(apply(&c, "t", "c1").unwrap().files.is_empty());
     }
-
-    #[cfg(unix)]
-    #[test]
-    fn refuses_an_attachments_symlink_outside_the_workspace() {
-        let temp = Temp::new();
-        let ws = temp.0.join("work");
-        let outside = temp.0.join("outside");
-        fs::create_dir(&ws).unwrap();
-        fs::create_dir(&outside).unwrap();
-        let source = temp.0.join("report.docx");
-        fs::write(&source, b"fixture").unwrap();
-        std::os::unix::fs::symlink(&outside, ws.join("attachments")).unwrap();
-        let c = store::open(&temp.0).unwrap();
-        save(
-            &c,
-            "t",
-            "Name",
-            "Prompt",
-            ws.to_str().unwrap(),
-            Some(source.to_str().unwrap()),
-        )
-        .unwrap();
-        assert!(apply(&c, "t", "c1").is_err());
-        assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
-        assert!(store::list_convs(&c).is_empty());
-    }
 }

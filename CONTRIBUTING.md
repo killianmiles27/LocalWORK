@@ -1,10 +1,10 @@
 # Contributing
 
-Developing on Linux? See [the Linux development and Windows build walkthrough](docs/LINUX-DEVELOPMENT.md).
-
 Start with a small issue or pull request that explains the problem and expected behavior. Include a reproduction for bugs. Keep unrelated formatting and refactors out of the change.
 
-Build prerequisites are in [docs/SETUP.md](docs/SETUP.md). The frontend is React/TypeScript; the host is Rust/Tauri; the workbench tools are Python. Windows x64 is the main tested platform. Linux x64 is covered by CI build and unit-test coverage: `.github/workflows/checks.yml` builds and runs the same frontend, Python and Rust tests, and `linux-release.yml` builds the AppImage, deb and rpm packages. Neither workflow starts the packaged app on a desktop, so treat that as build coverage, not Linux desktop validation. A model is not needed for most unit tests.
+Build prerequisites are in [docs/SETUP.md](docs/SETUP.md).
+
+To click through the app without loading a local model, see the [developer backend](docs/DEV-BACKEND.md). It is dev-only, and prompts leave this PC while it is connected. The frontend is React/TypeScript; the host is Rust/Tauri; the workbench tools are Python. Windows x64 is the only supported platform. `.github/workflows/checks.yml` runs the frontend, Python and Rust tests on windows-latest, and `windows-release.yml` builds the installer. Neither workflow starts the packaged app on a desktop, so treat that as build coverage, not desktop validation. A model is not needed for most unit tests.
 
 ```powershell
 npm ci

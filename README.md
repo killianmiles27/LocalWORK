@@ -7,13 +7,13 @@
 <h3 align="center">Your AI. Your PC. Your business.</h3>
 
 <p align="center">
-  A desktop assistant for Windows and Linux that runs on your own computer. It chats, reads your files, and builds real Word, Excel and PowerPoint documents right beside the chat.
+  A desktop assistant for Windows that runs on your own computer. It chats, reads your files, and builds real Word, Excel and PowerPoint documents right beside the chat.
 </p>
 
 <p align="center">
   <a href="https://github.com/killianmiles27/LocalWORK/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/killianmiles27/LocalWORK?include_prereleases&label=release"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <img alt="Platform: Windows and Linux x64" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20x64-lightgrey">
+  <img alt="Platform: Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-lightgrey">
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-lightgrey">
 </p>
 
@@ -40,7 +40,7 @@ The model runs on your PC, so your files stay on your PC. There's no account, no
 What LocalWORK itself adds:
 
 - **Real Office work.** Word, Excel and PowerPoint files built and edited in place, with previews you can type into, revision history, template matching, and spreadsheet tools that keep track of where the numbers came from. This is the main point of the app.
-- **One install, no Docker.** A normal Windows installer, or an AppImage, .deb, .rpm or Arch package on Linux. It starts the model for you, waits until it's ready, and unloads it when you're idle.
+- **One install, no Docker.** A normal Windows installer. It starts the model for you, waits until it's ready, and unloads it when you're idle.
 - **Built for local models.** Local models are slower and make more mistakes than the big cloud ones, so a lot of the work went into keeping long tasks on track: recovering cut-off replies, catching loops, and checking the finished files.
 
 The model side is someone else's work. LocalWORK runs models through [Strata](https://github.com/Niko1221/Strata) by Niko1221 (or [PolyStrata](https://github.com/VecSzn/PolyStrata) for models beyond Qwen). Strata is the reason a model around 125 billion parameters fits on a regular gaming PC at all, so the credit for that goes to them. The Office editing runs on [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI), and the agent is a patched copy of [aionrs](https://github.com/iOfficeAI/aionrs), both by iOfficeAI. For a lot of everyday stuff the result holds its own against the free chatbots you already use. It is not going to beat the big paid ones at everything, and I'm not going to pretend it does.
@@ -49,7 +49,7 @@ The model side is someone else's work. LocalWORK runs models through [Strata](ht
 
 ## Download
 
-Grab `LocalWORK_<version>_x64-setup.exe` from the [latest release](https://github.com/killianmiles27/LocalWORK/releases/latest) and run it. Linux packages (AppImage, `.deb`, `.rpm` and PKGBUILD) are available too; see [Install on Linux](docs/SETUP.md#install-on-linux).
+Grab `LocalWORK_<version>_x64-setup.exe` from the [latest release](https://github.com/killianmiles27/LocalWORK/releases/latest) and run it.
 
 The installer has the app and its tools. It does **not** include a model. The first-run wizard can connect an existing server or open the model library: download PolyStrata from GitHub, choose a suggested model, or use your own model files. You confirm downloads; some models require tens or hundreds of GB. Engine updates come from upstream releases rather than needing a new LocalWORK build.
 
@@ -131,13 +131,14 @@ With Strata on a decent graphics card, replies come out faster than you can read
 - Tables, charts, diagrams and small interactive HTML pages.
 - Local voice typing through whisper.cpp.
 - Optional SSH access to servers you add yourself.
-- A live plan panel, a context ring with automatic compaction, recovery from cut-off replies, and a Stop button. You can keep typing while it works and your message waits its turn.
+- A live plan panel, a context ring with automatic compaction, recovery from cut-off replies, and a Stop button. You can keep typing while it works and your message waits its turn. Running chats stay marked in the sidebar when you switch away.
+- Folder undo points before automatic commands, with a Folder history panel to restore a snapshot or delete files created since.
 - Markdown chat export, including the thinking and per-request timing.
 - Plugins for modes, skills, status readouts and tools. Get them in Settings > Plugins > Get plugins, which lists the [official plugins](https://github.com/killianmiles27/LocalWORK-plugins) (a CPU/GPU bar and the electricity cost per task) and any GitHub plugin repo you add.
 
 ## What you need
 
-- Windows 10 or 11, 64-bit, or a 64-bit Linux desktop (Ubuntu 22.04 or newer, Fedora, Arch and similar). macOS isn't built or tested.
+- Windows 10 or 11, 64-bit. macOS and Linux aren't built or tested.
 - For the recommended Strata setup: a regular gaming PC with a 12 GB+ graphics card and 32 GB of RAM, plus plenty of disk space for the model.
 - Or any OpenAI-compatible server already running on your PC, like LM Studio or Ollama. In that case your hardware needs are whatever that model needs.
 - Internet for the first install and model download. After that the model and file work run locally. Web tools still need the network.

@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Md from "./Md";
 import PlanDock, { latestPlan } from "./PlanDock";
-import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Copy, Download, FolderOpen, GripVertical, Mic, Pencil, RotateCcw, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, ChevronDown, Copy, Download, FolderOpen, GripVertical, History, Mic, Pencil, RotateCcw, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Minus, Maximize2, SquarePen, Settings as Gear, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import Settings from "./Settings";
 import ChatList, { type Conv } from "./ChatList";
 import TaskTemplates, { type AppliedTemplate } from "./TaskTemplates";
@@ -21,6 +21,7 @@ import StatusItems from "./StatusItems";
 import { BrowserPeek } from "./BrowserLive";
 import QuestionCard, { AskedLine, isAsk, openQuestion } from "./Question";
 import Logo from "./Logo";
+import FolderHistory from "./FolderHistory";
 import FirstTokenCountdown, { ttftEstimate, ttftRecord } from "./FirstToken";
 import Thinking from "./Thinking";
 import { documentSyncMessage, mergeChanges, type DocumentChange } from "./documentSync";
@@ -48,9 +49,28 @@ export default function App() {
   const [sidebarPref, setSidebarPref] = useState(() => { try { return localStorage.getItem("sidebar") !== "closed"; } catch { return true; } });
   const [winW, setWinW] = useState(() => innerWidth);
   useEffect(() => { const f = () => setWinW(innerWidth); addEventListener("resize", f); return () => removeEventListener("resize", f); }, []);
+  const [maxed, setMaxed] = useState(false);
+  useEffect(() => {
+    const w = getCurrentWindow();
+    let alive = true; let un: (() => void) | undefined;
+    const sync = () => { w.isMaximized().then(v => { if (alive) setMaxed(v); }).catch(() => {}); };
+    sync();
+    w.onResized(sync).then(f => { un = f; }).catch(() => {});
+    return () => { alive = false; un?.(); };
+  }, []);
   function toggleSidebar() { setSidebarPref(v => { try { localStorage.setItem("sidebar", v ? "closed" : "open"); } catch { /* ignore */ } return !v; }); }
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [live, setLive] = useState({ text: "", thinking: "", busy: false });
+  // Agent events keep arriving for chats that are not on screen. Track which chats are running so
+  // coming back to one still shows Stop and Working instead of looking idle.
+  const [busyConvs, setBusyConvs] = useState<Set<string>>(() => new Set());
+  const markBusy = (id: string, on: boolean) => setBusyConvs(prev => {
+    if (!id || prev.has(id) === on) return prev;
+    const next = new Set(prev);
+    if (on) next.add(id); else next.delete(id);
+    return next;
+  });
+  const isBusy = live.busy || (cur !== null && busyConvs.has(cur));
   const [status, setStatus] = useState<Status>({ state: "starting", detail: "", port: 0, model: "" });
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [input, setInput] = useState("");
@@ -66,6 +86,9 @@ export default function App() {
   const [checking, setCheckingWork] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  // Very long chats are capped; the full history is one click away.
+  const [showAllMsgs, setShowAllMsgs] = useState(false);
   // The user message being edited in place, and how many chats blocked a window close.
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
   const [closeBlocked, setCloseBlocked] = useState(0);
@@ -122,10 +145,19 @@ export default function App() {
 
   const refreshCtx = (id: string) =>
     invoke<{ used: number | null; window: number }>("context_usage", { id }).then((c) => { if (curRef.current === id) setCtx(c); }).catch(() => {});
-  const refreshConvs = () => invoke<Conv[]>("list_conversations").then(setConvs).catch((e) => setErr(String(e)));
+  const [convsLoaded, setConvsLoaded] = useState(false);
+  const refreshConvs = () => invoke<Conv[]>("list_conversations")
+    .then(v => { setConvs(v); setConvsLoaded(true); })
+    .catch((e) => { setConvsLoaded(true); setErr(String(e)); });
   // Recently viewed chats stay in memory. Messages are append-only, so a reload (each tool step, or switching
   // back to a chat) fetches only rows newer than the last one held instead of the whole history.
   const chatCache = useRef(new Map<string, Msg[]>());
+  // Half-written prompts and pending queue items belong to the chat they were typed in.
+  type Draft = { input: string; files: string[]; queue: { text: string; files: string[] }[] };
+  const drafts = useRef(new Map<string, Draft>());
+  // A new, unsaved chat still needs a draft key so its text survives a switch.
+  const NEW_DRAFT = "__new__";
+  const draftKey = (id: string | null) => id ?? NEW_DRAFT;
   const exportChat = (id: string) => invoke("export_markdown", { id }).catch((e) => setErr(String(e)));
   const reload = (id: string) => {
     const after = chatCache.current.get(id)?.at(-1)?.id ?? 0;
@@ -160,6 +192,8 @@ export default function App() {
           if (ev.type === "text_delta" || ev.type === "thinking" || ev.type === "tool_request") { ttftRecord(fw.key, Date.now() - fw.t0); setFirstWait(null); }
           else if (ev.type === "stream_end" || ev.type === "error" || ev.type === "agent_exit") setFirstWait(null);
         }
+        if (ev.type === "stream_end" || ev.type === "error" || ev.type === "agent_exit") markBusy(conv, false);
+        else if (ev.type === "text_delta" || ev.type === "thinking" || ev.type === "tool_request" || ev.type === "tool_running" || ev.type === "tool_result" || ev.type === "tool_cancelled") markBusy(conv, true);
         if (conv !== curRef.current) return;
         switch (ev.type) {
           case "text_delta": setLive((l) => ({ ...l, busy: true, text: l.text + text(ev.text) })); break;
@@ -196,13 +230,16 @@ export default function App() {
 
   useEffect(() => {
     if (cur && createdHere.current === cur) { createdHere.current = null; return; }
-    setFiles([]);
-    setInput("");
-    setQueue([]);
+    const draft = drafts.current.get(draftKey(cur));
+    setFiles(draft?.files ?? []);
+    setInput(draft?.input ?? "");
+    setQueue(draft?.queue ?? []);
     setLive({ text: "", thinking: "", busy: false });
     setMsgs((cur && chatCache.current.get(cur)) || []);
     setEditing(null);
     setErr("");
+    setShowHistory(false);
+    setShowAllMsgs(false);
     setWorkspaceRequest(undefined);
     setCtx((c) => ({ ...c, used: null }));
     if (cur) { reload(cur); refreshCtx(cur); }
@@ -211,19 +248,19 @@ export default function App() {
   useEffect(() => {
     // Also polled while this chat's turn runs: the request being served is the chat's live context size,
     // so the ring stays current during long tasks instead of only after the turn ends.
-    if ((!showTps && !live.busy) || status.state !== "ready") { setTps(null); return; }
+    if ((!showTps && !isBusy) || status.state !== "ready") { setTps(null); return; }
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     async function pull() {
       try {
         const t = await invoke<{ tps: number | null; ctx: number | null }>("model_telemetry");
-        if (active) { setTps(t.tps); if (live.busy && t.ctx) setCtx((c) => ({ ...c, used: t.ctx })); }
+        if (active) { setTps(t.tps); if (isBusy && t.ctx) setCtx((c) => ({ ...c, used: t.ctx })); }
       } catch { if (active) setTps(null); }
-      if (active) timer = setTimeout(pull, 1500);
+      if (active) timer = setTimeout(pull, isBusy ? 1500 : 10000);
     }
     pull();
     return () => { active = false; clearTimeout(timer); };
-  }, [showTps, status.state, live.busy]);
+  }, [showTps, status.state, isBusy]);
 
   // Keep links in chat out of the app's document. Rust also guards top-level navigation.
   useEffect(() => {
@@ -329,12 +366,20 @@ export default function App() {
     try { return await request; } finally { if (creating.current === request) creating.current = null; }
   }
   function selectConversation(id: string | null) {
+    // Keep the draft with the chat it was typed in. Saving here uses the state from the click
+    // that navigated, not the next render's already-replaced values.
+    const from = draftKey(cur);
+    if (from !== draftKey(id)) {
+      if (input || files.length || queue.length) drafts.current.set(from, { input, files, queue });
+      else drafts.current.delete(from);
+    }
     navigation.current += 1; creating.current = null;
     curRef.current = id; setCur(id);
   }
   function newConv() {
-    if (live.busy) return;
-    selectConversation(null); setMsgs([]); setFiles([]); setInput(""); setErr(""); setWorkspaceOpen(false);
+    if (isBusy) return;
+    selectConversation(null); drafts.current.delete(NEW_DRAFT);
+    setMsgs([]); setFiles([]); setInput(""); setErr(""); setWorkspaceOpen(false);
     setWorkspaceRequest(undefined);
     taRef.current?.focus();
   }
@@ -343,13 +388,14 @@ export default function App() {
     try {
       const dir = await open({ directory: true, title: "Start a chat in a folder", defaultPath: projDir });
       if (typeof dir !== "string") return;
+      if (input || files.length || queue.length) drafts.current.set(draftKey(cur), { input, files, queue });
       navigation.current += 1; creating.current = null;
-      setFiles([]); setMsgs([]); setWorkspaceRequest(undefined);
+      setFiles([]); setInput(""); setQueue([]); setMsgs([]); setWorkspaceRequest(undefined);
       await ensureConversation(dir);
     } catch (e) { setErr(String(e)); }
   }
   async function applyTaskTemplate(templateId: string) {
-    if (live.busy || creating.current || applyingTemplate.current || checkingWork.current) return;
+    if (isBusy || creating.current || applyingTemplate.current || checkingWork.current) return;
     const epoch = navigation.current;
     applyingTemplate.current = true; setTemplateApplying(true); setErr("");
     try {
@@ -367,7 +413,7 @@ export default function App() {
     finally { applyingTemplate.current = false; setTemplateApplying(false); }
   }
   async function checkMyWork() {
-    if (live.busy || queue.length || !modelReady || checkingWork.current || creating.current || applyingTemplate.current || !curConv || curRef.current !== curConv.id) return;
+    if (isBusy || queue.length || !modelReady || checkingWork.current || creating.current || applyingTemplate.current || !curConv || curRef.current !== curConv.id) return;
     const prompt = verificationPrompt(msgs, curConv.workspace);
     if (!prompt) return;
     const epoch = navigation.current;
@@ -384,28 +430,37 @@ export default function App() {
       setInput(prompt); stick.current = true;
       setLive({ text: "", thinking: "", busy: true });
       setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
+      markBusy(id, true);
       await invoke("agent_send", { id, text: prompt });
       if (curRef.current === id) setInput("");
       await reload(id); refreshConvs(); refreshOffline(id);
     } catch (e) {
+      if (id) markBusy(id, false);
       if (epoch === navigation.current || (id && curRef.current === id)) {
         setErr(`Could not start check my work: ${String(e)}`);
         if (id && curRef.current === id) { setLive({ text: "", thinking: "", busy: false }); setFirstWait(null); }
       }
     } finally { checkingWork.current = false; setCheckingWork(false); }
   }
-  async function send(override?: string, queued?: string[]) {
-    if (applyingTemplate.current || checkingWork.current) return;
+  async function send(override?: string, queued?: string[]): Promise<boolean> {
+    if (applyingTemplate.current || checkingWork.current) return false;
     const typed = (override ?? input).trim();
     const attached = queued ?? files;
-    if ((!typed && !attached.length) || !modelReady) return;
-    if (live.busy) {
-      if (queued) return;
+    if (!typed && !attached.length) return false;
+    if (!modelReady) {
+      // Enter used to do nothing here. Say why, and keep the draft.
+      setErr(status.state === "stopped" || status.state === "error"
+        ? "The model is not running. Start it from the sidebar, then press Enter again. Your message is kept."
+        : "The model is still starting. Your message is kept; press Enter again when it is ready.");
+      return false;
+    }
+    if (isBusy) {
+      if (queued) return false;
       setQueue(q => [...q, { text: typed, files: attached }]);
       setFiles([]); if (override === undefined) setInput("");
-      return;
+      return true;
     }
-    if (typed === "/compact" && !attached.length) { setInput(""); return compact(); }
+    if (typed === "/compact" && !attached.length) { setInput(""); void compact(); return true; }
     const body = attached.length
       ? `${typed || "Please look at the attached file" + (attached.length > 1 ? "s" : "") + "."}
 
@@ -421,14 +476,21 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     setErr(""); stick.current = true;
     setLive({ text: "", thinking: "", busy: true });
     const first = !msgs.some((m) => m.role === "assistant");
+    let startedId: string | undefined;
     try {
       const id = await ensureConversation();
-      if (epoch !== navigation.current) return;
+      startedId = id;
+      if (editConv === null) drafts.current.delete(NEW_DRAFT);
+      markBusy(id, true);
+      if (epoch !== navigation.current) { markBusy(id, false); return false; }
       if (first) setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
       if (!queued) { setFiles([]); if (override === undefined) setInput(""); }
-      await invoke("agent_send", { id, text: message }); await reload(id); refreshConvs(); refreshOffline(id);
+      await invoke("agent_send", { id, text: message });
+      drafts.current.delete(id);
+      await reload(id); refreshConvs(); refreshOffline(id);
       return true;
     } catch (e) {
+      if (startedId) markBusy(startedId, false);
       if (editConv && edited.length) userEdits.current.set(editConv, new Set([...(userEdits.current.get(editConv) ?? []), ...edited]));
       if (epoch === navigation.current) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
       return false;
@@ -443,7 +505,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
   // Only the file-pane button dispatches a check. Saves, navigation, ordinary messages and
   // model recovery leave the batch alone until the user chooses to send it.
   async function checkRelated(id: string) {
-    if (curRef.current !== id || live.busy || queue.length || !modelReady || sendingRelated.current) return;
+    if (curRef.current !== id || isBusy || queue.length || !modelReady || sendingRelated.current) return;
     const changes = pendingSync.current.get(id) ?? [];
     const message = documentSyncMessage(changes);
     if (!message) return;
@@ -458,24 +520,57 @@ Attached (read with read_attachment): ${attached.join(", ")}`
       }
     } finally { sendingRelated.current = false; }
   }
+  function stopRun() {
+    if (!cur) return;
+    if (queue.length) {
+      const text = queue.map(q => q.text).filter(Boolean).join("\n\n");
+      const queuedFiles = [...new Set(queue.flatMap(q => q.files))];
+      setInput(current => (text ? (current.trim() ? `${text}\n\n${current}` : text) : current));
+      if (queuedFiles.length) setFiles(current => [...new Set([...current, ...queuedFiles])]);
+      setQueue([]);
+    }
+    invoke("agent_stop", { id: cur }).catch(e => setErr(String(e)));
+  }
   async function compact() {
-    if (!cur || live.busy || !modelReady) return;
+    if (!cur || isBusy || !modelReady) return;
     if (!msgs.some((m) => m.role === "assistant")) { setErr("Nothing to compact yet."); return; }
     setErr(""); setLive({ text: "", thinking: "", busy: true });
+    markBusy(cur, true);
     try { await invoke("agent_compact", { id: cur }); }
-    catch (e) { setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
+    catch (e) { markBusy(cur, false); setErr(String(e)); setLive({ text: "", thinking: "", busy: false }); }
   }
   useEffect(() => {
-    if (live.busy || !queue.length || status.state !== "ready") return;
+    if (isBusy || !queue.length || status.state !== "ready") return;
     const [next, ...rest] = queue;
+    const target = curRef.current;
     setQueue(rest);
-    send(next.text, next.files);
-  }, [live.busy, queue, status.state]);
+    // A failed send was dropped with only a banner. Put it back in the composer for a manual retry
+    // instead of restoring the queue, which would retry in a loop while the failure persists. If the
+    // user moved on, keep it with the chat that queued it rather than the new chat's composer.
+    void send(next.text, next.files).then(ok => {
+      if (ok) return;
+      const merge = (d?: Draft): Draft => ({
+        input: d?.input?.trim() ? `${next.text}
+
+${d.input}` : next.text,
+        files: [...new Set([...(d?.files ?? []), ...next.files])],
+        queue: d?.queue ?? [],
+      });
+      if (curRef.current !== target) {
+        if (target) drafts.current.set(target, merge(drafts.current.get(target)));
+        return;
+      }
+      setInput(current => current.trim() ? `${next.text}
+
+${current}` : next.text);
+      setFiles(current => [...new Set([...current, ...next.files])]);
+    });
+  }, [isBusy, queue, status.state]);
   // Edit and regenerate: cut the chat (and the agent's memory of it) back to before user message `m`, then
   // send `text`, or the original message again. Files the agent changed stay as they are.
   async function rewindTo(m: Msg, text?: string) {
     const id = curRef.current;
-    if (!id || live.busy || !modelReady) return;
+    if (!id || isBusy || !modelReady) return;
     setErr("");
     try {
       const original = await invoke<string>("conversation_rewind", { id, msgId: m.id });
@@ -491,6 +586,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     await invoke("delete_conversation", { id }).catch(e => setErr(String(e)));
     chatCache.current.delete(id);
     if (curRef.current === id) selectConversation(null);
+    drafts.current.delete(id);
     refreshConvs();
   }
   const keys = useRef<(e: KeyboardEvent) => void>(() => {});
@@ -519,6 +615,8 @@ Attached (read with read_attachment): ${attached.join(", ")}`
 
   const [dotCls, label] = dot[status.state] ?? dot.error;
   const mine = approvals.filter((a) => a.conv === cur);
+  const pendingByConv = approvals.reduce<Record<string, number>>((m, a) => { m[a.conv] = (m[a.conv] ?? 0) + 1; return m; }, {});
+  const otherApprovals = approvals.filter((a) => a.conv !== cur);
   const curConv = convs.find((c) => c.id === cur);
   const modelReady = status.state === "ready";
   const visuals: VisualItem[] = msgs.filter(m => m.role === "tool" && m.body?.status !== "error" && m.body?.status !== "cancelled")
@@ -548,26 +646,28 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     if (typeof path === "string") { openDocument(path); setWorkspaceRefresh(n => n + 1); }
   }, [msgs, cur]);
 
-  const blocks = group(msgs);
+  const MESSAGE_CAP = 250;
+  const visibleMsgs = showAllMsgs || msgs.length <= MESSAGE_CAP ? msgs : msgs.slice(-MESSAGE_CAP);
+  const blocks = group(visibleMsgs);
   const currentPlan = latestPlan(msgs);
   const lastUser = [...msgs].reverse().find(m => m.role === "user");
-  const canRewind = !!cur && !live.busy && modelReady;
+  const canRewind = !!cur && !isBusy && modelReady;
   const sidebarOpen = sidebarPref && winW >= (workspaceOpen && cur ? 1280 : 760);
 
   return (
     <div className="flex h-full flex-col relative z-10">
-      <div className="absolute right-0 top-0 z-40 flex h-10 items-center select-none">
+      <div className="absolute right-0 top-0 z-40 flex h-11 items-center select-none">
         <button title="Minimize" aria-label="Minimize" onClick={() => getCurrentWindow().minimize()} className="window-control"><Minus size={14} /></button>
-        <button title="Maximize or restore" aria-label="Maximize or restore" onClick={() => getCurrentWindow().toggleMaximize()} className="window-control"><Maximize2 size={12} /></button>
+        <button title={maxed ? "Restore" : "Maximize"} aria-label={maxed ? "Restore" : "Maximize"} onClick={() => getCurrentWindow().toggleMaximize()} className="window-control">{maxed ? <Copy size={12} /> : <Maximize2 size={12} />}</button>
         <button title="Close window" aria-label="Close window" onClick={() => getCurrentWindow().close()} className="window-control window-close"><X size={16} /></button>
       </div>
       <div className="flex flex-1 min-h-0">
       {dragging && <div className="fixed inset-0 z-50 grid place-items-center bg-accent/10 border-2 border-dashed border-accent pointer-events-none text-accent font-medium">Drop files to attach them</div>}
       <aside data-open={sidebarOpen} className="sidebar w-[240px] shrink-0 bg-panel border-r border-line flex flex-col">
         <div className="w-[240px] flex flex-col h-full">
-        <div className="px-4 pt-3 pb-0.5 flex items-center gap-2 text-sm font-semibold tracking-tight select-none"><Logo size={18} />LocalWORK<span title="Alpha release" className="rounded border border-accent/25 bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold leading-none tracking-wider text-accent">ALPHA</span></div>
+        <div data-tauri-drag-region className="px-4 pt-3 pb-0.5 flex items-center gap-2 text-sm font-semibold tracking-tight select-none"><Logo size={18} />LocalWORK<span title="Alpha release" className="rounded border border-accent/25 bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold leading-none tracking-wider text-accent">ALPHA</span></div>
         <div className="p-2 flex items-center gap-1">
-          <button onClick={newConv} disabled={live.busy} title="New chat (Ctrl+N)"
+          <button onClick={newConv} disabled={isBusy} title={isBusy ? "Stop the current task before starting a new chat" : "New chat (Ctrl+N)"}
             className="flex-1 flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium hover:bg-panel-2 transition-colors">
             <SquarePen size={16} className="text-muted" />
             New chat
@@ -575,7 +675,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
           <button onClick={toggleSidebar} title="Collapse chats (Ctrl+B)" aria-label="Collapse chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel-2 hover:text-ink transition-colors"><PanelLeftClose size={16} /></button>
         </div>
         <ChatList convs={convs} cur={cur} searchRef={searchRef} onSelect={selectConversation} onExport={exportChat}
-          onDelete={deleteChat} onChanged={refreshConvs} onError={setErr} />
+          onDelete={deleteChat} onChanged={refreshConvs} onError={setErr} pending={pendingByConv} loaded={convsLoaded} />
         <div className="px-3 py-3 flex items-center gap-3 text-sm" title={status.detail || label}>
           <span className="grid place-items-center w-8 h-8 rounded-full bg-panel-2 shrink-0 relative">
             <span className="font-medium">L</span><span className={"absolute bottom-0 right-0 w-2.5 h-2.5 border-2 border-panel rounded-full " + dotCls} />
@@ -591,13 +691,21 @@ Attached (read with read_attachment): ${attached.join(", ")}`
         <header data-tauri-drag-region className={"flex items-center gap-2 pl-3 h-11 text-sm shrink-0 " + (workspaceOpen && cur ? "pr-4" : "pr-36")} >
           {!sidebarOpen && <button onClick={toggleSidebar} title="Show chats (Ctrl+B)" aria-label="Show chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink transition-colors shrink-0"><PanelLeftOpen size={16} /></button>}
           <span className="truncate text-muted pointer-events-none">{curConv?.title}</span>
+          {otherApprovals.length > 0 && (
+            <button onClick={() => { const c = otherApprovals[0].conv; if (c) selectConversation(c); }}
+              title="A run in another chat is waiting for your answer" aria-label={`${otherApprovals.length} approvals waiting in another chat`}
+              className="shrink-0 inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-xs text-gold hover:bg-gold/20">
+              <ShieldAlert size={12} />{otherApprovals.length}
+            </button>
+          )}
           {cur && <button onClick={() => exportChat(cur)} title="Export as Markdown" aria-label="Export as Markdown" className="ml-auto shrink-0 grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel hover:text-ink"><Download size={16} /></button>}
           {(offline.global || offline.chat) && <span title={offline.global ? "Offline mode is on in Settings" : "This chat is kept offline"} className="shrink-0 rounded-full border border-line px-2 py-0.5 text-xs text-muted">Offline</span>}
+          {cur && <button onClick={() => setShowHistory(true)} aria-label="Folder history" title="Folder history and undo points" className="shrink-0 grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel"><History size={16} /></button>}
           {cur && <button onClick={() => setWorkspaceOpen(!workspaceOpen)} aria-label="Files & visuals" title="Files" aria-expanded={workspaceOpen} className="shrink-0 inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted hover:bg-panel"><PanelRight size={16} />Files</button>}
         </header>
-        <div className={"flex flex-col flex-1 min-h-0 " + (!msgs.length && !live.busy ? "justify-center pb-[10vh]" : "")}>
-            <div className={"relative min-h-0 " + (msgs.length || live.busy ? "flex-1" : "h-20 shrink-0")}>
-            <div ref={scrollRef} onScroll={onScroll} className={"absolute inset-0 " + (msgs.length || live.busy ? "overflow-auto" : "overflow-hidden")}>
+        <div className="flex flex-col flex-1 min-h-0">
+            <div className="relative min-h-0 flex-1">
+            <div ref={scrollRef} onScroll={onScroll} className="absolute inset-0 overflow-auto">
               <div className={"mx-auto max-w-3xl px-6 py-6 space-y-5"}>
                 {cur && offline.chat && !offline.global && !offline.kept && (
                   <div role="status" className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-sm">
@@ -606,7 +714,11 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                     <button onClick={() => { const id = cur; invoke("chat_offline_set", { conv: id, on: false }).then(() => refreshOffline(id)).catch(e => setErr(String(e))); }} className="rounded-lg bg-accent text-accent-fg px-2.5 py-1 text-xs">Allow internet</button>
                   </div>
                 )}
-                {msgs.length === 0 && !live.busy && <h1 className="flex items-center justify-center gap-3 text-2xl tracking-tight"><Logo size={30} />What should we work on?</h1>}
+                {msgs.length > visibleMsgs.length && (
+                  <button onClick={() => setShowAllMsgs(true)} className="mx-auto block rounded-full border border-line px-3 py-1 text-xs text-muted hover:border-accent hover:text-ink">
+                    Show {msgs.length - visibleMsgs.length} earlier messages
+                  </button>
+                )}
                 {blocks.map((g, i) => g.kind === "tools"
                   ? <ToolGroup key={g.items[0].id} items={g.items} />
                   : editing?.id === g.m.id
@@ -616,18 +728,23 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                         canAct={canRewind} offline={offline.global || offline.chat}
                         onEdit={g.m.role === "user" ? () => setEditing({ id: g.m.id, text: text(g.m.body?.text) }) : undefined}
                         onRegenerate={i === blocks.length - 1 && g.m.role === "assistant" && lastUser ? () => rewindTo(lastUser) : undefined} />)}
-                {!live.busy && curConv && verificationPrompt(msgs, curConv.workspace) && <button onClick={checkMyWork} disabled={!modelReady || !!queue.length || checking} title="Start an independent check in a new chat"
+                {!isBusy && curConv && verificationPrompt(msgs, curConv.workspace) && <button onClick={checkMyWork} disabled={!modelReady || !!queue.length || checking} title="Start an independent check in a new chat"
                   className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs text-muted hover:border-accent hover:text-ink disabled:opacity-40"><Check size={13} />Check my work</button>}
                 {live.thinking && <Thinking text={live.thinking} />}
                 {live.text && <Assistant offline={offline.global || offline.chat}>{live.text}</Assistant>}
-                {live.busy && !live.text && !live.thinking && mine.length === 0 && firstWait?.conv === cur && <FirstTokenCountdown start={firstWait.t0} estimate={firstWait.est} />}
-                {live.busy && !live.text && mine.length === 0 && firstWait?.conv !== cur && (
+                {isBusy && !live.text && !live.thinking && mine.length === 0 && firstWait?.conv === cur && <FirstTokenCountdown start={firstWait.t0} estimate={firstWait.est} />}
+                {isBusy && !live.text && mine.length === 0 && firstWait?.conv !== cur && (
                   <div className="flex items-center gap-2 text-muted text-sm"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" /> Working…</div>
                 )}
                 {mine.map((a) => <ApprovalCard key={a.call_id} a={a} answer={answer} />)}
                 <div ref={endRef} />
               </div>
             </div>
+            {msgs.length === 0 && !isBusy && (
+              <div className="pointer-events-none absolute inset-0 grid place-items-center px-6">
+                <h1 className="flex items-center justify-center gap-3 text-2xl tracking-tight"><Logo size={30} />What should we work on?</h1>
+              </div>
+            )}
             {!atBottom && (
               <button onClick={jumpToLatest} title="Jump to latest"
                 className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 rounded-full border border-line bg-card shadow-md px-3 py-1.5 text-xs hover:border-accent">
@@ -639,14 +756,19 @@ Attached (read with read_attachment): ${attached.join(", ")}`
             <div className="@container shrink-0 px-6 pb-4">
               <div className="relative mx-auto max-w-3xl">
                 {cur && !workspaceOpen && browserTick > 0 && <BrowserPeek key={cur} id={cur} tick={browserTick} onOpen={() => { setWorkspaceRequest({ browser: true, nonce: Date.now() }); setWorkspaceOpen(true); }} />}
-                {cur && <PlanDock plan={currentPlan} busy={live.busy && currentPlan?.currentTurn !== false} />}
-                {cur && (() => { const q = openQuestion(msgs); return q && <QuestionCard q={q} canSend={modelReady} busy={live.busy} onAnswer={(t) => send(t)} />; })()}
+                {cur && <PlanDock plan={currentPlan} busy={isBusy && currentPlan?.currentTurn !== false} />}
+                {cur && (() => { const q = openQuestion(msgs); return q && <QuestionCard q={q} canSend={modelReady} busy={isBusy} onAnswer={(t) => send(t)} />; })()}
                 {queue.length > 0 && (
                   <QueueList queue={queue} setQueue={setQueue}
-                    onEdit={q => { setQueue(x => x.filter(y => y !== q)); setInput(q.text); setFiles(f => [...f, ...q.files]); taRef.current?.focus(); }} />
+                    onEdit={q => {
+                      setQueue(x => x.filter(y => y !== q));
+                      setInput(current => current.trim() ? `${q.text}\n\n${current}` : q.text);
+                      setFiles(current => [...new Set([...current, ...q.files])]);
+                      taRef.current?.focus();
+                    }} />
                 )}
                 {err && <div role="alert" className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
-                <TaskTemplates prompt={input} workspace={curConv?.workspace} attachments={files} disabled={live.busy || templateApplying || tidying}
+                <TaskTemplates prompt={input} workspace={curConv?.workspace} attachments={files} disabled={isBusy || templateApplying || tidying}
                   onApply={applyTaskTemplate} />
                 <fieldset disabled={templateApplying || checking} className="@container rounded-2xl border border-line composer-box bg-card shadow-sm focus-within:border-accent transition-colors">
                   {files.length > 0 && (
@@ -664,12 +786,12 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                       if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
                       else if (e.key === "ArrowUp" && !input && !files.length && canRewind && lastUser) { e.preventDefault(); setEditing({ id: lastUser.id, text: text(lastUser.body?.text) }); }
                     }}
-                    placeholder={live.busy ? "Type to queue a message…" : "Ask for something…"} aria-label="Message"
+                    placeholder={isBusy ? "Type to queue a message…" : "Ask for something…"} aria-label="Message"
                     className="w-full min-h-16 resize-none bg-transparent px-4 pt-4 pb-2 outline-none placeholder:text-muted" />
                   <div className="flex items-center justify-between gap-2 px-3 pb-2">
                     <div className="flex items-center gap-1 min-w-0 [&>button]:shrink-0">
                     <button onClick={pickFiles} title="Attach files" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel"><Paperclip size={17} /></button>
-                    <button onClick={chooseFolder} disabled={live.busy} title="Start a chat in a folder" aria-label="Start a chat in a folder" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel disabled:opacity-30"><FolderOpen size={17} /></button>
+                    <button onClick={chooseFolder} disabled={isBusy} title="Start a chat in a folder" aria-label="Start a chat in a folder" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel disabled:opacity-30"><FolderOpen size={17} /></button>
                     {curConv && <button onClick={() => invoke("open_workspace", { id: cur }) .catch(e => setErr(String(e)))} title={curConv.workspace} className="hidden @min-[26rem]:block text-xs text-muted truncate max-w-36 hover:text-ink">{baseName(curConv.workspace) === curConv.id ? "Outputs" : baseName(curConv.workspace)}</button>}
                     <button onClick={toggleEdits} title={autoEdit ? "Automatic mode on" : "Automatic mode off"} aria-label={autoEdit ? "Automatic mode on" : "Automatic mode off"} aria-pressed={autoEdit} className={"p-2 rounded-lg hover:bg-panel " + (autoEdit ? "text-accent" : "text-muted")}>
                       {autoEdit ? <Check size={15} /> : <ShieldAlert size={15} />}
@@ -677,10 +799,10 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                     </div>
                     <div className="flex items-center justify-end gap-1.5 min-w-0 flex-1">
                     <div className="hidden @min-[38rem]:block"><StatusItems /></div>
-                    <ModeSwitcher ready={modelReady} state={status.state} running={live.busy} onKey={(k) => { modeKey.current = k; }} onError={setErr} />
-                    {cur && <ContextRing used={ctx.used} window={ctx.window} busy={live.busy} onCompact={compact} />}
+                    <ModeSwitcher ready={modelReady} state={status.state} running={isBusy} onKey={(k) => { modeKey.current = k; }} onError={setErr} />
+                    {cur && <ContextRing used={ctx.used} window={ctx.window} busy={isBusy} onCompact={compact} />}
                     {showTps && <span data-testid="composer-tps" title="Generation speed · current or last reply" className="hidden @min-[30rem]:inline text-[11px] tabular-nums text-muted whitespace-nowrap">{tps == null ? "—" : tps.toFixed(1)} tok/s</span>}
-                    {input.trim().length > 20 && !live.busy && (
+                    {input.trim().length > 20 && !isBusy && (
                       <button onClick={tidy} disabled={tidying || !modelReady} title="Ask the model to turn this into a clear request"
                         className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted hover:bg-panel disabled:opacity-40">
                         <Sparkles size={14} className={tidying ? "animate-pulse" : ""} />
@@ -693,14 +815,14 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                         (voice.recording ? "bg-red-500 text-white animate-pulse" : voice.busy ? "bg-panel text-muted animate-pulse" : "text-muted hover:bg-panel")}>
                       <Mic size={16} />
                     </button>
-                    {live.busy && (input.trim() || files.length) ? (
+                    {isBusy && (input.trim() || files.length) ? (
                       <button onClick={() => send()} title="Queue: sends when the current step finishes"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-accent-fg hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
-                    ) : live.busy ? (
-                      <button onClick={() => invoke("agent_stop", { id: cur })} title="Stop"
+                    ) : isBusy ? (
+                      <button onClick={stopRun} title="Stop"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-ink text-bg"><Square size={12} fill="currentColor" /></button>
                     ) : (
-                      <button onClick={() => send()} disabled={(!input.trim() && !files.length) || !modelReady} title={modelReady ? "Send" : "Waiting for the model"}
+                      <button onClick={() => send()} disabled={(!input.trim() && !files.length) || !modelReady} title={modelReady ? "Send" : status.state === "stopped" || status.state === "error" ? "Start the model first" : "Model is starting"}
                         className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-accent-fg disabled:opacity-30 hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
                     )}
                     </div>
@@ -710,7 +832,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
             </div>
         </div>
       </main>
-    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} browserTick={browserTick} activity={activity} canSend={modelReady} relatedChanges={pendingSync.current.get(cur)?.length ?? 0} canCheckRelated={modelReady && !live.busy && !queue.length} onCheckRelated={() => checkRelated(cur)} onSend={t => send(t)} onUserEdit={(p, change) => savedDocument(cur, p, change)} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
+    {cur && workspaceOpen && <Workspace key={cur} id={cur} refresh={workspaceRefresh} visuals={visuals} requested={workspaceRequest} browserTick={browserTick} activity={activity} canSend={modelReady} relatedChanges={pendingSync.current.get(cur)?.length ?? 0} canCheckRelated={modelReady && !isBusy && !queue.length} onCheckRelated={() => checkRelated(cur)} onSend={t => send(t)} onUserEdit={(p, change) => savedDocument(cur, p, change)} onClose={() => setWorkspaceOpen(false)} onDraft={draft} />}
       </div>
     {closeBlocked > 0 && (
       <div className="fixed inset-0 z-50 grid place-items-center bg-black/30" onClick={() => setCloseBlocked(0)}>
@@ -726,6 +848,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
         </div>
       </div>
     )}
+    {showHistory && cur && <FolderHistory id={cur} onClose={() => setShowHistory(false)} onRestored={() => setWorkspaceRefresh(n => n + 1)} />}
     {wizard && <Wizard onDone={() => setWizard(false)} />}
     {showSettings && <Settings status={status} showTps={showTps} onShowTps={setShowTps} onClose={() => setShowSettings(false)} />}
     </div>

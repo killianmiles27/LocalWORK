@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Set from the "web access" choice; policy.rs denies the web tools while this is true.
 pub static WEB_OFF: AtomicBool = AtomicBool::new(false);
@@ -276,9 +276,19 @@ pub fn offline_get() -> bool {
 }
 
 #[tauri::command(async)]
-pub fn set_offline(s: State<App>, on: bool) {
+pub fn set_offline(app: AppHandle, s: State<App>, on: bool) {
     OFFLINE.store(on, Ordering::SeqCst);
     crate::store::kv_set(&s.db.guard(), "offline", if on { "1" } else { "0" });
+    // The dev Codex bridge is cloud inference. Turn it off with offline mode instead of leaving
+    // prompts going out behind an "offline" label.
+    if on && crate::dev::disconnect_for_offline(&app, &s) {
+        let _ = app.emit("model-status", crate::strata::Status {
+            state: "stopped".into(),
+            detail: "Offline mode stopped the developer backend".into(),
+            port: 0,
+            model: String::new(),
+        });
+    }
 }
 
 /// `chat`: this chat ran offline and is still kept offline. `global`: offline mode is on.

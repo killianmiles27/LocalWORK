@@ -76,13 +76,6 @@ fn unchanged_files_reuse_immutable_snapshot_contents_not_workspace_inodes() {
     let b = f.snapshot();
     assert_ne!(a.id, b.id);
     assert_eq!(a.files[0].hash, b.files[0].hash);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let x = fs::metadata(f.dir(&a.id).join("files").join(&a.files[0].hash)).unwrap();
-        let y = fs::metadata(f.dir(&b.id).join("files").join(&b.files[0].hash)).unwrap();
-        assert_eq!(x.ino(), y.ino(), "the test filesystem supports hardlinks");
-    }
     fs::write(f.ws.join("a.txt"), "evil").unwrap();
     restore_at(&f.data, &f.ws, "chat", &a.id, false).unwrap();
     assert_eq!(fs::read_to_string(f.ws.join("a.txt")).unwrap(), "same");
@@ -185,44 +178,6 @@ fn manifest_traversal_absolute_and_portable_windows_paths_are_refused_before_any
     assert!(restore_at(&f.data, &f.ws, "chat", "../escape", false).is_err());
 }
 
-#[cfg(unix)]
-#[test]
-fn symlinks_are_skipped_and_restore_refuses_existing_symlink_ancestors_and_leaves() {
-    use std::os::unix::fs::symlink;
-    let f = Fixture::new();
-    let outside = f.base.join("outside");
-    fs::create_dir(&outside).unwrap();
-    fs::write(outside.join("secret"), "outside").unwrap();
-    symlink(&outside, f.ws.join("escape")).unwrap();
-    fs::create_dir(f.ws.join("sub")).unwrap();
-    fs::write(f.ws.join("sub/a"), "old").unwrap();
-    let s = f.snapshot();
-    assert_eq!(s.files.len(), 1);
-    assert!(s.skipped.iter().any(|s| s.path == "escape"));
-    fs::remove_dir_all(f.ws.join("sub")).unwrap();
-    symlink(&outside, f.ws.join("sub")).unwrap();
-    assert!(restore_at(&f.data, &f.ws, "chat", &s.id, false).is_err());
-    assert!(!outside.join("a").exists());
-    fs::remove_file(f.ws.join("sub")).unwrap();
-    fs::create_dir(f.ws.join("sub")).unwrap();
-    symlink(outside.join("secret"), f.ws.join("sub/a")).unwrap();
-    assert!(restore_at(&f.data, &f.ws, "chat", &s.id, false).is_err());
-    assert_eq!(
-        fs::read_to_string(outside.join("secret")).unwrap(),
-        "outside"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn redirected_snapshot_store_is_refused_before_writing_inside_workspace() {
-    use std::os::unix::fs::symlink;
-    let f = Fixture::new();
-    symlink(&f.ws, f.data.join("workspace-snapshots")).unwrap();
-    assert!(create_at(&f.data, &f.ws, "chat").is_err());
-    assert_eq!(fs::read_dir(&f.ws).unwrap().count(), 0);
-}
-
 #[test]
 fn total_byte_cap_records_files_even_when_individually_small_enough() {
     let f = Fixture::new();
@@ -318,4 +273,29 @@ fn failed_snapshot_cleans_staging_and_never_publishes_a_partial_manifest() {
     assert!(f.list().iter().all(|r| !r.id.starts_with('.')));
     assert!(restore_at(&f.data, &f.ws, "chat", ".partial-interrupted", false).is_err());
     assert!(restore_at(&f.data, &f.ws, "chat", &s.id, false).is_err());
+}
+
+/// Windows junctions are reparse points. They must be listed as skipped and never traversed, so a
+/// folder that links outside the workspace cannot leak file contents into a snapshot or restore.
+#[cfg(windows)]
+#[test]
+fn windows_junctions_are_skipped_and_never_followed() {
+    let f = Fixture::new();
+    let outside = f.base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("secret.txt"), "do not capture").unwrap();
+    let link = f.ws.join("linked");
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&outside)
+        .status()
+        .unwrap();
+    assert!(status.success(), "could not create a junction");
+    fs::write(f.ws.join("real.txt"), "ok").unwrap();
+
+    let snap = f.snapshot();
+    assert!(snap.files.iter().all(|r| r.path != "linked/secret.txt"), "junction contents must not be captured");
+    assert!(snap.skipped.iter().any(|s| s.path == "linked" && s.reason.contains("reparse")), "the junction itself must be recorded as skipped");
+    assert!(snap.files.iter().any(|r| r.path == "real.txt"));
 }

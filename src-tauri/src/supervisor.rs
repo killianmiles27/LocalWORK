@@ -1,7 +1,6 @@
 //! Process containment: one Job Object (KILL_ON_JOB_CLOSE) holds the host and everything it spawns,
 //! every child is started with CREATE_NO_WINDOW, and pids.json lets the next start clean up after a crash.
-//! On Linux each child leads its own process group, so kill_tree takes the whole group; the app's exit
-//! handler stops children, and pids.json covers a crashed host on the next start.
+//! The app's exit handler stops children, and pids.json covers a crashed host on the next start.
 use crate::sync::LockExt;
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
@@ -45,20 +44,9 @@ pub fn init_job() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(windows))]
-pub fn init_job() -> Result<(), String> {
-    Ok(())
-}
-
 #[cfg(windows)]
 pub fn hidden(cmd: &mut Command) -> &mut Command {
     cmd.creation_flags(CREATE_NO_WINDOW)
-}
-
-#[cfg(unix)]
-pub fn hidden(cmd: &mut Command) -> &mut Command {
-    use std::os::unix::process::CommandExt;
-    cmd.process_group(0)
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -81,27 +69,12 @@ pub fn image_path(pid: u32) -> Option<String> {
     }
 }
 
-#[cfg(unix)]
-pub fn image_path(pid: u32) -> Option<String> {
-    std::fs::read_link(format!("/proc/{pid}/exe")).ok().map(|p| p.to_string_lossy().into_owned())
-}
-
 #[cfg(windows)]
 pub fn kill_tree(pid: u32) {
     let mut c = Command::new("taskkill");
     c.args(["/PID", &pid.to_string(), "/T", "/F"]);
     hidden(&mut c);
     let _ = c.output();
-}
-
-/// Children started through `hidden` lead their own process group, so the group id is the pid.
-#[cfg(unix)]
-pub fn kill_tree(pid: u32) {
-    if pid == 0 {
-        return;
-    }
-    let _ = Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).output();
-    let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).output();
 }
 
 fn read_pids(path: &Path) -> Vec<PidRec> {

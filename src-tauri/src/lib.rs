@@ -1,4 +1,5 @@
 mod agent;
+mod dev;
 mod download;
 mod engine;
 mod documents;
@@ -501,6 +502,7 @@ fn shutdown(state: &App) {
         a.shutdown();
     }
     close_browsers();
+    dev::shutdown();
     strata::stop(None, &state.strata);
     let _ = std::fs::write(paths::data_dir().join("pids.json"), "[]");
     eprintln!("shutdown complete in {:?}", t0.elapsed());
@@ -562,6 +564,9 @@ pub fn run() {
             };
             setup::init(&state.db);
             app.manage(state);
+            // A saved dev Codex bridge has to be listening before the model status is polled, but a
+            // slow or failed start must not delay the window. The status poll retries for a minute.
+            std::thread::spawn(dev::ensure_at_launch);
             // Start the model as soon as the app opens; the status pill follows it.
             let handle = app.handle().clone();
             let st = app.state::<App>().strata.clone();
@@ -581,7 +586,8 @@ pub fn run() {
             documents::document_revisions, documents::document_export,
             snapshots::workspace_snapshots_list, snapshots::workspace_snapshot_restore, snapshots::workspace_snapshots_cleanup,
             documents::document_save_visual, documents::document_save, documents::document_office_edit,
-            setup::hardware_check, setup::set_strata_root, setup::probe_model_server, setup::set_model_server, setup::use_own_strata, setup::set_model_config, setup::set_web_access, updates::app_update_check, updates::app_update_install, updates::auto_update_get, updates::auto_update_set, setup::offline_get, setup::set_offline, setup::chat_offline_get, setup::chat_offline_set, setup::strata_update_check, setup::strata_update_apply, setup::python_for_tools, setup::set_workbench_python,
+            setup::hardware_check, setup::set_strata_root, setup::probe_model_server, setup::set_model_server, setup::use_own_strata, setup::set_model_config, setup::set_web_access,
+            dev::dev_backend_state, dev::dev_backend_enable, dev::dev_backend_disable, updates::app_update_check, updates::app_update_install, updates::auto_update_get, updates::auto_update_set, setup::offline_get, setup::set_offline, setup::chat_offline_get, setup::chat_offline_set, setup::strata_update_check, setup::strata_update_apply, setup::python_for_tools, setup::set_workbench_python,
             rollback::rollback_list,
             rollback::rollback_to,
             model_status,

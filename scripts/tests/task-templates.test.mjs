@@ -21,6 +21,8 @@ function harness() {
     refreshConvs() {}, reload() {}, refreshCtx() {},
     taRef: { current: { focus() {} } },
   };
+  // App derives isBusy from live.busy plus the per-chat set; the handler reads the derived value.
+  Object.defineProperty(scope, "isBusy", { get: () => scope.live.busy });
   for (const [setter, key] of Object.entries({ setInput: "input", setFiles: "files", setMsgs: "msgs", setQueue: "queue", setErr: "error", setLive: "live", setEditing: "editing", setWorkspaceRequest: "request", setCtx: "ctx", setWorkspaceOpen: "workspaceOpen", setTemplateApplying: "applying" })) {
     scope[setter] = value => { state[key] = typeof value === "function" ? value(state[key] ?? {}) : value; };
   }

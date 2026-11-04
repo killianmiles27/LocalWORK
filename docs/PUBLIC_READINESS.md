@@ -1,5 +1,7 @@
 # Public-readiness audit
 
+> Scope update after v0.1.5: Linux is no longer supported. The app, installer, CI and documentation now target Windows x64 only, and the Linux packages and workflows were removed. References to Linux below are kept as a record of the earlier audit.
+
 ## v0.1.5 update — 23 October 2026
 
 Linux ships in v0.1.5. The `glib`/`zbus` advisory findings previously described below as outside the Windows target tree now apply to the Linux builds; the Windows-only dismissal does not cover them. This update has not re-run the dependency audit or checked advisory reachability in the Linux builds. A clean Linux desktop installation and live-model workflow remain unverified, as noted in the v0.1.5 release notes.

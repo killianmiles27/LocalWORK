@@ -30,50 +30,22 @@ Unsigned local development uses `npm run tauri -- build --no-bundle` and does no
 
 The supported updater download is a signed Windows installer EXE. ZIP updater extraction is disabled, removing an unused vulnerable dependency. Do not publish ZIP update artifacts or enable that feature without reviewing its dependency advisories.
 
-## Linux packages
+## Windows installer
 
-The Linux build workflow (`.github/workflows/linux-release.yml`) builds unsigned AppImage, deb and rpm packages on Ubuntu 22.04 for every push to `main`, or on demand from the Actions tab. It checks that the bundled tools keep their executable bit and uses no secrets. Download its `linux-bundles` artifact with `gh run download <run id> -n linux-bundles`, then sign the AppImage on the trusted machine:
-
-```bash
-npx tauri signer sign -f <path to the private key> LocalWORK_<version>_amd64.AppImage
-```
-
-That writes `LocalWORK_<version>_amd64.AppImage.sig`. Add a `linux-x86_64` entry to latest.json whose URL is the AppImage and whose signature is the content of that file. Deb and rpm installs do not self-update. Put the deb's SHA-256 into `packaging/arch/PKGBUILD` (`sha256sums`) and the version into `pkgver`, then attach the PKGBUILD to the release before running the publish workflow.
-
-The packages are large, so let GitHub copy them into the release instead of uploading them from your machine. After the release exists, run:
-
-```bash
-gh workflow run linux-publish.yml -f run_id=<run id> -f tag=v<version>
-```
-
-`.github/workflows/linux-publish.yml` downloads that run's `linux-bundles` artifact and the release's PKGBUILD, then uploads the AppImage, deb, rpm, PKGBUILD and `SHA256SUMS`. If a Windows run is supplied, its installer is included too. Use the same run whose AppImage you signed: a rebuilt AppImage has different bytes and the signature would not match. The job also prints the SHA-256 of each file, so you can compare it with the AppImage you signed. Upload the `.sig` and latest.json yourself. The checksum file does not cover signatures, latest.json, plugins or other manually attached assets.
-
-Download `SHA256SUMS` and the covered assets into the same directory, then run `sha256sum -c SHA256SUMS`. This checks their bytes against the checksum file; it does not authenticate the file or replace updater signature verification.
-
-The publish job also creates GitHub provenance attestations for the AppImage, deb, rpm, PKGBUILD, `SHA256SUMS`, and optional Windows installer. Verify each downloaded file, for example:
-
-```bash
-gh attestation verify LocalWORK_<version>_amd64.AppImage -R killianmiles27/LocalWORK
-```
-
-These attestations identify the **publish workflow**, which copies artifacts from separate Linux and Windows build runs and downloads the locally prepared PKGBUILD; they do not attest how those artifacts were built. The Windows workflow uploads a CI artifact, not release assets, so the publish job attests the installer when included. Signatures, latest.json and plugins attached separately are not covered by this job's attestations. Attestations do not replace updater signatures.
-
-## Windows installer from any machine
-
-The Windows build workflow (`.github/workflows/windows-release.yml`) builds the unsigned NSIS installer on a GitHub Windows runner, for every push to `main` or on demand. It fetches the pinned tools, builds the patched agent, installs the web libraries for Python 3.11 to 3.14 (`install-mcp-libs.ps1 -PythonVersions`, so no Strata is needed on the runner), and checks the installer contains the bundled tools. It uses no secrets, so you can release Windows from a Linux machine:
+The Windows build workflow (`.github/workflows/windows-release.yml`) builds the unsigned NSIS installer on a GitHub Windows runner, for every push to `main` or on demand. It fetches the pinned tools, builds the patched agent, installs the web libraries for Python 3.11 to 3.14 (`install-mcp-libs.ps1 -PythonVersions`, so no Strata is needed on the runner), and checks the installer contains the bundled tools. It uses no secrets, so the installer can be built on a GitHub runner:
 
 ```bash
 gh run download <windows run id> -n windows-installer
 npx tauri signer sign -f <path to the private key> LocalWORK_<version>_x64-setup.exe
 ```
 
-Add a `windows-x86_64` entry to latest.json whose URL is the installer and whose signature is the content of the `.sig`. Then pass the same run to the publish workflow, which copies the installer into the release next to the Linux packages:
+Add a `windows-x86_64` entry to latest.json whose URL is the installer and whose signature is the content of the `.sig`. Then pass the same run to the publish workflow, which copies the installer into the release:
 
 ```bash
-gh workflow run linux-publish.yml -f run_id=<linux run id> -f windows_run_id=<windows run id> -f tag=v<version>
+gh workflow run publish.yml -f run_id=<windows run id> -f tag=v<version>
 ```
 
-As with the AppImage, sign the installer from the same run you publish. Before a release, also install it on a real Windows PC or test account; the build checks do not run the app.
+Sign the installer from the same run you publish. Before a release, also install it on a real Windows PC or test account; the build checks do not run the app.
 
 ## Publish deliberately
 
@@ -90,10 +62,6 @@ The installer is the plain app with no plugins. Plugins ship as separate assets:
     "windows-x86_64": {
       "signature": "CONTENTS OF THE GENERATED SIGNATURE FILE",
       "url": "https://github.com/OWNER/REPOSITORY/releases/download/v0.1.0/INSTALLER.exe"
-    },
-    "linux-x86_64": {
-      "signature": "CONTENTS OF THE APPIMAGE SIGNATURE FILE",
-      "url": "https://github.com/OWNER/REPOSITORY/releases/download/v0.1.0/LocalWORK_0.1.0_amd64.AppImage"
     }
   }
 }

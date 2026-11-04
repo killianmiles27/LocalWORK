@@ -9,7 +9,7 @@
   --color-card: #faf8f3;
   --color-line: #dedacc;
   --color-ink: #22212b;
-  --color-muted: #7a778a;
+  --color-muted: #625f70;
   --color-accent: #3a47c4;
   --color-accent-dark: #2f3aa6;
   --color-accent-fg: #ffffff;
@@ -50,6 +50,7 @@ body { background: var(--color-bg); color: var(--color-ink); font-family: var(--
 * { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
+button:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .workspace-panel { width: 48vw; min-width: 360px; max-width: 900px; }
 @media (max-width: 1000px) { .workspace-panel { width: 50vw; } }
 .pane-resizer { position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 30; touch-action: none; }
@@ -69,7 +70,7 @@ button:disabled { cursor: default; }
 .prose :where(pre) { background: var(--color-panel); color: var(--color-ink); border: 1px solid var(--color-line); border-radius: 10px; }
 .prose :where(p, ul, ol) { margin-top: .6em; margin-bottom: .6em; }
 
-.window-control { width: 46px; height: 40px; display: grid; place-items: center; color: var(--color-muted); }
+.window-control { width: 46px; height: 44px; display: grid; place-items: center; color: var(--color-muted); }
 .window-control:hover { background: var(--color-panel-2); color: var(--color-ink); }
 .window-close:hover { background: #c42b1c; color: white; }
 
