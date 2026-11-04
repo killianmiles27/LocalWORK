@@ -274,3 +274,28 @@ fn failed_snapshot_cleans_staging_and_never_publishes_a_partial_manifest() {
     assert!(restore_at(&f.data, &f.ws, "chat", ".partial-interrupted", false).is_err());
     assert!(restore_at(&f.data, &f.ws, "chat", &s.id, false).is_err());
 }
+
+/// Windows junctions are reparse points. They must be listed as skipped and never traversed, so a
+/// folder that links outside the workspace cannot leak file contents into a snapshot or restore.
+#[cfg(windows)]
+#[test]
+fn windows_junctions_are_skipped_and_never_followed() {
+    let f = Fixture::new();
+    let outside = f.base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("secret.txt"), "do not capture").unwrap();
+    let link = f.ws.join("linked");
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&outside)
+        .status()
+        .unwrap();
+    assert!(status.success(), "could not create a junction");
+    fs::write(f.ws.join("real.txt"), "ok").unwrap();
+
+    let snap = f.snapshot();
+    assert!(snap.files.iter().all(|r| r.path != "linked/secret.txt"), "junction contents must not be captured");
+    assert!(snap.skipped.iter().any(|s| s.path == "linked" && s.reason.contains("reparse")), "the junction itself must be recorded as skipped");
+    assert!(snap.files.iter().any(|r| r.path == "real.txt"));
+}

@@ -40,7 +40,9 @@ npm run dev:bridge
 ```
 
 The standalone form is useful for a release build, where the Developer card is hidden unless you set
-`LOCALWORK_DEV_CODEX=1` or point `LOCALWORK_CODEX_BRIDGE` at the script.
+`LOCALWORK_DEV_CODEX=1` or point `LOCALWORK_CODEX_BRIDGE` at the script. `npm run dev:bridge` starts
+without an API key so it is easy to try; it prints a warning, accepts only loopback `Host` headers,
+and should be stopped when you are done. The in-app card always generates a per-launch key.
 
 To keep experiments away from your real chats, launch the app with an isolated data folder:
 
@@ -51,13 +53,25 @@ npm run tauri -- dev
 
 ## Limits
 
-- **Offline mode is refused.** Connect fails while offline mode is on, because the traffic goes to
-  OpenAI. Turning offline mode on after connecting does not stop an already-running chat; disconnect.
+- **Offline mode is refused, and it disconnects the bridge.** Connect fails while offline mode is
+  on. Turning offline mode on later stops the bridge and the running model, and restores the Strata
+  setting, so no prompt keeps going to OpenAI behind an "offline" label.
 - **Not a local-model test.** Tool calling and streaming are translated by the bridge, so a bug you
   see may be in the translation rather than the app. Compaction uses the generic checkpoint path
   (the bridge deliberately does not advertise Strata's native compaction capability).
 - **Switching modes disconnects.** Saving a Strata model profile or choosing a mode sets
-  `modelSource` back to `strata`. Reconnect from the Developer card afterwards.
+  `modelSource` back to `strata`. Reconnect from the Developer card afterwards. **Disconnect**
+  restores the port, key, context and source that were in use before you connected.
+- **Auto-start is a debug-build convenience.** A debug build restarts a saved bridge when the app
+  opens. A release build does not, even if a saved record exists; it only starts one when you press
+  Connect, or when `LOCALWORK_DEV_CODEX` is set. A released binary with no such opt-in never sends
+  anything by itself.
+- **Connecting is refused while a reply is running.** Stop the turn first; both Connect and
+  Disconnect shut down running agents.
+- **The bridge presents the Codex CLI's request identity** (`originator: codex_cli_rs`, its user
+  agent) because that is what the subscription endpoint accepts. It is a loopback shim for your own
+  account, not an impersonation feature for distribution; check the account terms before relying on
+  it.
 - **Context is reported as 131072 tokens** so the context ring and compaction behave plausibly. It is
   a fixed number, not the model's real limit.
 - **Telemetry is approximate.** The bridge reports tokens per second from the last stream.

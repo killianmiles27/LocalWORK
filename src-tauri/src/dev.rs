@@ -35,10 +35,17 @@ fn saved() -> Option<Value> {
     setup::settings().get("devBridge").filter(|v| v.is_object()).cloned()
 }
 
-/// The bridge script, from LOCALWORK_CODEX_BRIDGE or by walking up from the app/dev build tree.
+/// The bridge script. An explicit path or the path saved with the connection wins; only a debug
+/// build searches the current/repo tree, so a release build cannot pick up a planted script.
 fn script() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("LOCALWORK_CODEX_BRIDGE").map(PathBuf::from).filter(|p| p.is_file()) {
         return Some(p);
+    }
+    if let Some(p) = saved().and_then(|v| v.get("script").and_then(Value::as_str).map(PathBuf::from)).filter(|p| p.is_file()) {
+        return Some(p);
+    }
+    if !cfg!(debug_assertions) && std::env::var_os("LOCALWORK_DEV_CODEX").is_none() {
+        return None;
     }
     let roots = [std::env::current_dir().ok(), Some(paths::app_dir())];
     for start in roots.into_iter().flatten() {
@@ -82,10 +89,12 @@ fn log_path() -> PathBuf {
     paths::data_dir().join("logs").join("codex-bridge.log")
 }
 
+/// A health answer from our own bridge, not a different service that happens to hold the port.
 fn health(port: u16) -> Option<String> {
     match http::get(port, "/health", None, Duration::from_millis(500)) {
         Some((200, body)) => serde_json::from_str::<Value>(&body)
             .ok()
+            .filter(|v| v.get("bridge").and_then(Value::as_str) == Some("localwork-codex"))
             .and_then(|v| v.get("model").and_then(Value::as_str).map(String::from)),
         _ => None,
     }
@@ -122,6 +131,9 @@ fn start_bridge(script: &Path, python: &Path, port: u16, key: &str, model: &str,
         // A bridge from an earlier app run is still listening; reuse it instead of fighting the port.
         eprintln!("dev bridge already listening on {port} ({existing})");
         return Ok(());
+    }
+    if http::get(port, "/health", None, Duration::from_millis(300)).is_some() {
+        return Err(format!("Port {port} is already used by another service. Nothing was changed; try again."));
     }
     let log = std::fs::File::create(log_path()).map_err(|e| format!("Could not create the bridge log: {e}"))?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
@@ -174,16 +186,35 @@ fn shutdown_agents(app: &App) {
     }
 }
 
+fn running_turn(app: &App) -> bool {
+    app.agents.guard().values().any(|a| a.busy())
+}
+
+/// Remember the connection settings that were in use before the dev bridge replaced them.
+fn previous_connection() -> Value {
+    saved()
+        .and_then(|v| v.get("previous").cloned())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({
+            "modelSource": strata::setting("modelSource", "strata"),
+            "serverPort": strata::setting("serverPort", "8080"),
+            "serverKey": strata::setting("serverKey", ""),
+            "serverContext": strata::setting("serverContext", "32768"),
+        }))
+}
+
 fn state_json() -> Value {
     let live = running_bridge_port();
-    let saved = saved().unwrap_or(Value::Null);
+    let record = saved();
+    let view = record.clone().unwrap_or(Value::Null);
     json!({
         "available": available(),
         "running": live.is_some(),
-        "port": live.or_else(|| saved.get("port").and_then(Value::as_u64).map(|p| p as u16)),
-        "model": saved.get("model").and_then(Value::as_str).unwrap_or("gpt-6-luna"),
-        "effort": saved.get("effort").and_then(Value::as_str).unwrap_or("low"),
+        "port": live.or_else(|| view.get("port").and_then(Value::as_u64).map(|p| p as u16)),
+        "model": view.get("model").and_then(Value::as_str).unwrap_or("gpt-6-luna"),
+        "effort": view.get("effort").and_then(Value::as_str).unwrap_or("low"),
         "source": strata::setting("modelSource", "strata"),
+        "saved": record.is_some(),
         "offline": setup::offline(),
         "script": script().map(|p| p.to_string_lossy().into_owned()),
         "python": interpreter_cached().ok().map(|p| p.to_string_lossy().into_owned()),
@@ -202,6 +233,9 @@ pub fn dev_backend_enable(app: AppHandle, s: State<App>, model: Option<String>, 
     if !available() {
         return Err("The developer backend is not enabled in this build.".into());
     }
+    if running_turn(&s) {
+        return Err("Stop the running reply before switching backends.".into());
+    }
     if setup::offline() {
         return Err("Offline mode is on. Turn it off first: the Codex backend sends prompts to OpenAI.".into());
     }
@@ -215,6 +249,7 @@ pub fn dev_backend_enable(app: AppHandle, s: State<App>, model: Option<String>, 
     }
     let script = script().ok_or("Could not find scripts/dev/codex_bridge.py. Set LOCALWORK_CODEX_BRIDGE to its path.")?;
     let python = interpreter_cached()?;
+    let previous = previous_connection();
     // A fresh port per connect keeps the saved recipe unambiguous, and a leftover bridge from an
     // earlier run cannot answer with a different model than the one chosen here.
     stop_bridge();
@@ -228,7 +263,7 @@ pub fn dev_backend_enable(app: AppHandle, s: State<App>, model: Option<String>, 
     setup::write_setting_value("modelSource", json!("server"))?;
     setup::write_setting_value("devBridge", json!({
         "port": port, "key": key, "model": model, "effort": effort,
-        "script": script.to_string_lossy(),
+        "script": script.to_string_lossy(), "previous": previous,
     }))?;
     shutdown_agents(&s);
     strata::stop(Some(&app), &s.strata);
@@ -239,8 +274,16 @@ pub fn dev_backend_enable(app: AppHandle, s: State<App>, model: Option<String>, 
 /// Stop the bridge and go back to the normal Strata path. Agents restart on their next message.
 #[tauri::command(async)]
 pub fn dev_backend_disable(app: AppHandle, s: State<App>) -> Result<Value, String> {
+    if running_turn(&s) {
+        return Err("Stop the running reply before switching backends.".into());
+    }
+    let previous = previous_connection();
     stop_bridge();
-    setup::write_setting_value("modelSource", json!("strata"))?;
+    for key in ["modelSource", "serverPort", "serverKey", "serverContext"] {
+        if let Some(value) = previous.get(key) {
+            setup::write_setting_value(key, value.clone())?;
+        }
+    }
     setup::write_setting_value("devBridge", Value::Null)?;
     shutdown_agents(&s);
     strata::stop(Some(&app), &s.strata);
@@ -248,10 +291,27 @@ pub fn dev_backend_disable(app: AppHandle, s: State<App>) -> Result<Value, Strin
     Ok(state_json())
 }
 
+/// Offline mode must not leave prompts going to OpenAI. Called when the setting turns on.
+pub fn disconnect_for_offline(app: &AppHandle, state: &App) -> bool {
+    if saved().is_none() && running_bridge_port().is_none() {
+        return false;
+    }
+    stop_bridge();
+    let _ = setup::write_setting_value("modelSource", json!("strata"));
+    let _ = setup::write_setting_value("devBridge", Value::Null);
+    shutdown_agents(state);
+    strata::stop(Some(app), &state.strata);
+    true
+}
+
 /// Start the saved bridge during app launch, before the model status is polled. Failures are
 /// logged only: the normal "waiting for your model server" message still explains the state.
 pub fn ensure_at_launch() {
     if !available() {
+        return;
+    }
+    // A release build must not silently start cloud inference just because a dev record exists.
+    if !cfg!(debug_assertions) && std::env::var_os("LOCALWORK_DEV_CODEX").is_none() {
         return;
     }
     if setup::offline() {

@@ -155,6 +155,9 @@ export default function App() {
   // Half-written prompts and pending queue items belong to the chat they were typed in.
   type Draft = { input: string; files: string[]; queue: { text: string; files: string[] }[] };
   const drafts = useRef(new Map<string, Draft>());
+  // A new, unsaved chat still needs a draft key so its text survives a switch.
+  const NEW_DRAFT = "__new__";
+  const draftKey = (id: string | null) => id ?? NEW_DRAFT;
   const exportChat = (id: string) => invoke("export_markdown", { id }).catch((e) => setErr(String(e)));
   const reload = (id: string) => {
     const after = chatCache.current.get(id)?.at(-1)?.id ?? 0;
@@ -227,7 +230,7 @@ export default function App() {
 
   useEffect(() => {
     if (cur && createdHere.current === cur) { createdHere.current = null; return; }
-    const draft = cur ? drafts.current.get(cur) : undefined;
+    const draft = drafts.current.get(draftKey(cur));
     setFiles(draft?.files ?? []);
     setInput(draft?.input ?? "");
     setQueue(draft?.queue ?? []);
@@ -365,13 +368,17 @@ export default function App() {
   function selectConversation(id: string | null) {
     // Keep the draft with the chat it was typed in. Saving here uses the state from the click
     // that navigated, not the next render's already-replaced values.
-    if (cur && cur !== id) drafts.current.set(cur, { input, files, queue });
+    const from = draftKey(cur);
+    if ((input || files.length || queue.length) && from !== draftKey(id)) {
+      drafts.current.set(from, { input, files, queue });
+    }
     navigation.current += 1; creating.current = null;
     curRef.current = id; setCur(id);
   }
   function newConv() {
     if (isBusy) return;
-    selectConversation(null); setMsgs([]); setFiles([]); setInput(""); setErr(""); setWorkspaceOpen(false);
+    selectConversation(null); drafts.current.delete(NEW_DRAFT);
+    setMsgs([]); setFiles([]); setInput(""); setErr(""); setWorkspaceOpen(false);
     setWorkspaceRequest(undefined);
     taRef.current?.focus();
   }
@@ -380,6 +387,7 @@ export default function App() {
     try {
       const dir = await open({ directory: true, title: "Start a chat in a folder", defaultPath: projDir });
       if (typeof dir !== "string") return;
+      if (input || files.length || queue.length) drafts.current.set(draftKey(cur), { input, files, queue });
       navigation.current += 1; creating.current = null;
       setFiles([]); setMsgs([]); setWorkspaceRequest(undefined);
       await ensureConversation(dir);
@@ -471,6 +479,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     try {
       const id = await ensureConversation();
       startedId = id;
+      if (editConv === null) drafts.current.delete(NEW_DRAFT);
       markBusy(id, true);
       if (epoch !== navigation.current) { markBusy(id, false); return false; }
       if (first) setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
@@ -519,11 +528,24 @@ Attached (read with read_attachment): ${attached.join(", ")}`
   useEffect(() => {
     if (isBusy || !queue.length || status.state !== "ready") return;
     const [next, ...rest] = queue;
+    const target = curRef.current;
     setQueue(rest);
     // A failed send was dropped with only a banner. Put it back in the composer for a manual retry
-    // instead of restoring the queue, which would retry in a loop while the failure persists.
+    // instead of restoring the queue, which would retry in a loop while the failure persists. If the
+    // user moved on, keep it with the chat that queued it rather than the new chat's composer.
     void send(next.text, next.files).then(ok => {
       if (ok) return;
+      const merge = (d?: Draft): Draft => ({
+        input: d?.input?.trim() ? `${next.text}
+
+${d.input}` : next.text,
+        files: [...new Set([...(d?.files ?? []), ...next.files])],
+        queue: d?.queue ?? [],
+      });
+      if (curRef.current !== target) {
+        if (target) drafts.current.set(target, merge(drafts.current.get(target)));
+        return;
+      }
       setInput(current => current.trim() ? `${next.text}
 
 ${current}` : next.text);
@@ -778,7 +800,7 @@ ${current}` : next.text);
                       <button onClick={() => send()} title="Queue: sends when the current step finishes"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-accent-fg hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
                     ) : isBusy ? (
-                      <button onClick={() => { if (cur) markBusy(cur, false); invoke("agent_stop", { id: cur }).catch(e => setErr(String(e))); }} title="Stop"
+                      <button onClick={() => invoke("agent_stop", { id: cur }).catch(e => setErr(String(e)))} title="Stop"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-ink text-bg"><Square size={12} fill="currentColor" /></button>
                     ) : (
                       <button onClick={() => send()} disabled={(!input.trim() && !files.length) || !modelReady} title={modelReady ? "Send" : status.state === "stopped" || status.state === "error" ? "Start the model first" : "Model is starting"}

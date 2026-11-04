@@ -372,11 +372,19 @@ class Handler(BaseHTTPRequestHandler):
         got = self.headers.get("Authorization") or ""
         return got == "Bearer " + expected
 
+    def host_ok(self) -> bool:
+        """Only accept requests addressed to the loopback listener (blocks DNS-rebinding pages)."""
+        port = self.server.server_address[1]  # type: ignore[attr-defined]
+        host = (self.headers.get("Host") or "").strip().lower()
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}")
+
     # -- routes --------------------------------------------------------------------------
     def do_GET(self):
+        if not self.host_ok():
+            return self.send_json(400, error_body("Wrong Host header.", "bad_request"))
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
-            body = {"status": "ok", "model": STATE["model"], "max_context": self.server.context}  # type: ignore[attr-defined]
+            body = {"status": "ok", "bridge": "localwork-codex", "model": STATE["model"], "max_context": self.server.context}  # type: ignore[attr-defined]
             return self.send_json(200, body)
         if path == "/v1/models":
             if not self.authorized():
@@ -393,6 +401,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json(404, error_body("Unknown endpoint.", "not_found"))
 
     def do_POST(self):
+        if not self.host_ok():
+            return self.send_json(400, error_body("Wrong Host header.", "bad_request"))
         path = urllib.parse.urlparse(self.path).path
         try:
             if path == "/settings":
@@ -660,6 +670,8 @@ def main() -> int:
     print(f"[bridge] listening on http://{args.host}:{args.port} model={args.model} effort={args.effort} "
           f"context={args.context} backend={creds['kind']}", flush=True)
     print("[bridge] DEV ONLY: prompts are sent to OpenAI through the Codex subscription.", flush=True)
+    if not server.api_key:  # type: ignore[attr-defined]
+        print("[bridge] WARNING: no API key; any local process can use this endpoint until you stop it.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

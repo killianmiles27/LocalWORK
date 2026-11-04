@@ -147,6 +147,7 @@ type DevState = {
   model: string;
   effort: string;
   source: string;
+  saved: boolean;
   offline: boolean;
   script: string | null;
   python: string | null;
@@ -171,7 +172,8 @@ function DevBackend() {
   }, []);
 
   if (!st?.available) return null;
-  const connected = st.source === "server" && st.running;
+  const connected = st.source === "server" && st.saved;
+  const stale = connected && !st.running;
   const run = async (on: boolean) => {
     setBusy(true); setError("");
     try {
@@ -191,17 +193,26 @@ function DevBackend() {
         <div className="min-w-0 flex-1 text-sm">
           <div className="font-medium">Codex subscription {connected ? "connected" : "bridge"}</div>
           <div className="text-xs text-muted mt-0.5 break-words">
-            {connected
-              ? `${st.model} · ${st.effort} effort · port ${st.port}. Chats use this instead of Strata until you disconnect.`
-              : "Test the app without loading a local model. Needs the Codex CLI signed in on this PC."}
+            {stale
+              ? `The bridge is not running, so chats will fail. Reconnect, or disconnect to restore your previous model connection.`
+              : connected
+                ? `${st.model} · ${st.effort} effort · port ${st.port}. Chats use this instead of Strata. DEV: prompts go to OpenAI.`
+                : "Test the app without loading a local model. Needs the Codex CLI signed in on this PC."}
           </div>
           {!st.python && <div className="text-xs text-ember mt-1">No Python 3.11+ found. Set one under Tools.</div>}
           {!st.script && <div className="text-xs text-ember mt-1">Bridge script not found. Set LOCALWORK_CODEX_BRIDGE to scripts/dev/codex_bridge.py.</div>}
           {st.offline && !connected && <div className="text-xs text-ember mt-1">Offline mode is on. Turn it off in App settings first.</div>}
         </div>
-        <Button variant={connected ? "default" : "primary"} disabled={busy || (!connected && (st.offline || !st.python || !st.script))} onClick={() => run(!connected)}>
-          {busy ? "Working…" : connected ? "Disconnect" : "Connect"}
-        </Button>
+        {stale ? (
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <Button variant="primary" disabled={busy || st.offline} onClick={() => run(true)}>{busy ? "Working…" : "Reconnect"}</Button>
+            <Button variant="ghost" small disabled={busy} onClick={() => run(false)}>Disconnect</Button>
+          </div>
+        ) : (
+          <Button variant={connected ? "default" : "primary"} disabled={busy || (!connected && (st.offline || !st.python || !st.script))} onClick={() => run(!connected)}>
+            {busy ? "Working…" : connected ? "Disconnect" : "Connect"}
+          </Button>
+        )}
       </div>
       {!connected && (
         <>
