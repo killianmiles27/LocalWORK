@@ -54,8 +54,9 @@ npm run tauri -- dev
 ## Limits
 
 - **Offline mode is refused, and it disconnects the bridge.** Connect fails while offline mode is
-  on. Turning offline mode on later stops the bridge and the running model, and restores the Strata
-  setting, so no prompt keeps going to OpenAI behind an "offline" label.
+  on. Turning offline mode on later stops the bridge, restores the connection you had before
+  (Strata or a local server), and restarts it, so no prompt keeps going to OpenAI behind an
+  "offline" label and the app does not lose its model.
 - **Not a local-model test.** Tool calling and streaming are translated by the bridge, so a bug you
   see may be in the translation rather than the app. Compaction uses the generic checkpoint path
   (the bridge deliberately does not advertise Strata's native compaction capability).

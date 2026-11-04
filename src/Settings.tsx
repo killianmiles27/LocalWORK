@@ -171,13 +171,20 @@ function DevBackend() {
     return () => { alive = false; clearInterval(t); };
   }, []);
 
+  // Seed the fields from the saved recipe so Reconnect reuses the model that worked.
+  useEffect(() => {
+    if (!st) return;
+    setModel(st.model);
+    setEffort(st.effort);
+  }, [st?.model, st?.effort]);
+
   if (!st?.available) return null;
   const connected = st.source === "server" && st.saved;
   const stale = connected && !st.running;
-  const run = async (on: boolean) => {
+  const run = async (on: boolean, chosenModel = model, chosenEffort = effort) => {
     setBusy(true); setError("");
     try {
-      await invoke(on ? "dev_backend_enable" : "dev_backend_disable", on ? { model, effort } : undefined);
+      await invoke(on ? "dev_backend_enable" : "dev_backend_disable", on ? { model: chosenModel, effort: chosenEffort } : undefined);
       setSt(await invoke<DevState>("dev_backend_state"));
     } catch (e) {
       setError(String(e));
@@ -205,7 +212,7 @@ function DevBackend() {
         </div>
         {stale ? (
           <div className="flex shrink-0 flex-col items-end gap-1.5">
-            <Button variant="primary" disabled={busy || st.offline} onClick={() => run(true)}>{busy ? "Working…" : "Reconnect"}</Button>
+            <Button variant="primary" disabled={busy || st.offline} onClick={() => run(true, st.model, st.effort)}>{busy ? "Working…" : "Reconnect"}</Button>
             <Button variant="ghost" small disabled={busy} onClick={() => run(false)}>Disconnect</Button>
           </div>
         ) : (

@@ -190,6 +190,15 @@ fn running_turn(app: &App) -> bool {
     app.agents.guard().values().any(|a| a.busy())
 }
 
+fn apply_connection(previous: &Value) -> Result<(), String> {
+    for key in ["modelSource", "serverPort", "serverKey", "serverContext"] {
+        if let Some(value) = previous.get(key) {
+            setup::write_setting_value(key, value.clone())?;
+        }
+    }
+    Ok(())
+}
+
 /// Remember the connection settings that were in use before the dev bridge replaced them.
 fn previous_connection() -> Value {
     saved()
@@ -256,15 +265,29 @@ pub fn dev_backend_enable(app: AppHandle, s: State<App>, model: Option<String>, 
     let port = http::free_port();
     let key: String = rand::thread_rng().sample_iter(&rand::distributions::Alphanumeric).take(32).map(char::from).collect();
     start_bridge(&script, &python, port, &key, &model, &effort)?;
-    // Keep the connection settings and the bridge start-up recipe together.
-    setup::write_setting_value("serverPort", json!(port.to_string()))?;
-    setup::write_setting_value("serverKey", json!(key.clone()))?;
-    setup::write_setting_value("serverContext", json!("131072"))?;
-    setup::write_setting_value("modelSource", json!("server"))?;
-    setup::write_setting_value("devBridge", json!({
+    // Keep the connection settings and the bridge start-up recipe together. The record goes first so
+    // a later failure can be rolled back without losing the connection it replaced.
+    let record = json!({
         "port": port, "key": key, "model": model, "effort": effort,
         "script": script.to_string_lossy(), "previous": previous,
-    }))?;
+    });
+    if let Err(error) = setup::write_setting_value("devBridge", record) {
+        stop_bridge();
+        return Err(error);
+    }
+    let applied = (|| -> Result<(), String> {
+        setup::write_setting_value("serverPort", json!(port.to_string()))?;
+        setup::write_setting_value("serverKey", json!(key.clone()))?;
+        setup::write_setting_value("serverContext", json!("131072"))?;
+        setup::write_setting_value("modelSource", json!("server"))?;
+        Ok(())
+    })();
+    if let Err(error) = applied {
+        stop_bridge();
+        let _ = setup::write_setting_value("devBridge", Value::Null);
+        let _ = apply_connection(&previous);
+        return Err(error);
+    }
     shutdown_agents(&s);
     strata::stop(Some(&app), &s.strata);
     strata::start(&app, &s.strata)?;
@@ -279,11 +302,7 @@ pub fn dev_backend_disable(app: AppHandle, s: State<App>) -> Result<Value, Strin
     }
     let previous = previous_connection();
     stop_bridge();
-    for key in ["modelSource", "serverPort", "serverKey", "serverContext"] {
-        if let Some(value) = previous.get(key) {
-            setup::write_setting_value(key, value.clone())?;
-        }
-    }
+    apply_connection(&previous)?;
     setup::write_setting_value("devBridge", Value::Null)?;
     shutdown_agents(&s);
     strata::stop(Some(&app), &s.strata);
@@ -296,11 +315,14 @@ pub fn disconnect_for_offline(app: &AppHandle, state: &App) -> bool {
     if saved().is_none() && running_bridge_port().is_none() {
         return false;
     }
+    let previous = previous_connection();
     stop_bridge();
-    let _ = setup::write_setting_value("modelSource", json!("strata"));
+    let _ = apply_connection(&previous);
     let _ = setup::write_setting_value("devBridge", Value::Null);
     shutdown_agents(state);
     strata::stop(Some(app), &state.strata);
+    // Strata and a local server are allowed offline; leaving the app with no model was worse.
+    let _ = strata::start(app, &state.strata);
     true
 }
 

@@ -369,8 +369,9 @@ export default function App() {
     // Keep the draft with the chat it was typed in. Saving here uses the state from the click
     // that navigated, not the next render's already-replaced values.
     const from = draftKey(cur);
-    if ((input || files.length || queue.length) && from !== draftKey(id)) {
-      drafts.current.set(from, { input, files, queue });
+    if (from !== draftKey(id)) {
+      if (input || files.length || queue.length) drafts.current.set(from, { input, files, queue });
+      else drafts.current.delete(from);
     }
     navigation.current += 1; creating.current = null;
     curRef.current = id; setCur(id);
@@ -389,7 +390,7 @@ export default function App() {
       if (typeof dir !== "string") return;
       if (input || files.length || queue.length) drafts.current.set(draftKey(cur), { input, files, queue });
       navigation.current += 1; creating.current = null;
-      setFiles([]); setMsgs([]); setWorkspaceRequest(undefined);
+      setFiles([]); setInput(""); setQueue([]); setMsgs([]); setWorkspaceRequest(undefined);
       await ensureConversation(dir);
     } catch (e) { setErr(String(e)); }
   }
@@ -484,7 +485,9 @@ Attached (read with read_attachment): ${attached.join(", ")}`
       if (epoch !== navigation.current) { markBusy(id, false); return false; }
       if (first) setFirstWait({ conv: id, t0: Date.now(), key: modeKey.current, est: ttftEstimate(modeKey.current) });
       if (!queued) { setFiles([]); if (override === undefined) setInput(""); }
-      await invoke("agent_send", { id, text: message }); await reload(id); refreshConvs(); refreshOffline(id);
+      await invoke("agent_send", { id, text: message });
+      drafts.current.delete(id);
+      await reload(id); refreshConvs(); refreshOffline(id);
       return true;
     } catch (e) {
       if (startedId) markBusy(startedId, false);
@@ -516,6 +519,17 @@ Attached (read with read_attachment): ${attached.join(", ")}`
         setEditTick(n => n + 1);
       }
     } finally { sendingRelated.current = false; }
+  }
+  function stopRun() {
+    if (!cur) return;
+    if (queue.length) {
+      const text = queue.map(q => q.text).filter(Boolean).join("\n\n");
+      const queuedFiles = [...new Set(queue.flatMap(q => q.files))];
+      setInput(current => (text ? (current.trim() ? `${text}\n\n${current}` : text) : current));
+      if (queuedFiles.length) setFiles(current => [...new Set([...current, ...queuedFiles])]);
+      setQueue([]);
+    }
+    invoke("agent_stop", { id: cur }).catch(e => setErr(String(e)));
   }
   async function compact() {
     if (!cur || isBusy || !modelReady) return;
@@ -746,7 +760,12 @@ ${current}` : next.text);
                 {cur && (() => { const q = openQuestion(msgs); return q && <QuestionCard q={q} canSend={modelReady} busy={isBusy} onAnswer={(t) => send(t)} />; })()}
                 {queue.length > 0 && (
                   <QueueList queue={queue} setQueue={setQueue}
-                    onEdit={q => { setQueue(x => x.filter(y => y !== q)); setInput(q.text); setFiles(f => [...f, ...q.files]); taRef.current?.focus(); }} />
+                    onEdit={q => {
+                      setQueue(x => x.filter(y => y !== q));
+                      setInput(current => current.trim() ? `${q.text}\n\n${current}` : q.text);
+                      setFiles(current => [...new Set([...current, ...q.files])]);
+                      taRef.current?.focus();
+                    }} />
                 )}
                 {err && <div role="alert" className="mb-2 rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2 dark:bg-red-950 dark:text-red-200">{err}</div>}
                 <TaskTemplates prompt={input} workspace={curConv?.workspace} attachments={files} disabled={isBusy || templateApplying || tidying}
@@ -800,7 +819,7 @@ ${current}` : next.text);
                       <button onClick={() => send()} title="Queue: sends when the current step finishes"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-accent text-accent-fg hover:bg-accent-dark transition-colors"><ArrowUp size={16} /></button>
                     ) : isBusy ? (
-                      <button onClick={() => invoke("agent_stop", { id: cur }).catch(e => setErr(String(e)))} title="Stop"
+                      <button onClick={stopRun} title="Stop"
                         className="grid place-items-center w-8 h-8 rounded-lg bg-ink text-bg"><Square size={12} fill="currentColor" /></button>
                     ) : (
                       <button onClick={() => send()} disabled={(!input.trim() && !files.length) || !modelReady} title={modelReady ? "Send" : status.state === "stopped" || status.state === "error" ? "Start the model first" : "Model is starting"}
