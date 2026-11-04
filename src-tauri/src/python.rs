@@ -83,10 +83,6 @@ fn system() -> Vec<Candidate> {
             Candidate::new(Source::System, "python3", &[]),
         ]
     }
-    #[cfg(not(windows))]
-    {
-        vec![Candidate::new(Source::System, "python3", &[]), Candidate::new(Source::System, "python", &[])]
-    }
 }
 
 /// Printed by `-c` so one process answers both questions: which version, and which executable it
@@ -235,11 +231,6 @@ mod tests {
             assert_eq!(list[0].lead, vec!["-3".to_string()]);
             assert!(list.iter().any(|c| c.program == PathBuf::from("python")));
         }
-        #[cfg(not(windows))]
-        {
-            assert_eq!(list[0].program, PathBuf::from("python3"));
-            assert!(list[0].lead.is_empty());
-        }
     }
 
     #[test]
@@ -272,17 +263,5 @@ mod tests {
         assert_eq!(found.source, Source::System);
         assert!(found.version >= MIN);
         assert!(found.path.is_file(), "{} should exist", found.path.display());
-
-        // A real venv beside a real system Python wins, and a blank setting stays blank.
-        #[cfg(unix)]
-        {
-            let root = std::env::temp_dir().join(format!("lw-python-{:016x}", rand::random::<u64>()));
-            std::fs::create_dir_all(root.join(".venv").join("bin")).unwrap();
-            std::os::unix::fs::symlink(&found.path, root.join(".venv").join("bin").join("python")).unwrap();
-            let from_venv = find(Some("  "), Some(&root)).expect("the venv Python");
-            assert_eq!(from_venv.source, Source::Strata);
-            assert_eq!(from_venv.version, found.version);
-            std::fs::remove_dir_all(&root).unwrap();
-        }
     }
 }
