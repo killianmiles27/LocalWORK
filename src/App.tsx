@@ -520,8 +520,15 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     if (isBusy || !queue.length || status.state !== "ready") return;
     const [next, ...rest] = queue;
     setQueue(rest);
-    // A failed send goes back to the head of the queue; it used to be dropped with only a banner.
-    void send(next.text, next.files).then(ok => { if (!ok) setQueue(q => [next, ...q]); });
+    // A failed send was dropped with only a banner. Put it back in the composer for a manual retry
+    // instead of restoring the queue, which would retry in a loop while the failure persists.
+    void send(next.text, next.files).then(ok => {
+      if (ok) return;
+      setInput(current => current.trim() ? `${next.text}
+
+${current}` : next.text);
+      setFiles(current => [...new Set([...current, ...next.files])]);
+    });
   }, [isBusy, queue, status.state]);
   // Edit and regenerate: cut the chat (and the agent's memory of it) back to before user message `m`, then
   // send `text`, or the original message again. Files the agent changed stay as they are.
