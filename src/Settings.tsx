@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import DownloadProgress, { type DownloadState } from "./DownloadProgress";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AppWindow, Cpu, Globe, Puzzle, SlidersHorizontal, X } from "lucide-react";
+import { AppWindow, Cpu, FlaskConical, Globe, Puzzle, SlidersHorizontal, X } from "lucide-react";
 import ModelLibrary from "./ModelLibrary";
 import LocalPickerSettings from "./LocalPickerSettings";
 import { ModelEditor, Plugins } from "./SettingsModel";
@@ -34,16 +34,22 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
   });
   useEffect(() => { try { sessionStorage.setItem("settings-tab", tab); } catch { /* ignore */ } }, [tab]);
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    // Escape closes the panel, but not while the user is editing a field.
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      onClose();
+    };
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
   }, []);
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
-      <div role="dialog" aria-label="Settings" className="w-full max-w-3xl h-[min(46rem,calc(100dvh-2rem))] flex max-[640px]:flex-col overflow-hidden rounded-2xl bg-bg border border-line shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label="Settings" className="w-full max-w-3xl h-[min(46rem,calc(100dvh-2rem))] flex max-[640px]:flex-col overflow-hidden rounded-2xl bg-bg border border-line shadow-xl" onClick={(e) => e.stopPropagation()}>
         <nav aria-label="Settings sections" className="w-44 max-[640px]:w-full shrink-0 border-r max-[640px]:border-r-0 max-[640px]:border-b border-line bg-panel p-2 flex flex-col max-[640px]:flex-row max-[640px]:overflow-x-auto gap-0.5">
-          <h2 className="px-2.5 pt-1.5 pb-3 text-base font-semibold max-[640px]:hidden">Settings</h2>
+          <h2 className="px-2.5 pt-1.5 pb-3 text-lg font-semibold max-[640px]:hidden">Settings</h2>
           {TABS.map(({ id, icon: Icon }) => (
             <button key={id} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}
               className={"flex items-center gap-2.5 w-full max-[640px]:w-auto max-[640px]:shrink-0 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors " + (tab === id ? "bg-panel-2 text-ink" : "text-muted hover:bg-panel-2 hover:text-ink")}>
@@ -53,7 +59,7 @@ export default function Settings({ status, onClose, showTps, onShowTps }: { stat
         </nav>
         <div className="min-w-0 min-h-0 flex-1 flex flex-col">
           <div className="flex items-center justify-between pl-6 pr-3 h-12 shrink-0">
-            <h2 className="text-base font-semibold">{tab}</h2>
+            <h2 className="text-lg font-semibold">{tab}</h2>
             <button onClick={onClose} title="Close" aria-label="Close" className="p-1.5 rounded-lg text-muted hover:text-ink hover:bg-panel-2"><X size={17} /></button>
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-3 sm:px-6 pb-6 space-y-6">
@@ -129,8 +135,89 @@ function ModelTab({ status, showTps, onShowTps }: { status: St; showTps: boolean
     <LocalPickerSettings />
     <EngineSetup />
     <ToolsPython />
+    <DevBackend />
     <ModelLibrary onChanged={() => window.dispatchEvent(new Event("models-changed"))} />
   </>;
+}
+
+type DevState = {
+  available: boolean;
+  running: boolean;
+  port: number | null;
+  model: string;
+  effort: string;
+  source: string;
+  offline: boolean;
+  script: string | null;
+  python: string | null;
+};
+
+/** Dev-only: point the app at a Codex subscription instead of a local model. Hidden in releases. */
+function DevBackend() {
+  const [st, setSt] = useState<DevState | null>(null);
+  const [model, setModel] = useState("gpt-6-luna");
+  const [effort, setEffort] = useState("low");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    const pull = () => invoke<DevState>("dev_backend_state").then(s => {
+      if (alive) setSt(s);
+    }).catch(() => {});
+    pull();
+    const t = setInterval(pull, 4000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  if (!st?.available) return null;
+  const connected = st.source === "server" && st.running;
+  const run = async (on: boolean) => {
+    setBusy(true); setError("");
+    try {
+      await invoke(on ? "dev_backend_enable" : "dev_backend_disable", on ? { model, effort } : undefined);
+      setSt(await invoke<DevState>("dev_backend_state"));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Developer backend" note="Not shipped. Prompts leave this PC and use your Codex subscription, so offline mode is refused.">
+      <div className="flex items-start gap-3 px-3.5 py-3">
+        <FlaskConical size={16} strokeWidth={1.8} className="mt-0.5 shrink-0 text-gold" />
+        <div className="min-w-0 flex-1 text-sm">
+          <div className="font-medium">Codex subscription {connected ? "connected" : "bridge"}</div>
+          <div className="text-xs text-muted mt-0.5 break-words">
+            {connected
+              ? `${st.model} · ${st.effort} effort · port ${st.port}. Chats use this instead of Strata until you disconnect.`
+              : "Test the app without loading a local model. Needs the Codex CLI signed in on this PC."}
+          </div>
+          {!st.python && <div className="text-xs text-ember mt-1">No Python 3.11+ found. Set one under Tools.</div>}
+          {!st.script && <div className="text-xs text-ember mt-1">Bridge script not found. Set LOCALWORK_CODEX_BRIDGE to scripts/dev/codex_bridge.py.</div>}
+          {st.offline && !connected && <div className="text-xs text-ember mt-1">Offline mode is on. Turn it off in App settings first.</div>}
+        </div>
+        <Button variant={connected ? "default" : "primary"} disabled={busy || (!connected && (st.offline || !st.python || !st.script))} onClick={() => run(!connected)}>
+          {busy ? "Working…" : connected ? "Disconnect" : "Connect"}
+        </Button>
+      </div>
+      {!connected && (
+        <>
+          <Row label="Model" hint="Codex model id, for example gpt-6-luna">
+            <input className={input + " max-w-52"} value={model} onChange={e => setModel(e.target.value)} aria-label="Codex model id" spellCheck={false} />
+          </Row>
+          <Row label="Reasoning effort">
+            <select className={input + " max-w-36"} value={effort} onChange={e => setEffort(e.target.value)} aria-label="Reasoning effort">
+              {["none", "low", "medium", "high"].map(e => <option key={e} value={e}>{e}</option>)}
+            </select>
+          </Row>
+        </>
+      )}
+      <Message error>{error}</Message>
+    </Section>
+  );
 }
 
 type Chk = { git: boolean; message?: string; head?: string; behind?: number; changes?: string[] };
