@@ -797,8 +797,3 @@ fn is_reparse_point(entry: &fs::DirEntry) -> Result<bool, String> {
     use std::os::windows::fs::MetadataExt;
     Ok(entry.metadata().map_err(|e| e.to_string())?.file_attributes() & 0x400 != 0)
 }
-
-#[cfg(not(windows))]
-fn is_reparse_point(_entry: &fs::DirEntry) -> Result<bool, String> {
-    Ok(false)
-}

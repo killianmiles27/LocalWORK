@@ -59,10 +59,6 @@ fn linked(meta: &fs::Metadata) -> bool {
         use std::os::windows::fs::MetadataExt;
         meta.file_type().is_symlink() || meta.file_attributes() & 0x400 != 0
     }
-    #[cfg(not(windows))]
-    {
-        meta.file_type().is_symlink()
-    }
 }
 
 fn excluded(name: &str) -> bool {

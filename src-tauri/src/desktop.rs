@@ -37,10 +37,6 @@ pub fn open_external_url(input: &str) -> Result<(), String> {
         }
         Ok(())
     }
-    #[cfg(not(windows))]
-    {
-        xdg_open(url.as_str())
-    }
 }
 
 pub fn reveal_folder(path: &str) -> Result<(), String> {
@@ -74,10 +70,6 @@ pub fn reveal_folder(path: &str) -> Result<(), String> {
             ));
         }
         Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        xdg_open(&folder.to_string_lossy())
     }
 }
 
@@ -162,14 +154,4 @@ mod tests {
         assert!(existing_workspace(temp.join("missing").to_str().unwrap()).is_err());
         let _ = std::fs::remove_dir(&temp);
     }
-}
-
-#[cfg(not(windows))]
-fn xdg_open(target: &str) -> Result<(), String> {
-    let mut c = std::process::Command::new("xdg-open");
-    c.arg(target);
-    crate::supervisor::hidden(&mut c)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("Could not run xdg-open: {e}"))
 }
