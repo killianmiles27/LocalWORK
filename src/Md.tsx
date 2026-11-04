@@ -1,6 +1,6 @@
 // Shared Markdown renderer: GFM plus math. Math is rendered to native MathML by Temml, which loads
 // only when a message actually contains math, so ordinary chats pay nothing for it.
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -111,11 +111,23 @@ const embedComponents: Components = {
   },
 };
 
+// Stable identities matter: react-markdown rebuilds its AST when remarkPlugins changes, which during a
+// streamed reply is every token. The plugin list and the common component set are created once.
+const REMARK_PLUGINS = [remarkGfm, [remarkMath, { singleDollarTextMath: false }]] as const;
+
 /** `images` holds remote images behind a click (chat); without it Markdown images render as they always have. */
-export default function Md({ children, components, embeds = false, images }: { children: string; components?: Components; embeds?: boolean; images?: { offline?: boolean } }) {
-  const imageComponents: Components = images
-    ? { img: ({ src, alt }) => <HeldImageView src={String(src ?? "")} alt={String(alt ?? "")} offline={!!images.offline} /> }
-    : {};
-  return <Markdown remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
-    components={{ ...mathComponents, ...(embeds ? embedComponents : {}), ...imageComponents, ...components }}>{normalizeMath(children)}</Markdown>;
+function MdInner({ children, components, embeds = false, images }: { children: string; components?: Components; embeds?: boolean; images?: { offline?: boolean } }) {
+  const offline = !!images?.offline;
+  const hasImages = !!images;
+  const imageComponents = useMemo<Components>(() => {
+    if (!hasImages) return {};
+    return { img: ({ src, alt }) => <HeldImageView src={String(src ?? "")} alt={String(alt ?? "")} offline={offline} /> };
+  }, [hasImages, offline]);
+  const allComponents = useMemo<Components>(() => ({
+    ...mathComponents, ...(embeds ? embedComponents : {}), ...imageComponents, ...components,
+  }), [embeds, imageComponents, components]);
+  const body = useMemo(() => normalizeMath(children), [children]);
+  return <Markdown remarkPlugins={REMARK_PLUGINS as unknown as any} components={allComponents}>{body}</Markdown>;
 }
+
+export default memo(MdInner);

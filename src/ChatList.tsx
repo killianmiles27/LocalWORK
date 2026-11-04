@@ -14,10 +14,12 @@ type Props = {
   onDelete: (id: string) => void;
   onChanged: () => void;
   onError: (e: string) => void;
+  /** Approvals waiting per chat, so a blocked run in another chat is visible here. */
+  pending?: Record<string, number>;
 };
 
 /** Sidebar chat list: search, date groups, pin, rename, export and delete. */
-export default function ChatList({ convs, cur, searchRef, onSelect, onExport, onDelete, onChanged, onError }: Props) {
+export default function ChatList({ convs, cur, searchRef, onSelect, onExport, onDelete, onChanged, onError, pending = {} }: Props) {
   const [q, setQ] = useState("");
   // Chats whose messages match; titles are matched instantly here, message text by the backend.
   const [hits, setHits] = useState<{ q: string; ids: Set<string> }>({ q: "", ids: new Set() });
@@ -70,9 +72,12 @@ export default function ChatList({ convs, cur, searchRef, onSelect, onExport, on
           <div key={g.label || "results"}>
             {g.label && <div className="px-3 pt-2 pb-1 text-xs font-medium text-muted select-none">{g.label}</div>}
             {g.items.map(c => (
-              <div key={c.id} onClick={() => renaming?.id !== c.id && onSelect(c.id)} title={c.workspace} aria-current={c.id === cur}
+              <div key={c.id} role="button" tabIndex={0} aria-label={c.title} aria-current={c.id === cur}
+                onClick={() => renaming?.id !== c.id && onSelect(c.id)}
+                onKeyDown={e => { if (renaming?.id === c.id) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(c.id); } }}
+                title={c.workspace}
                 style={{ "--i": Math.min(i++, 14) } as React.CSSProperties}
-                className={"chat-row group flex items-center gap-2 rounded-lg px-3 py-1.5 cursor-pointer " + (c.id === cur ? "bg-panel-2" : "hover:bg-panel-2/60")}>
+                className={"chat-row group flex items-center gap-2 rounded-lg px-3 py-1.5 cursor-pointer outline-none " + (c.id === cur ? "bg-panel-2" : "hover:bg-panel-2/60")}>
                 <MessageSquare size={14} className="shrink-0 text-muted" />
                 {renaming?.id === c.id ? (
                   <input autoFocus value={renaming.title} aria-label="Chat name" maxLength={120}
@@ -84,8 +89,12 @@ export default function ChatList({ convs, cur, searchRef, onSelect, onExport, on
                 ) : (
                   <div className="min-w-0 flex-1 truncate" onDoubleClick={e => { e.stopPropagation(); setRenaming({ id: c.id, title: c.title }); }}>{c.title}</div>
                 )}
+                {renaming?.id !== c.id && !!pending[c.id] && (
+                  <span title={`${pending[c.id]} approval${pending[c.id] === 1 ? "" : "s"} waiting`}
+                    className="shrink-0 rounded-full bg-gold/20 px-1.5 py-px text-[10px] font-semibold text-gold tabular-nums">{pending[c.id]}</span>
+                )}
                 {renaming?.id !== c.id && (
-                  <div className="hidden group-hover:flex items-center gap-1.5 text-muted">
+                  <div className="hidden group-hover:flex group-focus-within:flex items-center gap-1.5 text-muted">
                     <button title={c.pinned ? "Unpin" : "Pin"} aria-label={c.pinned ? "Unpin" : "Pin"} className="hover:text-ink"
                       onClick={e => { e.stopPropagation(); pin(c); }}>{c.pinned ? <PinOff size={14} /> : <Pin size={14} />}</button>
                     <button title="Rename" aria-label="Rename" className="hover:text-ink"

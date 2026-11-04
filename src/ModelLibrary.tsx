@@ -57,7 +57,7 @@ export default function ModelLibrary({ onChanged }: { onChanged?: () => void }) 
       listen<{ line: string }>("engine-log", e => {
         setLines(p => [...p.slice(-400), e.payload.line]);
         const m = e.payload.line.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
-        setPct(m ? Math.min(100, Number(m[1])) : null); setDownload(null);
+        setPct(m ? Math.min(100, Number(m[1])) : null);
       }),
       listen<DownloadState>("download-progress", e => {
         if (e.payload.id === "engine-install" || e.payload.id === "hf-model-download") { setDownload(e.payload); setPct(null); }
@@ -124,8 +124,8 @@ export default function ModelLibrary({ onChanged }: { onChanged?: () => void }) 
   const bar = (id: string) => job === id && (
     <div className="mt-2">
       <DownloadProgress label={lines[lines.length - 1] ?? "Preparing…"} progress={download} percent={pct} />
-      <div className="mt-1 flex items-center justify-between text-xs text-muted"><span className="truncate">{lines[lines.length - 1] ?? "Starting..."}</span>
-        <button onClick={() => invoke("engine_cancel")} className="inline-flex items-center gap-1 hover:text-ink shrink-0 ml-2"><X size={12} />Cancel</button></div>
+      <div className="mt-1 flex items-center justify-end text-xs text-muted">
+        <button onClick={() => invoke("engine_cancel")} className="inline-flex items-center gap-1 hover:text-ink shrink-0"><X size={12} />Cancel</button></div>
     </div>
   );
   const confirm = (id: string, text: string, run: () => void) => ask === id && (
