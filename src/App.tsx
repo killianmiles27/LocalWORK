@@ -87,6 +87,8 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // Very long chats are capped; the full history is one click away.
+  const [showAllMsgs, setShowAllMsgs] = useState(false);
   // The user message being edited in place, and how many chats blocked a window close.
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
   const [closeBlocked, setCloseBlocked] = useState(0);
@@ -143,7 +145,10 @@ export default function App() {
 
   const refreshCtx = (id: string) =>
     invoke<{ used: number | null; window: number }>("context_usage", { id }).then((c) => { if (curRef.current === id) setCtx(c); }).catch(() => {});
-  const refreshConvs = () => invoke<Conv[]>("list_conversations").then(setConvs).catch((e) => setErr(String(e)));
+  const [convsLoaded, setConvsLoaded] = useState(false);
+  const refreshConvs = () => invoke<Conv[]>("list_conversations")
+    .then(v => { setConvs(v); setConvsLoaded(true); })
+    .catch((e) => { setConvsLoaded(true); setErr(String(e)); });
   // Recently viewed chats stay in memory. Messages are append-only, so a reload (each tool step, or switching
   // back to a chat) fetches only rows newer than the last one held instead of the whole history.
   const chatCache = useRef(new Map<string, Msg[]>());
@@ -231,6 +236,7 @@ export default function App() {
     setEditing(null);
     setErr("");
     setShowHistory(false);
+    setShowAllMsgs(false);
     setWorkspaceRequest(undefined);
     setCtx((c) => ({ ...c, used: null }));
     if (cur) { reload(cur); refreshCtx(cur); }
@@ -597,7 +603,9 @@ Attached (read with read_attachment): ${attached.join(", ")}`
     if (typeof path === "string") { openDocument(path); setWorkspaceRefresh(n => n + 1); }
   }, [msgs, cur]);
 
-  const blocks = group(msgs);
+  const MESSAGE_CAP = 250;
+  const visibleMsgs = showAllMsgs || msgs.length <= MESSAGE_CAP ? msgs : msgs.slice(-MESSAGE_CAP);
+  const blocks = group(visibleMsgs);
   const currentPlan = latestPlan(msgs);
   const lastUser = [...msgs].reverse().find(m => m.role === "user");
   const canRewind = !!cur && !isBusy && modelReady;
@@ -624,7 +632,7 @@ Attached (read with read_attachment): ${attached.join(", ")}`
           <button onClick={toggleSidebar} title="Collapse chats (Ctrl+B)" aria-label="Collapse chats" className="grid place-items-center w-8 h-8 rounded-lg text-muted hover:bg-panel-2 hover:text-ink transition-colors"><PanelLeftClose size={16} /></button>
         </div>
         <ChatList convs={convs} cur={cur} searchRef={searchRef} onSelect={selectConversation} onExport={exportChat}
-          onDelete={deleteChat} onChanged={refreshConvs} onError={setErr} pending={pendingByConv} />
+          onDelete={deleteChat} onChanged={refreshConvs} onError={setErr} pending={pendingByConv} loaded={convsLoaded} />
         <div className="px-3 py-3 flex items-center gap-3 text-sm" title={status.detail || label}>
           <span className="grid place-items-center w-8 h-8 rounded-full bg-panel-2 shrink-0 relative">
             <span className="font-medium">L</span><span className={"absolute bottom-0 right-0 w-2.5 h-2.5 border-2 border-panel rounded-full " + dotCls} />
@@ -662,6 +670,11 @@ Attached (read with read_attachment): ${attached.join(", ")}`
                     <button onClick={() => setOffline(o => ({ ...o, kept: true }))} className="rounded-lg border border-line px-2.5 py-1 text-xs hover:bg-panel-2">Keep offline</button>
                     <button onClick={() => { const id = cur; invoke("chat_offline_set", { conv: id, on: false }).then(() => refreshOffline(id)).catch(e => setErr(String(e))); }} className="rounded-lg bg-accent text-accent-fg px-2.5 py-1 text-xs">Allow internet</button>
                   </div>
+                )}
+                {msgs.length > visibleMsgs.length && (
+                  <button onClick={() => setShowAllMsgs(true)} className="mx-auto block rounded-full border border-line px-3 py-1 text-xs text-muted hover:border-accent hover:text-ink">
+                    Show {msgs.length - visibleMsgs.length} earlier messages
+                  </button>
                 )}
                 {blocks.map((g, i) => g.kind === "tools"
                   ? <ToolGroup key={g.items[0].id} items={g.items} />

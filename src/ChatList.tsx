@@ -16,22 +16,28 @@ type Props = {
   onError: (e: string) => void;
   /** Approvals waiting per chat, so a blocked run in another chat is visible here. */
   pending?: Record<string, number>;
+  /** False until the first list_conversations result, so an empty list does not flash. */
+  loaded?: boolean;
 };
 
 /** Sidebar chat list: search, date groups, pin, rename, export and delete. */
-export default function ChatList({ convs, cur, searchRef, onSelect, onExport, onDelete, onChanged, onError, pending = {} }: Props) {
+export default function ChatList({ convs, cur, searchRef, onSelect, onExport, onDelete, onChanged, onError, pending = {}, loaded = true }: Props) {
   const [q, setQ] = useState("");
   // Chats whose messages match; titles are matched instantly here, message text by the backend.
   const [hits, setHits] = useState<{ q: string; ids: Set<string> }>({ q: "", ids: new Set() });
+  const [searching, setSearching] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const editing = useRef(renaming);
   editing.current = renaming;
   const query = q.trim().toLowerCase();
 
   useEffect(() => {
-    if (!query) return;
+    if (!query) { setSearching(false); return; }
+    setSearching(true);
     const t = setTimeout(() => {
-      invoke<string[]>("search_conversations", { q: query }).then(ids => setHits({ q: query, ids: new Set(ids) })).catch(() => {});
+      invoke<string[]>("search_conversations", { q: query })
+        .then(ids => { setHits({ q: query, ids: new Set(ids) }); setSearching(false); })
+        .catch(() => setSearching(false));
     }, 250);
     return () => clearTimeout(t);
   }, [query]);
@@ -66,8 +72,9 @@ export default function ChatList({ convs, cur, searchRef, onSelect, onExport, on
         </label>
       </div>
       <div className="flex-1 overflow-auto px-2 pb-2">
-        {convs.length === 0 && <div className="px-3 py-2 text-sm text-muted">No chats yet</div>}
-        {query && !shown.length && <div className="px-3 py-2 text-sm text-muted">No chats match</div>}
+        {loaded && convs.length === 0 && <div className="px-3 py-2 text-sm text-muted">No chats yet</div>}
+        {!loaded && <div className="px-3 py-2 text-sm text-muted">Loading chats…</div>}
+        {query && !shown.length && <div className="px-3 py-2 text-sm text-muted">{searching ? "Searching…" : "No chats match"}</div>}
         {groups.map(g => (
           <div key={g.label || "results"}>
             {g.label && <div className="px-3 pt-2 pb-1 text-xs font-medium text-muted select-none">{g.label}</div>}
