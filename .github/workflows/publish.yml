@@ -1,0 +1,64 @@
+name: Publish
+
+# Copies a finished Windows build's installer into an existing release, so the file goes from
+# GitHub to GitHub instead of through the maintainer's connection. The updater signature is made
+# locally from this run's installer (see docs/release.md); the signing key never leaves your PC.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: ID of the successful "Windows build" run
+        required: true
+      tag:
+        description: Release tag, for example v0.1.5
+        required: true
+
+permissions: {}
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Prepare the installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:RUN_ID -notmatch '^[0-9]+$') { throw 'run_id must be a number' }
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'tag must look like v1.2.3' }
+          $info = gh run view $env:RUN_ID --json workflowName,conclusion | ConvertFrom-Json
+          if ($info.workflowName -ne 'Windows build' -or $info.conclusion -ne 'success') {
+            throw 'That run is not a successful Windows build'
+          }
+          gh run download $env:RUN_ID -n windows-installer -D windows
+          if ($LASTEXITCODE) { throw 'Could not download the windows-installer artifact' }
+          $files = @(Get-ChildItem windows -Recurse -File -Filter '*-setup.exe')
+          if ($files.Count -ne 1) { throw "Expected 1 installer, found $($files.Count)" }
+          New-Item -ItemType Directory publish -Force | Out-Null
+          Copy-Item $files[0].FullName (Join-Path publish $files[0].Name)
+          $hash = (Get-FileHash (Join-Path publish $files[0].Name) -Algorithm SHA256).Hash.ToLower()
+          $sums = Join-Path $PWD 'publish/SHA256SUMS'
+          [System.IO.File]::WriteAllText($sums, "$hash  $($files[0].Name)`n")
+          Get-Content $sums
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: publish/*
+      - name: Upload the installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release upload $env:TAG publish/* --clobber
+          if ($LASTEXITCODE) { throw 'Upload failed' }

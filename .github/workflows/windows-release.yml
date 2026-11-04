@@ -1,8 +1,7 @@
 name: Windows build
 
-# Builds the Windows installer without signing it, so it can be made from a Linux machine. The
-# updater signature is made locally from this run's installer (see docs/release.md); the signing
-# key never leaves the maintainer's machine.
+# Builds the Windows installer without signing it. The updater signature is made locally from
+# this run's installer (see docs/release.md); the signing key never leaves the maintainer's machine.
 on:
   workflow_dispatch:
   push:
